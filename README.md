@@ -13,7 +13,7 @@ By communicating with a running Unity Editor (or a headless background instance)
 UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 
 1. **`unity_refresh`**: Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Optional `clean` flag forces clean rebuild by clearing compiler cache when recovering from stale/corrupted cache. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary.
-2. **`unity_eval`**: Evaluates raw C# top-level statements in-memory to query scene, GameObjects, component state, or invoke methods. Supports top-level `using` directives and `await`. No default namespaces are pre-imported.
+2. **`unity_eval`**: Evaluates C# top-level script source code in-memory against the active Unity Editor. Write code directly as top-level statements without class or method wrappers. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types.
 3. **`unity_run_tests`**: Runs EditMode/PlayMode tests with failure diagnostics.
 4. **`unity_stop`**: Safely terminates the background Unity Editor instance (to release project locks or recover from hangs).
 
@@ -24,7 +24,7 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
 | **`unity_refresh`** | `clean` (optional bool, default `false`) | Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Set `clean: true` only to force clean rebuild by clearing compiler cache. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary. |
-| **`unity_eval`** | `code` (string) | Evaluates raw C# top-level statements in-memory. Supports top-level `using` directives and `await`. Explicitly `return <value>;` to return data. No default namespaces are pre-imported. |
+| **`unity_eval`** | `code` (string: raw C# text) | Evaluates C# top-level script source code in-memory. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types. |
 | **`unity_run_tests`** | `filter`, `category`, `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. |
 | **`unity_stop`** | `force` (optional bool, default `false`) | Safely terminates the background instance (used to release GUI locks or recover; do not stop routinely). |
 
