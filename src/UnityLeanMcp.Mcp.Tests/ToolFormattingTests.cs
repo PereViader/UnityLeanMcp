@@ -1138,17 +1138,18 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             string? successTrailer = null,
             string? failureTrailer = null,
             bool isSuccess = false,
-            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings)
+            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
+            bool isEval = false)
         {
             FormatCompilerDiagnosticsCalled = true;
             return DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-                diagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings);
+                diagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings, isEval);
         }
 
-        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot)
+        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
         {
             FormatDiagnosticCalled = true;
-            return DiagnosticFormatter.Default.FormatDiagnostic(diagnostic, projectRoot);
+            return DiagnosticFormatter.Default.FormatDiagnostic(diagnostic, projectRoot, isEval);
         }
     }
 
@@ -1388,12 +1389,117 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             string text = GetResultText(result);
             Assert.Contains("Assets/Scripts/Player.cs#L42", text);
             Assert.Contains("error CS0103: The name 'speed' does not exist in the current context", text);
-            Assert.EndsWith("Evaluation aborted: Script compilation failed.", text);
+            Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
         }
         finally
         {
             try { Directory.Delete(tempDir, true); } catch { }
         }
+    }
+
+    [Fact]
+    public async Task UnityEval_WhenSnippetCompilationFails_FormatsSyntheticLocationAndSnippetTrailer()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "eval(1,5): error CS0103: The name 'xyz' does not exist in the current context"
+            };
+
+            var result = await tools.UnityEvalAsync("xyz;");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'xyz' does not exist in the current context", text);
+            Assert.DoesNotContain("file:///", text);
+            Assert.DoesNotContain("eval#", text);
+            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityEval_WhenSnippetCompilationFailsWithMultipleErrorsAndWarnings_FormatsAllDiagnostics()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "eval(1,4): error CS1002: ; expected | eval(1,1): error CS0103: The name 'xyz' does not exist in the current context | eval(2,10): warning CS0219: Variable 'foo' unused"
+            };
+
+            var result = await tools.UnityEvalAsync("xyz");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Warnings:", text);
+            Assert.Contains("• snippet line 2, col 10: warning CS0219: Variable 'foo' unused", text);
+            Assert.Contains("Errors:", text);
+            Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
+            Assert.Contains("• snippet line 1, col 1: error CS0103: The name 'xyz' does not exist in the current context", text);
+            Assert.DoesNotContain("file:///", text);
+            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_ParseCompilerDiagnostics_WhenPipeSeparated_ParsesMultipleDiagnostics()
+    {
+        string text = "eval(1,4): error CS1002: ; expected | eval(1,1): error CS0103: The name 'xyz' does not exist in the current context";
+        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Equal(2, diags.Count);
+        Assert.Equal("eval", diags[0].File);
+        Assert.Equal(1, diags[0].Line);
+        Assert.Equal(4, diags[0].Column);
+        Assert.Equal("CS1002", diags[0].Code);
+        Assert.Equal("; expected", diags[0].Message);
+
+        Assert.Equal("eval", diags[1].File);
+        Assert.Equal(1, diags[1].Line);
+        Assert.Equal(1, diags[1].Column);
+        Assert.Equal("CS0103", diags[1].Code);
+        Assert.Equal("The name 'xyz' does not exist in the current context", diags[1].Message);
+    }
+
+    [Theory]
+    [InlineData("eval", true)]
+    [InlineData("EVAL", true)]
+    [InlineData("<eval>", true)]
+    [InlineData("<stdin>", true)]
+    [InlineData("snippet", true)]
+    [InlineData("SNIPPET", true)]
+    [InlineData("Assets/Scripts/Player.cs", false)]
+    [InlineData("eval.cs", false)]
+    [InlineData("snippet.cs", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void DiagnosticFormatter_IsEvalSynthetic_IdentifiesSyntheticFileNames(string? file, bool expected)
+    {
+        Assert.Equal(expected, DiagnosticFormatter.IsEvalSynthetic(file));
+    }
+
+    [Theory]
+    [InlineData("eval")]
+    [InlineData("EVAL")]
+    [InlineData("<eval>")]
+    [InlineData("snippet")]
+    public void DiagnosticFormatter_BuildFileUri_WhenSyntheticFile_ReturnsEmpty(string file)
+    {
+        string uri = DiagnosticFormatter.BuildFileUri(file, 1, "C:/Repo");
+        Assert.Equal(string.Empty, uri);
     }
 
     [Theory]

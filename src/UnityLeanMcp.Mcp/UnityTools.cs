@@ -156,11 +156,17 @@ public class UnityTools
                 var parsedDiags = _diagnosticFormatter.ParseCompilerDiagnostics(result.Message);
                 if (parsedDiags.Count > 0)
                 {
+                    bool isSnippetFailure = parsedDiags.Any(d => DiagnosticFormatter.IsEvalSynthetic(d.File));
+                    string failureTrailer = isSnippetFailure
+                        ? "Evaluation aborted: Dynamic snippet compilation failed."
+                        : "Evaluation aborted: Project script compilation failed.";
+
                     errorMsg = _diagnosticFormatter.FormatCompilerDiagnostics(
                         result.Message,
                         _processManager.ProjectRoot,
-                        failureTrailer: "Evaluation aborted: Script compilation failed.",
-                        isSuccess: false);
+                        failureTrailer: failureTrailer,
+                        isSuccess: false,
+                        isEval: true);
                 }
                 else
                 {

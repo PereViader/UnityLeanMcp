@@ -16,8 +16,9 @@ public interface IDiagnosticFormatter
         string? successTrailer = null,
         string? failureTrailer = null,
         bool isSuccess = false,
-        int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings);
-    string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot);
+        int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
+        bool isEval = false);
+    string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false);
 }
 
 public class DiagnosticFormatter : IDiagnosticFormatter
@@ -53,9 +54,14 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         return false;
     }
 
+    public static bool IsEvalSynthetic(string? file) =>
+        string.Equals(file, "eval", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(file, "snippet", StringComparison.OrdinalIgnoreCase) ||
+        (file != null && file.StartsWith('<'));
+
     public static string BuildFileUri(string rawFile, int? lineNumber, string? projectRoot)
     {
-        if (string.IsNullOrWhiteSpace(rawFile))
+        if (string.IsNullOrWhiteSpace(rawFile) || IsEvalSynthetic(rawFile))
             return string.Empty;
 
         if (rawFile.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
@@ -121,29 +127,55 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         string? line;
         while ((line = reader.ReadLine()) != null)
         {
-            var match = s_CompilerDiagnosticRegex.Match(line.Trim());
-            if (match.Success)
+            string trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+                continue;
+
+            var entries = trimmed.Contains(" | ")
+                ? trimmed.Split(new[] { " | " }, StringSplitOptions.RemoveEmptyEntries)
+                : new[] { trimmed };
+
+            foreach (var entry in entries)
             {
-                diagnostics.Add(new StructuredCompilerDiagnostic
+                var match = s_CompilerDiagnosticRegex.Match(entry.Trim());
+                if (match.Success)
                 {
-                    File = match.Groups["file"].Value,
-                    Line = int.Parse(match.Groups["line"].Value),
-                    Column = int.Parse(match.Groups["col"].Value),
-                    Severity = match.Groups["severity"].Value.ToLowerInvariant(),
-                    Code = match.Groups["code"].Value,
-                    Message = match.Groups["msg"].Value.Trim(),
-                    Assembly = null
-                });
+                    diagnostics.Add(new StructuredCompilerDiagnostic
+                    {
+                        File = match.Groups["file"].Value,
+                        Line = int.Parse(match.Groups["line"].Value),
+                        Column = int.Parse(match.Groups["col"].Value),
+                        Severity = match.Groups["severity"].Value.ToLowerInvariant(),
+                        Code = match.Groups["code"].Value,
+                        Message = match.Groups["msg"].Value.Trim(),
+                        Assembly = null
+                    });
+                }
             }
         }
 
         return diagnostics;
     }
 
-    public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot)
+    public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
     {
         string location;
-        if (!string.IsNullOrWhiteSpace(diagnostic.File) && diagnostic.Line > 0)
+        if (isEval && (string.IsNullOrWhiteSpace(diagnostic.File) || IsEvalSynthetic(diagnostic.File)))
+        {
+            if (diagnostic.Line > 0 && diagnostic.Column > 0)
+            {
+                location = $"snippet line {diagnostic.Line}, col {diagnostic.Column}";
+            }
+            else if (diagnostic.Line > 0)
+            {
+                location = $"snippet line {diagnostic.Line}";
+            }
+            else
+            {
+                location = "snippet";
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(diagnostic.File) && diagnostic.Line > 0)
         {
             location = BuildFileUri(diagnostic.File, diagnostic.Line, projectRoot);
         }
@@ -167,7 +199,8 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         string? successTrailer = null,
         string? failureTrailer = null,
         bool isSuccess = false,
-        int maxWarnings = DefaultMaxWarnings)
+        int maxWarnings = DefaultMaxWarnings,
+        bool isEval = false)
     {
         var diagnostics = ParseCompilerDiagnostics(diagnosticText);
         if (diagnostics.Count == 0)
@@ -224,7 +257,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             int warningsToReport = Math.Min(warnings.Count, maxWarnings);
             for (int i = 0; i < warningsToReport; i++)
             {
-                sb.AppendLine(FormatDiagnostic(warnings[i], projectRoot));
+                sb.AppendLine(FormatDiagnostic(warnings[i], projectRoot, isEval));
             }
 
             if (warnings.Count > maxWarnings)
@@ -248,7 +281,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
             foreach (var error in errors)
             {
-                sb.AppendLine(FormatDiagnostic(error, projectRoot));
+                sb.AppendLine(FormatDiagnostic(error, projectRoot, isEval));
             }
         }
 

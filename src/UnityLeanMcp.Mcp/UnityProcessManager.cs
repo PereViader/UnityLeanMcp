@@ -160,7 +160,7 @@ public class UnityProcessManager : IUnityProcessManager
             if (isLocked)
             {
                 // File is held open by an active process
-                processId = FindProjectUnityPid();
+                processId = FindProjectUnityPid(allowUnprovenSingleCandidate: true);
                 return true;
             }
 
@@ -169,7 +169,7 @@ public class UnityProcessManager : IUnityProcessManager
         }
 
         // 3. Fallback: check system processes for Unity instance targeting this project
-        int? sysPid = FindProjectUnityPid();
+        int? sysPid = FindProjectUnityPid(allowUnprovenSingleCandidate: false);
         if (sysPid.HasValue)
         {
             processId = sysPid;
@@ -233,7 +233,7 @@ public class UnityProcessManager : IUnityProcessManager
         }
     }
 
-    internal int? FindProjectUnityPid(Process[]? candidateProcesses = null)
+    internal int? FindProjectUnityPid(Process[]? candidateProcesses = null, bool allowUnprovenSingleCandidate = false)
     {
         try
         {
@@ -243,12 +243,12 @@ public class UnityProcessManager : IUnityProcessManager
                 return null;
             }
 
-            if (processes.Length == 1)
+            if (processes.Length == 1 && (allowUnprovenSingleCandidate || candidateProcesses != null))
             {
                 return processes[0].Id;
             }
 
-            // Multiple Unity processes exist. Never fall back to returning an arbitrary process.
+            // Multiple Unity processes exist (or single OS process without lockfile proof). Never fall back to returning an arbitrary process.
             // Only return a PID if it can be deterministically proven to belong to this project.
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {

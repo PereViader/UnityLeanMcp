@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -259,9 +260,13 @@ public class UnityExecutableLocatorTests
             var pm = new UnityProcessManager(
                 resolver,
                 NullLogger<UnityProcessManager>.Instance,
-                executableLocator: mockLocator);
+                executableLocator: mockLocator)
+            {
+                ProcessProvider = () => Array.Empty<Process>()
+            };
 
-            var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => pm.EnsureUnityRunningAsync(CancellationToken.None));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => pm.EnsureUnityRunningAsync(cts.Token));
             Assert.Contains("Unity executable not found for project", ex.Message);
             Assert.Contains("2022.3.99f1", ex.Message);
         }

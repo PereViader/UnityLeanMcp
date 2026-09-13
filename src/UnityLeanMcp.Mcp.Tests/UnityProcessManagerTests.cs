@@ -385,7 +385,10 @@ public class UnityProcessManagerTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         try
         {
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => Array.Empty<Process>()
+            };
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             {
                 await procManager.WaitForSocketReadinessAsync(null, cts.Token);
