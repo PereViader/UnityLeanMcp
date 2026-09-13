@@ -12,20 +12,26 @@ public class UnityPathResolver : IUnityPathResolver
     public string PortFile => Path.Combine(TempDir, "unity_lean_mcp_port.txt");
     public string LogFile => Path.Combine(ProjectRoot, "unity_background_log.txt");
     public string PidFile => Path.Combine(TempDir, "unity_lean_mcp_process.pid");
-    public string RefreshResultFile => Path.Combine(TempDir, "unity_refresh_result.json");
-    public string EvalResultFile => Path.Combine(TempDir, "unity_eval_result.json");
-    public string ExecuteResultFile => Path.Combine(TempDir, "unity_execute_result.json");
     public string TestRunningFile => Path.Combine(TempDir, "unity_test_running.txt");
-    public string TestResultsFile => Path.Combine(TempDir, "unity_test_results.json");
-
-    public string GetEvalResultFile(string operationId) =>
-        string.IsNullOrEmpty(operationId) ? EvalResultFile : Path.Combine(TempDir, $"unity_eval_{operationId}.json");
-
-    public string GetExecuteResultFile(string operationId) =>
-        string.IsNullOrEmpty(operationId) ? ExecuteResultFile : Path.Combine(TempDir, $"unity_execute_{operationId}.json");
-
-    public string GetTestResultsFile(string operationId) =>
-        string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
+    public string GetResultFilePath(UnityOperationKind kind, string? operationId = null) => kind switch
+    {
+        UnityOperationKind.Refresh => string.IsNullOrEmpty(operationId)
+            ? Path.Combine(TempDir, "unity_refresh_result.json")
+            : Path.Combine(TempDir, $"unity_refresh_{operationId}.json"),
+        UnityOperationKind.Recompile => string.IsNullOrEmpty(operationId)
+            ? Path.Combine(TempDir, "unity_recompile_result.json")
+            : Path.Combine(TempDir, $"unity_recompile_{operationId}.json"),
+        UnityOperationKind.Test => string.IsNullOrEmpty(operationId)
+            ? Path.Combine(TempDir, "unity_test_results.json")
+            : Path.Combine(TempDir, $"unity_test_{operationId}.json"),
+        UnityOperationKind.Execute => string.IsNullOrEmpty(operationId)
+            ? Path.Combine(TempDir, "unity_execute_result.json")
+            : Path.Combine(TempDir, $"unity_execute_{operationId}.json"),
+        UnityOperationKind.Eval => string.IsNullOrEmpty(operationId)
+            ? Path.Combine(TempDir, "unity_eval_result.json")
+            : Path.Combine(TempDir, $"unity_eval_{operationId}.json"),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
+    };
 
     public UnityPathResolver(string projectRoot)
     {

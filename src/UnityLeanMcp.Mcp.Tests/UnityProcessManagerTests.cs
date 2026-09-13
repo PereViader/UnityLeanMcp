@@ -541,7 +541,7 @@ public class UnityProcessManagerTests
             Assert.NotEqual(proc1.Id, detectedPid);
 
             // 2. Even if PortFile exists, it does not prove which process owns it when multiple processes exist
-            File.WriteAllText(procManager.PortFile, "65432");
+            File.WriteAllText(procManager.PathResolver.PortFile, "65432");
             int? detectedPidWithPort = procManager.FindProjectUnityPid(new[] { proc1, proc2 });
             Assert.Null(detectedPidWithPort);
 
@@ -646,14 +646,17 @@ public class UnityProcessManagerTests
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_port.txt"), resolver.PortFile);
         Assert.Equal(Path.Combine(resolver.ProjectRoot, "unity_background_log.txt"), resolver.LogFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_process.pid"), resolver.PidFile);
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.RefreshResultFile);
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_result.json"), resolver.EvalResultFile);
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_execute_result.json"), resolver.ExecuteResultFile);
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_result.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_result.json"), resolver.GetResultFilePath(UnityOperationKind.Eval));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_execute_result.json"), resolver.GetResultFilePath(UnityOperationKind.Execute));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_running.txt"), resolver.TestRunningFile);
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_results.json"), resolver.TestResultsFile);
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_op1.json"), resolver.GetEvalResultFile("op1"));
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_execute_op2.json"), resolver.GetExecuteResultFile("op2"));
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_op3.json"), resolver.GetTestResultsFile("op3"));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_results.json"), resolver.GetResultFilePath(UnityOperationKind.Test));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_op0.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh, "op0"));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_op01.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile, "op01"));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_op1.json"), resolver.GetResultFilePath(UnityOperationKind.Eval, "op1"));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_execute_op2.json"), resolver.GetResultFilePath(UnityOperationKind.Execute, "op2"));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_op3.json"), resolver.GetResultFilePath(UnityOperationKind.Test, "op3"));
     }
 
     [Theory]
@@ -673,13 +676,13 @@ public class UnityProcessManagerTests
         var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
 
         Assert.Same(resolver, pm.PathResolver);
-        Assert.Equal(resolver.ProjectRoot, pm.ProjectRoot);
-        Assert.Equal(resolver.OperationFile, pm.OperationFile);
-        Assert.Equal(resolver.TempDir, pm.TempDir);
-        Assert.Equal(resolver.PortFile, pm.PortFile);
-        Assert.Equal(resolver.GetEvalResultFile("op1"), pm.GetEvalResultFile("op1"));
-        Assert.Equal(resolver.GetExecuteResultFile("op2"), pm.GetExecuteResultFile("op2"));
-        Assert.Equal(resolver.GetTestResultsFile("op3"), pm.GetTestResultsFile("op3"));
+        Assert.Equal(resolver.ProjectRoot, pm.PathResolver.ProjectRoot);
+        Assert.Equal(resolver.OperationFile, pm.PathResolver.OperationFile);
+        Assert.Equal(resolver.TempDir, pm.PathResolver.TempDir);
+        Assert.Equal(resolver.PortFile, pm.PathResolver.PortFile);
+        Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Eval, "op1"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Eval, "op1"));
+        Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Execute, "op2"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Execute, "op2"));
+        Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Test, "op3"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Test, "op3"));
     }
 
     [Fact]
@@ -729,7 +732,7 @@ public class UnityProcessManagerTests
             var poller = new OperationPoller(pm, pm.PathResolver, new UnitySocketTransport(NullLogger<UnitySocketTransport>.Instance));
 
             string opId = "clean_test_op";
-            string resultFile = pm.GetEvalResultFile(opId);
+            string resultFile = pm.PathResolver.GetResultFilePath(UnityOperationKind.Eval, opId);
             var evalResult = new UnityEvalResult
             {
                 OperationId = opId,

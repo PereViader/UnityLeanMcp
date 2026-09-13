@@ -190,11 +190,11 @@ public class ToolFormattingTests
             int testPid = Environment.ProcessId;
 
             // When PidFile exists with matching PID -> Batchmode
-            File.WriteAllText(realPm.PidFile, testPid.ToString());
+            File.WriteAllText(realPm.PathResolver.PidFile, testPid.ToString());
             Assert.Equal("Batchmode", realPm.GetUnityMode(testPid));
 
             // When PidFile does not exist -> GUI
-            File.Delete(realPm.PidFile);
+            File.Delete(realPm.PathResolver.PidFile);
             Assert.Equal("GUI", realPm.GetUnityMode(testPid));
         }
         finally

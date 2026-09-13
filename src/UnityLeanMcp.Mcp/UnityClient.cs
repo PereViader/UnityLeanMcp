@@ -362,7 +362,7 @@ public class UnityClient : IUnityClient
             Kind = null,
             ShouldCancelOnAborted = false,
             OperationDisplayName = "refresh operation",
-            ResultFilePath = _pathResolver.RefreshResultFile,
+            ResultFilePath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh),
             IsMatch = r => r.OperationId == opId,
             PollCommand = $"POLL_REFRESH {opId}",
             PollTimeoutSeconds = 2,
@@ -403,8 +403,9 @@ public class UnityClient : IUnityClient
                         Message = "Compilation finished, waiting for Editor to settle..."
                     });
 
-                    var result = TryReadJsonFile<UnityRefreshResult>(_pathResolver.RefreshResultFile, r => r.OperationId == opId)
-                        ?? TryReadJsonFile<UnityRefreshResult>(_pathResolver.RefreshResultFile, _ => true)
+                    var refreshResultPath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh);
+                    var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId)
+                        ?? TryReadJsonFile<UnityRefreshResult>(refreshResultPath, _ => true)
                         ?? new UnityRefreshResult
                         {
                             OperationId = opId,
@@ -533,7 +534,7 @@ public class UnityClient : IUnityClient
             cancellationToken.ThrowIfCancellationRequested();
 
             string opId = Guid.NewGuid().ToString("N");
-            string resultFile = _pathResolver.GetEvalResultFile(opId);
+            string resultFile = _pathResolver.GetResultFilePath(UnityOperationKind.Eval, opId);
             string command = $"EVAL {opId} {escapedCode}";
 
             _logger.LogInformation("Sending EVAL operation {OpId}...", opId);
@@ -659,7 +660,7 @@ public class UnityClient : IUnityClient
             cancellationToken.ThrowIfCancellationRequested();
 
             string opId = Guid.NewGuid().ToString("N");
-            string resultFile = _pathResolver.GetExecuteResultFile(opId);
+            string resultFile = _pathResolver.GetResultFilePath(UnityOperationKind.Execute, opId);
             var sb = new StringBuilder($"EXECUTE_METHOD {opId} {methodName}");
             if (args != null)
             {
@@ -817,7 +818,7 @@ public class UnityClient : IUnityClient
             cancellationToken.ThrowIfCancellationRequested();
 
             string opId = Guid.NewGuid().ToString("N");
-            string resultFile = _pathResolver.GetTestResultsFile(opId);
+            string resultFile = _pathResolver.GetResultFilePath(UnityOperationKind.Test, opId);
 
             var runArgs = new RunTestsArgs
             {

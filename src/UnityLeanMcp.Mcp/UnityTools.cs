@@ -71,7 +71,7 @@ public class UnityTools
         {
             string formatted = _diagnosticFormatter.FormatCompilerDiagnostics(
                 result.Message,
-                _processManager.ProjectRoot,
+                _processManager.PathResolver.ProjectRoot,
                 successTrailer: successMessage,
                 failureTrailer: failedMessage,
                 isSuccess: result.Success);
@@ -164,7 +164,7 @@ public class UnityTools
 
                     errorMsg = _diagnosticFormatter.FormatCompilerDiagnostics(
                         result.Message,
-                        _processManager.ProjectRoot,
+                        _processManager.PathResolver.ProjectRoot,
                         failureTrailer: failureTrailer,
                         isSuccess: false,
                         isEval: true);
@@ -242,7 +242,7 @@ public class UnityTools
         {
             string formatted = _diagnosticFormatter.FormatCompilerDiagnostics(
                 result.Message,
-                _processManager.ProjectRoot,
+                _processManager.PathResolver.ProjectRoot,
                 failureTrailer: "Test execution aborted: Script compilation failed.",
                 isSuccess: false);
             sb.Append(formatted);
@@ -326,7 +326,7 @@ public class UnityTools
         for (int i = 0; i < detailedCount; i++)
         {
             var fail = result.FailedTests[i];
-            var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.ProjectRoot);
+            var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.PathResolver.ProjectRoot);
             string sanitizedStackTrace = _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace);
 
             structuredFailures.Add(new StructuredTestFailure

@@ -24,21 +24,6 @@ public class UnityProcessManager : IUnityProcessManager
 
     public IUnityPathResolver PathResolver => _pathResolver;
     public IUnityExecutableLocator ExecutableLocator => _executableLocator;
-    public string ProjectRoot => _pathResolver.ProjectRoot;
-    public string TempDir => _pathResolver.TempDir;
-    public string PidFile => _pathResolver.PidFile;
-    public string PortFile => _pathResolver.PortFile;
-    public string LogFile => _pathResolver.LogFile;
-    public string CompilationErrorsFile => _pathResolver.CompilationErrorsFile;
-    public string OperationFile => _pathResolver.OperationFile;
-    public string RefreshResultFile => _pathResolver.RefreshResultFile;
-    public string EvalResultFile => _pathResolver.EvalResultFile;
-    public string ExecuteResultFile => _pathResolver.ExecuteResultFile;
-    public string TestRunningFile => _pathResolver.TestRunningFile;
-    public string TestResultsFile => _pathResolver.TestResultsFile;
-    public string GetEvalResultFile(string operationId) => _pathResolver.GetEvalResultFile(operationId);
-    public string GetExecuteResultFile(string operationId) => _pathResolver.GetExecuteResultFile(operationId);
-    public string GetTestResultsFile(string operationId) => _pathResolver.GetTestResultsFile(operationId);
 
     public void PurgeOperationState()
     {

@@ -2,14 +2,14 @@ using System.IO;
 
 namespace UnityLeanMcp
 {
-    internal enum CommandExecutionTarget
+    public enum CommandExecutionTarget
     {
         WorkerThread,
         MainThread,
         EditModeOnly
     }
 
-    internal interface ICommandHandler
+    public interface ICommandHandler
     {
         CommandExecutionTarget ExecutionTarget { get; }
         bool IsMutating => false;

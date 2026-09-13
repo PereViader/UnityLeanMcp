@@ -103,7 +103,7 @@ public class TestRunProgressTests
                                 FailCount = 0,
                                 CurrentTestName = "Suite.TestAlpha"
                             };
-                            File.WriteAllText(procManager.TestRunningFile, JsonSerializer.Serialize(state1));
+                            File.WriteAllText(procManager.PathResolver.TestRunningFile, JsonSerializer.Serialize(state1));
 
                             await writer.WriteLineAsync("RUNNING");
                         }
@@ -125,7 +125,7 @@ public class TestRunProgressTests
                                     FailCount = 1,
                                     CurrentTestName = "Suite.TestBeta"
                                 };
-                                File.WriteAllText(procManager.TestRunningFile, JsonSerializer.Serialize(state2));
+                                File.WriteAllText(procManager.PathResolver.TestRunningFile, JsonSerializer.Serialize(state2));
                                 await writer.WriteLineAsync("RUNNING");
                             }
                             else
@@ -139,7 +139,7 @@ public class TestRunProgressTests
                                     SkipCount = 0,
                                     ResultState = "Passed"
                                 };
-                                File.WriteAllText(procManager.GetTestResultsFile(opId), JsonSerializer.Serialize(result));
+                                File.WriteAllText(procManager.PathResolver.GetResultFilePath(UnityOperationKind.Test, opId), JsonSerializer.Serialize(result));
                                 await writer.WriteLineAsync("SUCCESS 9 passed");
                             }
                         }

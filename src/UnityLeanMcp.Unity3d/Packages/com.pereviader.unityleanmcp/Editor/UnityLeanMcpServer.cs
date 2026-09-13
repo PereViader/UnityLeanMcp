@@ -27,22 +27,76 @@ namespace UnityLeanMcp
 
         public static bool IsRunning => _isRunning;
 
-        private static readonly Dictionary<string, ICommandHandler> s_Handlers = new Dictionary<string, ICommandHandler>
+        private static readonly ConcurrentDictionary<string, ICommandHandler> s_Handlers =
+            new ConcurrentDictionary<string, ICommandHandler>(StringComparer.OrdinalIgnoreCase);
+        private static bool s_DefaultHandlersRegistered;
+        private static readonly object s_HandlersLock = new object();
+
+        public static void RegisterHandler(string command, ICommandHandler handler)
         {
-            { "PING", new PingHandler() },
-            { "EXIT", new ExitHandler() },
-            { "REFRESH", new RefreshHandler() },
-            { "POLL_REFRESH", new PollRefreshHandler() },
-            { "RECOMPILE", new RecompileHandler() },
-            { "RUN_TESTS", new RunTestsHandler() },
-            { "POLL_TESTS", new PollTestsHandler() },
-            { "CANCEL_TESTS", new CancelTestsHandler() },
-            { "CANCEL_OPERATION", new CancelOperationHandler() },
-            { "EXECUTE_METHOD", new ExecuteMethodHandler() },
-            { "POLL_EXECUTE", new PollExecuteHandler() },
-            { "EVAL", new EvalHandler() },
-            { "POLL_EVAL", new PollEvalHandler() }
-        };
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                throw new ArgumentException("Command name cannot be null or empty.", nameof(command));
+            }
+            if (handler == null)
+            {
+                throw new ArgumentNullException(nameof(handler));
+            }
+
+            EnsureDefaultHandlers();
+            s_Handlers[command.Trim()] = handler;
+        }
+
+        public static bool UnregisterHandler(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                return false;
+            }
+
+            EnsureDefaultHandlers();
+            return s_Handlers.TryRemove(command.Trim(), out _);
+        }
+
+        public static bool TryGetHandler(string command, out ICommandHandler handler)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                handler = null;
+                return false;
+            }
+
+            EnsureDefaultHandlers();
+            return s_Handlers.TryGetValue(command.Trim(), out handler);
+        }
+
+        private static void EnsureDefaultHandlers()
+        {
+            if (s_DefaultHandlersRegistered) return;
+            lock (s_HandlersLock)
+            {
+                if (s_DefaultHandlersRegistered) return;
+                RegisterDefaultHandlers();
+                s_DefaultHandlersRegistered = true;
+            }
+        }
+
+        private static void RegisterDefaultHandlers()
+        {
+            s_Handlers["PING"] = new PingHandler();
+            s_Handlers["EXIT"] = new ExitHandler();
+            s_Handlers["REFRESH"] = new RefreshHandler();
+            s_Handlers["POLL_REFRESH"] = new PollRefreshHandler();
+            s_Handlers["RECOMPILE"] = new RecompileHandler();
+            s_Handlers["RUN_TESTS"] = new RunTestsHandler();
+            s_Handlers["POLL_TESTS"] = new PollTestsHandler();
+            s_Handlers["CANCEL_TESTS"] = new CancelTestsHandler();
+            s_Handlers["CANCEL_OPERATION"] = new CancelOperationHandler();
+            s_Handlers["EXECUTE_METHOD"] = new ExecuteMethodHandler();
+            s_Handlers["POLL_EXECUTE"] = new PollExecuteHandler();
+            s_Handlers["EVAL"] = new EvalHandler();
+            s_Handlers["POLL_EVAL"] = new PollEvalHandler();
+        }
 
         static UnityLeanMcpServer()
         {
@@ -58,6 +112,8 @@ namespace UnityLeanMcp
             UnityLeanMcpDispatcher.EnsureInitialized();
             RoslynCompilerHelper.EnsureInitialized();
             OperationLifecycleRegistry.EnsureInitialized();
+            EnsureDefaultHandlers();
+            UnityResultFormatter.EnsureInitialized();
 
             RecoverOperationsOnDomainLoad();
 
@@ -267,10 +323,10 @@ namespace UnityLeanMcp
 
                     line = line.Trim();
                     string[] parts = line.Split(new[] { ' ' }, 2);
-                    string command = parts[0].ToUpperInvariant();
+                    string command = parts[0];
                     string payload = parts.Length > 1 ? parts[1].Trim() : "";
 
-                    if (!s_Handlers.TryGetValue(command, out var handler))
+                    if (!TryGetHandler(command, out var handler))
                     {
                         writer.WriteLine($"ERROR: Unknown command: {command}");
                         return;

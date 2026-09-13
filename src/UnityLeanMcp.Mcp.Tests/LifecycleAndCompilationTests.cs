@@ -152,22 +152,22 @@ public class LifecycleAndCompilationTests
         {
             var pm = new UnityProcessManager(tempProject, NullLogger<UnityProcessManager>.Instance);
 
-            await File.WriteAllTextAsync(pm.OperationFile, "{\"operationId\":\"test\"}");
-            await File.WriteAllTextAsync(pm.TestRunningFile, "{\"operationId\":\"test\"}");
-            await File.WriteAllTextAsync(pm.PidFile, "12345");
-            await File.WriteAllTextAsync(pm.PortFile, "50000");
+            await File.WriteAllTextAsync(pm.PathResolver.OperationFile, "{\"operationId\":\"test\"}");
+            await File.WriteAllTextAsync(pm.PathResolver.TestRunningFile, "{\"operationId\":\"test\"}");
+            await File.WriteAllTextAsync(pm.PathResolver.PidFile, "12345");
+            await File.WriteAllTextAsync(pm.PathResolver.PortFile, "50000");
 
-            Assert.True(File.Exists(pm.OperationFile));
-            Assert.True(File.Exists(pm.TestRunningFile));
-            Assert.True(File.Exists(pm.PidFile));
-            Assert.True(File.Exists(pm.PortFile));
+            Assert.True(File.Exists(pm.PathResolver.OperationFile));
+            Assert.True(File.Exists(pm.PathResolver.TestRunningFile));
+            Assert.True(File.Exists(pm.PathResolver.PidFile));
+            Assert.True(File.Exists(pm.PathResolver.PortFile));
 
             pm.PurgeOperationState();
 
-            Assert.False(File.Exists(pm.OperationFile), "OperationFile was not purged");
-            Assert.False(File.Exists(pm.TestRunningFile), "TestRunningFile was not purged");
-            Assert.False(File.Exists(pm.PidFile), "PidFile was not purged");
-            Assert.False(File.Exists(pm.PortFile), "PortFile was not purged");
+            Assert.False(File.Exists(pm.PathResolver.OperationFile), "OperationFile was not purged");
+            Assert.False(File.Exists(pm.PathResolver.TestRunningFile), "TestRunningFile was not purged");
+            Assert.False(File.Exists(pm.PathResolver.PidFile), "PidFile was not purged");
+            Assert.False(File.Exists(pm.PathResolver.PortFile), "PortFile was not purged");
         }
         finally
         {
@@ -182,7 +182,7 @@ public class LifecycleAndCompilationTests
         int port = pm.ReadPortFile();
         Assert.True(port > 0, "Unity port should be valid.");
 
-        string operationFile = pm.OperationFile;
+        string operationFile = pm.PathResolver.OperationFile;
         string opId = Guid.NewGuid().ToString("N");
         string testOperationJson = $"{{\"operationId\":\"{opId}\",\"kind\":\"recompile\",\"status\":\"Compiling\",\"editorSessionId\":\"test\",\"startedUtc\":\"{DateTime.UtcNow:o}\",\"updatedUtc\":\"{DateTime.UtcNow:o}\"}}";
 
@@ -216,7 +216,7 @@ public class LifecycleAndCompilationTests
     public async Task TestCancelOperation_EvalSnippetWithCancellationToken_CancelsSuccessfully()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.OperationFile);
+        DeleteFileWithRetry(pm.PathResolver.OperationFile);
         int port = pm.ReadPortFile();
         Assert.True(port > 0, "Unity port should be valid.");
 
@@ -247,11 +247,11 @@ public class LifecycleAndCompilationTests
         }
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.OperationFile) && DateTime.UtcNow < deadline)
+        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
         }
-        Assert.False(File.Exists(pm.OperationFile), "Operation file should be cleared when eval cancels.");
+        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should be cleared when eval cancels.");
 
         var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
         string status = await client.GetStatusAsync();
@@ -262,7 +262,7 @@ public class LifecycleAndCompilationTests
     public async Task TestCancelOperation_CancellableExecuteMethod_CancelsSuccessfully()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.OperationFile);
+        DeleteFileWithRetry(pm.PathResolver.OperationFile);
         int port = pm.ReadPortFile();
         Assert.True(port > 0, "Unity port should be valid.");
 
@@ -293,11 +293,11 @@ public class LifecycleAndCompilationTests
         }
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.OperationFile) && DateTime.UtcNow < deadline)
+        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
         }
-        Assert.False(File.Exists(pm.OperationFile), "Operation file should be cleared when method execution cancels.");
+        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should be cleared when method execution cancels.");
 
         var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
         string status = await client.GetStatusAsync();
@@ -308,7 +308,7 @@ public class LifecycleAndCompilationTests
     public async Task TestCancelOperation_NonCancellableExecuteMethod_ReturnsNotCancelable()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.OperationFile);
+        DeleteFileWithRetry(pm.PathResolver.OperationFile);
         int port = pm.ReadPortFile();
         Assert.True(port > 0, "Unity port should be valid.");
 
@@ -338,21 +338,21 @@ public class LifecycleAndCompilationTests
             Assert.Equal("NOT_CANCELABLE", cancelResp);
         }
 
-        Assert.True(File.Exists(pm.OperationFile), "Operation file should NOT be cancelled prematurely.");
+        Assert.True(File.Exists(pm.PathResolver.OperationFile), "Operation file should NOT be cancelled prematurely.");
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.OperationFile) && DateTime.UtcNow < deadline)
+        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
         }
-        Assert.False(File.Exists(pm.OperationFile), "Operation file should be cleared once method completes naturally.");
+        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should be cleared once method completes naturally.");
     }
 
     [Fact]
     public async Task TestClientCancellation_EvalAsyncWithCancellationToken_ThrowsAndUnwinds()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.OperationFile);
+        DeleteFileWithRetry(pm.PathResolver.OperationFile);
 
         var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
 
@@ -364,11 +364,11 @@ public class LifecycleAndCompilationTests
         });
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.OperationFile) && DateTime.UtcNow < deadline)
+        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
         }
-        Assert.False(File.Exists(pm.OperationFile), "Operation file should not remain after cancellation.");
+        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should not remain after cancellation.");
 
         string status = await client.GetStatusAsync();
         Assert.Equal("Ready", status);
@@ -378,7 +378,7 @@ public class LifecycleAndCompilationTests
     public async Task TestClientCancellation_ExecuteMethodWithCancellationToken_ThrowsAndUnwinds()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.OperationFile);
+        DeleteFileWithRetry(pm.PathResolver.OperationFile);
 
         var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
 
@@ -392,11 +392,11 @@ public class LifecycleAndCompilationTests
         });
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.OperationFile) && DateTime.UtcNow < deadline)
+        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
         {
             await Task.Delay(100);
         }
-        Assert.False(File.Exists(pm.OperationFile), "Operation file should not remain after cancellation.");
+        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should not remain after cancellation.");
 
         string status = await client.GetStatusAsync();
         Assert.Equal("Ready", status);

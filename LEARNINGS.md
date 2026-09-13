@@ -61,12 +61,27 @@ When users or AI agents provide standard C# source code containing `using` direc
 In minimalist Unity installations (headless, server, batchmode, or VR builds), package-modular assemblies such as `UnityEngine.UI.dll` (from `com.unity.ugui`) may not be installed or loaded. Emitting unconditional `using UnityEngine.UI;` in dynamically compiled Roslyn wrappers triggers compiler error `CS0234`. Dynamic code wrappers must avoid ambient `using` directives or conditionally probe assembly metadata before emitting optional namespace imports.
 
 ### Type Hierarchy Formatter Matching Order
-In hierarchical type matchers, `UnityEngine.Transform` inherits from `UnityEngine.Component`. Specialized formatters for `Transform` must precede generic `Component` checks; otherwise, `Transform` instances are captured and misformatted by generic component inspection logic.
+In hierarchical type matchers, `UnityEngine.Transform` inherits from `UnityEngine.Component`.
+- In the decomposed `IUnityTypeFormatter` architecture, `TransformFormatter.Priority` must be strictly higher than `ComponentFormatter.Priority` (e.g. 110 vs 90).
+- If priorities were equal or inverted, `ComponentFormatter.CanFormat(value)` would return `true` for a `Transform`, capturing the instance and misformatting it with generic component inspection logic rather than rendering child count and local transform coordinates.
+
+### Extensible Type Formatters & `[InitializeOnLoad]` Execution Order
+When providing static registration APIs (`RegisterFormatter`, `UnregisterFormatter`) on `UnityResultFormatter`:
+- External packages and editor scripts may register custom formatters in their own `[InitializeOnLoad]` static constructors before or after `UnityLeanMcpServer` or `UnityResultFormatter` initializes.
+- Default built-in formatters must be seeded safely via thread-safe lazy initialization (e.g. `EnsureDefaultFormatters()`) before external registration, unregistration, or formatting occurs, preventing late-executing default initializers from overwriting custom registrations.
+- Formatting occurs frequently during interactive eval loops. Caching sorted formatters in a volatile copy-on-write array snapshot (`s_SortedFormattersSnapshot`) allows evaluations to iterate formatters lock-free without thread contention.
+
 
 ### Operation-Scoped Resource Lifetime & Out-of-Lock Disposal
 When managing static references to active operation resources (such as `ConsoleLogCapture` or `CancellationTokenSource`) across asynchronous, domain-reloaded, or interrupted operations:
 - Methods marking operations interrupted (e.g. `MarkInterrupted`) must strictly verify that `targetOperationId` matches the currently active operation before disposing static runtime resources. Disposing `s_ActiveLogCapture` unconditionally when `targetOperationId` does not match causes active, concurrent operations to lose log capture mid-flight.
 - Never invoke disposable or cancelable callbacks (such as `CancellationTokenSource.Cancel()`, `CancellationTokenSource.Dispose()`, or `ConsoleLogCapture.Dispose()`) while holding internal synchronization locks (`s_CtsLock`). Cancellation callbacks or event unsubscriptions can execute external code or cause lock contention; resources should be extracted and nulled within the lock and disposed safely outside of it.
+
+### Extensible Command Handlers & `[InitializeOnLoad]` Execution Order
+When providing static registration APIs (`RegisterHandler`, `UnregisterHandler`, `TryGetHandler`) on classes decorated with `[InitializeOnLoad]`:
+- External packages and editor scripts may register custom command handlers in their own `[InitializeOnLoad]` static constructors before or after `UnityLeanMcpServer` initializes.
+- Default built-in handlers must be seeded safely via thread-safe lazy initialization (e.g. `EnsureDefaultHandlers()`) prior to any external registration, retrieval, or unregistration.
+- This ensures external custom command registrations are neither lost nor overwritten by late-executing default initializers.
 
 ---
 
@@ -169,4 +184,8 @@ When an operation fails immediately upon dispatch, line-oriented socket servers 
 - `System.Text.Json.Serialization.JsonConverterAttribute` targets classes, structs, properties, and fields, but is not valid on method parameters (producing compiler error `CS0592`). When an MCP server registers tools via method reflection (such as `WithTools<T>()` in `ModelContextProtocol.Server`), method parameters cannot be decorated with `[JsonConverter]`. To support flexible parameter deserialization (such as accepting either a JSON string `"value"` or a JSON array `["value"]`), wrap the parameter in a dedicated type (e.g. `SingleOrArray`) decorated with `[JsonConverter(typeof(SingleOrArrayJsonConverter))]`. The MCP argument deserializer automatically invokes the type's converter when binding incoming JSON-RPC tool call arguments.
 - Custom parameter types implementing `IEquatable<T>` must explicitly overload `operator ==` and `operator !=` (CA2231). Without explicit operator overloads, C# `==` falls back to reference equality, causing identical instances to compare as unequal when checked with `==`.
 - Deserializing whitespace or empty strings in custom parameter converters should consistently return `null` if the implicit string operator maps whitespace to `null`, ensuring consistent semantics between direct C# assignment and JSON-RPC dispatch.
+
+### Interface Segregation & Path Resolution Anti-Pattern
+- Forwarding entire sub-service surfaces through a coordinator interface (e.g. `IUnityProcessManager` re-exposing 15+ path properties and methods from `IUnityPathResolver`) creates tight coupling and forces test doubles or mocks to implement dozens of pass-through members unnecessarily, violating the Interface Segregation Principle (ISP). Callers should directly access the dedicated sub-service (e.g. `processManager.PathResolver`).
+- Using a type-safe enum (`UnityOperationKind`) instead of string identifiers or dedicated per-command properties for result paths provides compile-time checking, enables exhaustive switch expression matching, and prevents path formatting mismatches between command executors and result pollers.
 

@@ -61,6 +61,11 @@ Operation-specific mechanics (cancellation, domain-reload recovery, Editor resta
 ### Polymorphic Operation Result Symmetry (`IOperationResult`)
 All command execution results implement `IOperationResult` (`OperationId`, `Success`, `Interrupted`, `Message`). Concrete results that map boolean interface flags to underlying domain status strings (such as `UnityTestRunResult.Interrupted` mapping to `ResultState` / `resultState`) must provide symmetric getters and setters: setting `Interrupted = false` when an operation was previously marked interrupted must restore the underlying state cleanly based on outcome (`Success` / `FailCount`), preventing sticky flag bugs across polymorphic consumers.
 
+### Streamlined Path Resolution & Process Management (Interface Segregation Principle)
+- **Type-Safe Result Path Resolution**: `IUnityPathResolver` avoids per-command property proliferation (`RefreshResultFile`, `EvalResultFile`, `ExecuteResultFile`, `TestResultsFile`, `GetEvalResultFile`, `GetExecuteResultFile`, `GetTestResultsFile`) by consolidating result file resolution into a single method: `string GetResultFilePath(UnityOperationKind kind, string? operationId = null)`.
+- **Compile-Time Safety via `UnityOperationKind`**: Using a strongly-typed enum (`Refresh`, `Recompile`, `Test`, `Execute`, `Eval`) ensures compile-time safety and exhaustive pattern matching across result path lookups, preventing typos and runtime drift inherent in stringly-typed APIs.
+- **Strict Interface Segregation (ISP)**: `IUnityProcessManager` and `UnityProcessManager` focus strictly on process lifecycle management, process liveness, and socket readiness. Redundant forwarded path resolver properties and methods (`ProjectRoot`, `TempDir`, `PidFile`, `PortFile`, etc.) are eliminated from the manager contract; callers access filesystem paths directly through `processManager.PathResolver`.
+
 ---
 
 ## 3. Threading, Transport & Dispatching
@@ -75,6 +80,13 @@ Commands declare metadata polymorphically via `ICommandHandler` (`IsMutating`, `
 - When a command arrives at the socket server, the worker thread inspects `handler.IsMutating` and checks `UnityLeanMcpOperationStore.ReadThreadSafeSnapshot()` before enqueuing to the main-thread dispatcher.
 - Conflicting requests (`BUSY <kind> <opId>` or `BUSY compile`) are rejected immediately on the worker thread.
 - This prevents enqueuing onto the main-thread dispatcher when the main thread is occupied with synchronous execution, avoiding deadlocks and TCP client timeouts.
+
+### Extensible Command Registry (Open-Closed Principle)
+The socket server decouples command dispatch from concrete command implementations using an extensible, thread-safe command registry conforming to the Open-Closed Principle (OCP):
+- `ICommandHandler` and `CommandExecutionTarget` are public interfaces, allowing external Unity editor assemblies and packages to implement and register custom commands without modifying `UnityLeanMcpServer.cs`.
+- `UnityLeanMcpServer` provides thread-safe registration APIs (`RegisterHandler`, `UnregisterHandler`, `TryGetHandler`) backed by a `ConcurrentDictionary<string, ICommandHandler>` configured with `StringComparer.OrdinalIgnoreCase`.
+- Built-in commands (`PING`, `EXIT`, `REFRESH`, `EVAL`, `RUN_TESTS`, etc.) are safely seeded during server initialization or on first registry access, remaining open to custom extension or override.
+- Worker-thread request dispatch resolves commands via case-insensitive lookup, inspecting polymorphic handler properties (`ExecutionTarget`, `IsMutating`, `RequiresCompilationSettled`) to safely route or early-reject requests across threads.
 
 ### Explicit Main-Thread Service Initialization
 Classes must not initialize main-thread Unity APIs in static constructors or static field initializers. The socket server must only begin accepting external connections after dependent main-thread services (`UnityLeanMcpPaths`, `UnityLeanMcpOperationStore`, `UnityLeanMcpCompilationTracker`, `UnityLeanMcpDispatcher`, `RoslynCompilerHelper`) have completed explicit `EnsureInitialized()` calls on the Unity main thread.
@@ -111,6 +123,16 @@ To optimize LLM context window consumption and eliminate agent decision friction
 - **Explicit Returns**: Explicit returns (`return <expr>;`) are required to produce output payloads. Void execution returns an explicit diagnostic note (`"(Evaluation completed without a return statement...)"`), preventing confusion with `null` references.
 - **No Implicit Default Namespaces**: To avoid hidden dependencies, compilation nondeterminism, and namespace collisions, dynamic snippets import no ambient default namespaces. Callers explicitly provide whatever `using` directives they require.
 - **Separation of Concerns in Tool Schemas**: The tool description defines the complete execution contract (statements, await, return rules, using directives), while the parameter description remains strictly focused on text representation (plain text, avoiding JSON wrapping).
+
+### Extensible Result Formatter Registry (Open-Closed Principle)
+Result formatting in `unity_eval` and method execution is decoupled from monolithic `if (result is ...)` cascades via an extensible, priority-based formatter registry conforming to the Open-Closed Principle (OCP):
+- `IUnityTypeFormatter` defines the contract (`Priority`, `CanFormat(value)`, `Format(value, formatChild, prettyPrint)`), allowing external Unity editor assemblies and packages to register custom formatters for domain-specific or engine types without modifying `UnityResultFormatter.cs`.
+- `UnityResultFormatter` provides thread-safe registration APIs (`RegisterFormatter`, `UnregisterFormatter`, `UnregisterFormatter<T>`, `ResetToDefaults`).
+- Formatters are evaluated in descending order of `Priority`, falling back to `ToString()` if no custom or built-in formatter matches.
+- High-frequency evaluation is lock-free via a `volatile` copy-on-write array snapshot (`s_SortedFormattersSnapshot`), eliminating lock contention during evaluation while ensuring thread-safe mutations.
+- Fast paths for `null`, primitives, strings, decimals, enums, and destroyed `UnityEngine.Object` (`unityObj == null`) are evaluated early for maximum performance.
+- Built-in type formatters are modularized: `TransformFormatter` (Priority 110), `GameObjectFormatter` (Priority 100), `ComponentFormatter` (Priority 90), `ScriptableObjectFormatter` (Priority 80), `SceneFormatter` (Priority 70), `SerializedObjectFormatter` (Priority 60), `SerializedPropertyFormatter` (Priority 50), `EnumerableFormatter` (Priority 40), and `JsonUtilityFallbackFormatter` (Priority -1000).
+- Composite and collection formatters (such as `EnumerableFormatter`) recursively format child elements using the injected `Func<object, string> formatChild` delegate.
 
 ### Tiered Autowaiting for Unity Busy States
 Tools handle Editor concurrency through tiered autowaiting rather than failing fast:
