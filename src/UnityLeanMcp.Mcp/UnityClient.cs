@@ -585,7 +585,7 @@ public class UnityClient : IUnityClient
 
             if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
             {
-                return new UnityEvalResult { OperationId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(initialResponse) };
+                return new UnityEvalResult { OperationId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
             }
 
             return await PollOperationResultAsync<UnityEvalResult>(
@@ -719,7 +719,7 @@ public class UnityClient : IUnityClient
 
             if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
             {
-                return new UnityExecuteResult { OperationId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(initialResponse) };
+                return new UnityExecuteResult { OperationId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
             }
 
             return await PollOperationResultAsync<UnityExecuteResult>(
@@ -1014,6 +1014,12 @@ public class UnityClient : IUnityClient
         {
             result.Message = errors;
         }
+    }
+
+    private static string StripStatusPrefix(string response)
+    {
+        int spaceIdx = response.IndexOf(' ');
+        return spaceIdx > 0 ? response[(spaceIdx + 1)..].Trim() : response;
     }
 
     private static T? TryReadJsonFile<T>(string filePath, Func<T, bool> predicate) where T : class =>
