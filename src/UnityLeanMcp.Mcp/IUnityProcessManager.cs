@@ -7,6 +7,7 @@ public interface IUnityProcessManager
 {
     string ProjectRoot { get; }
     IUnityPathResolver PathResolver { get; }
+    IUnityExecutableLocator ExecutableLocator { get; }
     bool IsUnityRunning(out int? processId);
     string GetUnityMode(int? pid = null);
     string? GetProjectEditorVersion();

@@ -57,6 +57,7 @@ builder.Logging.ClearProviders();
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
 builder.Services.AddSingleton<IUnityPathResolver>(new UnityPathResolver(resolvedProjectRoot));
+builder.Services.AddSingleton<IUnityExecutableLocator, UnityExecutableLocator>();
 builder.Services.AddSingleton<IUnityLogScanner, UnityLogScanner>();
 builder.Services.AddSingleton<IUnitySocketTransport, UnitySocketTransport>();
 builder.Services.AddSingleton<IUnityProcessManager, UnityProcessManager>();

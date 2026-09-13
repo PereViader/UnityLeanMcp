@@ -19,9 +19,11 @@ public class UnityProcessManager : IUnityProcessManager
     private readonly ILogger<UnityProcessManager> _logger;
     private readonly IUnitySocketTransport _socketTransport;
     private readonly IUnityLogScanner _logScanner;
+    private readonly IUnityExecutableLocator _executableLocator;
     private int? _launchedPid;
 
     public IUnityPathResolver PathResolver => _pathResolver;
+    public IUnityExecutableLocator ExecutableLocator => _executableLocator;
     public string ProjectRoot => _pathResolver.ProjectRoot;
     public string TempDir => _pathResolver.TempDir;
     public string PidFile => _pathResolver.PidFile;
@@ -74,12 +76,14 @@ public class UnityProcessManager : IUnityProcessManager
         IUnityPathResolver pathResolver,
         ILogger<UnityProcessManager> logger,
         IUnitySocketTransport? socketTransport = null,
-        IUnityLogScanner? logScanner = null)
+        IUnityLogScanner? logScanner = null,
+        IUnityExecutableLocator? executableLocator = null)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _logger = logger;
         _socketTransport = socketTransport ?? new UnitySocketTransport(logger);
         _logScanner = logScanner ?? new UnityLogScanner();
+        _executableLocator = executableLocator ?? new UnityExecutableLocator(pathResolver, logger);
     }
 
     public UnityProcessManager(string projectRoot, ILogger<UnityProcessManager> logger)
@@ -277,64 +281,9 @@ public class UnityProcessManager : IUnityProcessManager
     }
 
     /// <summary>
-    /// Locates the Unity executable for this project:
-    /// - Checks UNITY_PATH and UNITY_EDITOR environment variables.
-    /// - Reads ProjectSettings/ProjectVersion.txt (extracts m_EditorVersion:).
-    /// - Checks standard Unity Hub paths on Windows, macOS, and Linux.
-    /// - Checks PATH (unity-editor, Unity, Unity.exe, unity).
+    /// Locates the Unity executable for this project. Delegates to <see cref="IUnityExecutableLocator"/>.
     /// </summary>
-    public string? FindUnityExecutable()
-    {
-        // 1. Environment variables
-        string? configuredPath = Environment.GetEnvironmentVariable("UNITY_PATH")
-            ?? Environment.GetEnvironmentVariable("UNITY_EDITOR");
-
-        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
-        {
-            return Path.GetFullPath(configuredPath);
-        }
-
-        // 2. Read editor version from ProjectSettings/ProjectVersion.txt
-        string? editorVersion = GetProjectEditorVersion();
-
-        // 3. Check standard Unity Hub paths
-        if (!string.IsNullOrWhiteSpace(editorVersion))
-        {
-            var hubPaths = GetStandardHubCandidatePaths(editorVersion);
-            foreach (var candidate in hubPaths)
-            {
-                if (File.Exists(candidate))
-                {
-                    return Path.GetFullPath(candidate);
-                }
-            }
-        }
-
-        // 4. Search in PATH
-        string[] binaryNames = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? new[] { "Unity.exe", "unity-editor.exe", "unity.exe" }
-            : new[] { "unity-editor", "Unity", "unity" };
-
-        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrWhiteSpace(pathEnv))
-        {
-            char sep = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? ';' : ':';
-            var directories = pathEnv.Split(sep, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            foreach (var dir in directories)
-            {
-                foreach (var binary in binaryNames)
-                {
-                    string candidate = Path.Combine(dir, binary);
-                    if (File.Exists(candidate))
-                    {
-                        return Path.GetFullPath(candidate);
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
+    public string? FindUnityExecutable() => _executableLocator.FindUnityExecutable();
 
     public virtual string GetUnityMode(int? pid = null)
     {
@@ -381,81 +330,7 @@ public class UnityProcessManager : IUnityProcessManager
         return "GUI";
     }
 
-    public string? GetProjectEditorVersion()
-    {
-        string versionFilePath = Path.Combine(_pathResolver.ProjectRoot, "ProjectSettings", "ProjectVersion.txt");
-        if (!File.Exists(versionFilePath))
-        {
-            return null;
-        }
-
-        try
-        {
-            foreach (var line in File.ReadAllLines(versionFilePath))
-            {
-                if (line.StartsWith("m_EditorVersion:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parts = line.Split(':', 2);
-                    if (parts.Length == 2)
-                    {
-                        return parts[1].Trim();
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to read editor version from {Path}", versionFilePath);
-        }
-
-        return null;
-    }
-
-    private static List<string> GetStandardHubCandidatePaths(string version)
-    {
-        var paths = new List<string>();
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            string? programFiles = Environment.GetEnvironmentVariable("ProgramFiles");
-            string? programW6432 = Environment.GetEnvironmentVariable("ProgramW6432");
-            string? localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-
-            if (!string.IsNullOrWhiteSpace(programFiles))
-                paths.Add(Path.Combine(programFiles, "Unity", "Hub", "Editor", version, "Editor", "Unity.exe"));
-            if (!string.IsNullOrWhiteSpace(programW6432))
-                paths.Add(Path.Combine(programW6432, "Unity", "Hub", "Editor", version, "Editor", "Unity.exe"));
-            if (!string.IsNullOrWhiteSpace(localAppData))
-                paths.Add(Path.Combine(localAppData, "Unity", "Hub", "Editor", version, "Editor", "Unity.exe"));
-
-            paths.Add($@"C:\Program Files\Unity\Hub\Editor\{version}\Editor\Unity.exe");
-            paths.Add($@"C:\Program Files (x86)\Unity\Hub\Editor\{version}\Editor\Unity.exe");
-            paths.Add($@"C:\Unity\Hub\Editor\{version}\Editor\Unity.exe");
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            paths.Add($"/Applications/Unity/Hub/Editor/{version}/Unity.app/Contents/MacOS/Unity");
-            string? home = Environment.GetEnvironmentVariable("HOME");
-            if (!string.IsNullOrWhiteSpace(home))
-            {
-                paths.Add(Path.Combine(home, "Unity", "Hub", "Editor", version, "Unity.app", "Contents", "MacOS", "Unity"));
-            }
-        }
-        else // Linux
-        {
-            string? home = Environment.GetEnvironmentVariable("HOME");
-            if (!string.IsNullOrWhiteSpace(home))
-            {
-                paths.Add(Path.Combine(home, "Unity", "Hub", "Editor", version, "Editor", "Unity"));
-            }
-            paths.Add($"/opt/unity/Editor/{version}/Editor/Unity");
-            paths.Add($"/opt/Unity/Editor/{version}/Editor/Unity");
-            paths.Add("/opt/unity/Editor/Unity");
-            paths.Add("/opt/Unity/Editor/Unity");
-        }
-
-        return paths;
-    }
+    public string? GetProjectEditorVersion() => _executableLocator.GetProjectEditorVersion();
 
     /// <summary>
     /// Auto-starts Unity in headless batchmode if not already running, and waits for socket readiness.
@@ -475,10 +350,10 @@ public class UnityProcessManager : IUnityProcessManager
             return;
         }
 
-        string? unityExe = FindUnityExecutable();
+        string? unityExe = _executableLocator.FindUnityExecutable();
         if (string.IsNullOrWhiteSpace(unityExe))
         {
-            string? version = GetProjectEditorVersion();
+            string? version = _executableLocator.GetProjectEditorVersion();
             throw new FileNotFoundException(
                 $"Unity executable not found for project at '{_pathResolver.ProjectRoot}' (version: {version ?? "unknown"}). " +
                 "Set the UNITY_PATH or UNITY_EDITOR environment variable or install Unity via Unity Hub.");
