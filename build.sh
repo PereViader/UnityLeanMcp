@@ -67,7 +67,7 @@ mkdir -p "$PACKAGE_SRC/MCP~"
 rm -f "$PACKAGE_SRC/MCP~/"*.old "$PACKAGE_SRC/MCP~/"*.old.* 2>/dev/null || true
 
 # If UnityLeanMcp.Mcp.dll (or any .dll / .pdb) exists and cannot be overwritten directly due to a running host,
-# rename it to .old per FINDINGS.md line 87.
+# rename it to .old per LEARNINGS.md ("Windows Locked Assembly Renaming Workaround").
 shopt -s nullglob
 for locked_candidate in "$PACKAGE_SRC/MCP~"/*.dll "$PACKAGE_SRC/MCP~"/*.pdb; do
   if [ -f "$locked_candidate" ] && ! ( : >> "$locked_candidate" ) 2>/dev/null; then
