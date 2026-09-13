@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
@@ -646,8 +648,19 @@ public class ToolFormattingTests
             string text = GetResultText(result);
 
             Assert.Contains("Tests Failed: 30 failed, 10 passed, 2 skipped.", text);
-            Assert.Contains("• MySuite.Test_Method_0", text);
-            Assert.Contains("• MySuite.Test_Method_24", text);
+            // First 5 (0..4) are detailed with stack traces
+            Assert.Contains("• MySuite.Test_Method_0 (0.050s)", text);
+            Assert.Contains("at MySuite.Test_Method_0() line 0", text);
+            Assert.Contains("• MySuite.Test_Method_4 (0.050s)", text);
+            Assert.Contains("at MySuite.Test_Method_4() line 4", text);
+
+            // Next 20 (5..24) are concise one-line summaries without stack traces
+            Assert.Contains("• MySuite.Test_Method_5: Assertion failed in test 5", text);
+            Assert.Contains("• MySuite.Test_Method_24: Assertion failed in test 24", text);
+            Assert.DoesNotContain("at MySuite.Test_Method_5()", text);
+            Assert.DoesNotContain("at MySuite.Test_Method_24()", text);
+
+            // Past index 24 (25..29) are truncated and summarized
             Assert.DoesNotContain("• MySuite.Test_Method_25", text);
             Assert.Contains("... and 5 more failed test(s).", text);
         }
@@ -671,6 +684,7 @@ public class ToolFormattingTests
                     Name = $"Test_{i}",
                     FullName = $"Suite.Test_{i}",
                     Message = $"Fail {i}",
+                    StackTrace = $"at Suite.Test_{i}() line {i}",
                     Duration = 0.01
                 });
             }
@@ -690,15 +704,200 @@ public class ToolFormattingTests
             Assert.True(result.IsError);
             string text = GetResultText(result);
 
-            Assert.Contains("• Suite.Test_0", text);
-            Assert.Contains("• Suite.Test_1", text);
-            Assert.Contains("• Suite.Test_2", text);
+            // Failures <= 5: all detailed with full messages and stack traces
+            Assert.Contains("• Suite.Test_0 (0.010s)", text);
+            Assert.Contains("Message: Fail 0", text);
+            Assert.Contains("at Suite.Test_0() line 0", text);
+
+            Assert.Contains("• Suite.Test_1 (0.010s)", text);
+            Assert.Contains("Message: Fail 1", text);
+            Assert.Contains("at Suite.Test_1() line 1", text);
+
+            Assert.Contains("• Suite.Test_2 (0.010s)", text);
+            Assert.Contains("Message: Fail 2", text);
+            Assert.Contains("at Suite.Test_2() line 2", text);
+
+            // No one-line summary colon format or truncation note
+            Assert.DoesNotContain("• Suite.Test_0:", text);
+            Assert.DoesNotContain("• Suite.Test_1:", text);
+            Assert.DoesNotContain("• Suite.Test_2:", text);
             Assert.DoesNotContain("more failed test(s).", text);
         }
         finally
         {
             try { Directory.Delete(tempDir, true); } catch { }
         }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenTenFailures_FirstFiveDetailedNextFiveSummarizedWithoutStackTraces()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            var failedTests = new List<FailedTestInfo>();
+            for (int i = 0; i < 10; i++)
+            {
+                failedTests.Add(new FailedTestInfo
+                {
+                    Name = $"Test_{i}",
+                    FullName = $"Suite.Test_{i}",
+                    Message = $"Failure message {i}",
+                    StackTrace = $"at Suite.Test_{i}() line {i}",
+                    Duration = 0.02
+                });
+            }
+
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "Failed",
+                FailCount = 10,
+                PassCount = 0,
+                SkipCount = 0,
+                FailedTests = failedTests
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+
+            // First 5 (0..4) are detailed with duration, message, and stack trace
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.Contains($"• Suite.Test_{i} (0.020s)", text);
+                Assert.Contains($"Message: Failure message {i}", text);
+                Assert.Contains($"at Suite.Test_{i}() line {i}", text);
+                Assert.DoesNotContain($"• Suite.Test_{i}:", text);
+            }
+
+            // Next 5 (5..9) are one-line summaries without stack trace or duration
+            for (int i = 5; i < 10; i++)
+            {
+                Assert.Contains($"• Suite.Test_{i}: Failure message {i}", text);
+                Assert.DoesNotContain($"at Suite.Test_{i}()", text);
+                Assert.DoesNotContain($"• Suite.Test_{i} (0.020s)", text);
+            }
+
+            // Total is 10 <= 25, so no truncation note
+            Assert.DoesNotContain("more failed test(s).", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_SummarizedFailures_ExtractsFirstNonEmptyLineAndTruncatesLongMessages()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            var failedTests = new List<FailedTestInfo>();
+            // 5 dummy detailed failures first
+            for (int i = 0; i < 5; i++)
+            {
+                failedTests.Add(new FailedTestInfo
+                {
+                    Name = $"Detailed_{i}",
+                    FullName = $"Suite.Detailed_{i}",
+                    Message = $"Detailed message {i}",
+                    StackTrace = $"at Suite.Detailed_{i}()",
+                    Duration = 0.01
+                });
+            }
+
+            // Summarized failure 5: multi-line message
+            failedTests.Add(new FailedTestInfo
+            {
+                Name = "MultiLineTest",
+                FullName = "Suite.MultiLineTest",
+                Message = "\r\n   Expected: 42\r\n   But was: 10\r\n   Extra stack",
+                StackTrace = "at Suite.MultiLineTest()",
+                Duration = 0.01
+            });
+
+            // Summarized failure 6: very long message (> 200 chars)
+            string veryLongMsg = new string('A', 250);
+            failedTests.Add(new FailedTestInfo
+            {
+                Name = "LongMsgTest",
+                FullName = "Suite.LongMsgTest",
+                Message = veryLongMsg,
+                StackTrace = "at Suite.LongMsgTest()",
+                Duration = 0.01
+            });
+
+            // Summarized failure 7: empty message
+            failedTests.Add(new FailedTestInfo
+            {
+                Name = "NoMsgTest",
+                FullName = "Suite.NoMsgTest",
+                Message = "   ",
+                StackTrace = "at Suite.NoMsgTest()",
+                Duration = 0.01
+            });
+
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "Failed",
+                FailCount = 8,
+                PassCount = 0,
+                SkipCount = 0,
+                FailedTests = failedTests
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+
+            // Multiline: only first non-empty line extracted
+            Assert.Contains("• Suite.MultiLineTest: Expected: 42", text);
+            Assert.DoesNotContain("But was: 10", text);
+            Assert.DoesNotContain("at Suite.MultiLineTest()", text);
+
+            // Long message: truncated with ... at 200 chars
+            string expectedTruncated = new string('A', 197) + "...";
+            Assert.Contains($"• Suite.LongMsgTest: {expectedTruncated}", text);
+            Assert.DoesNotContain(veryLongMsg, text);
+
+            // Empty message: just test name without colon
+            Assert.Contains("• Suite.NoMsgTest", text);
+            Assert.DoesNotContain("• Suite.NoMsgTest:", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   \r\n \t \n", null)]
+    [InlineData("Simple single line", "Simple single line")]
+    [InlineData("   Trimmed single line   ", "Trimmed single line")]
+    [InlineData("\r\n\r\nFirst non-empty line\r\nSecond line", "First non-empty line")]
+    [InlineData("Line 1\nLine 2\nLine 3", "Line 1")]
+    public void UnityTools_ExtractOneLineSummaryMessage_ExtractsCorrectly(string? input, string? expected)
+    {
+        string? actual = UnityTools.ExtractOneLineSummaryMessage(input);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void UnityTools_ExtractOneLineSummaryMessage_TruncatesLongLines()
+    {
+        string longInput = new string('x', 250);
+        string? result = UnityTools.ExtractOneLineSummaryMessage(longInput, maxLineLength: 200);
+        Assert.NotNull(result);
+        Assert.Equal(200, result.Length);
+        Assert.EndsWith("...", result);
+        Assert.Equal(new string('x', 197) + "...", result);
     }
 
     [Fact]
@@ -715,7 +914,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(filter: "SomeFilter");
+            var result = await tools.UnityRunTestsAsync(groupNames: "SomeFilter");
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -741,7 +940,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(category: "SomeCat");
+            var result = await tools.UnityRunTestsAsync(categoryNames: "SomeCat");
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -767,7 +966,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(filter: "SomeFilter", category: "SomeCat");
+            var result = await tools.UnityRunTestsAsync(groupNames: "SomeFilter", categoryNames: "SomeCat");
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -818,10 +1017,10 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
-                testName: "MyNamespace.MyTestClass.MyMethod",
-                group: "MyNamespace\\.MyTestClass",
-                category: "Integration",
-                assembly: "MyProject.Tests");
+                testNames: "MyNamespace.MyTestClass.MyMethod",
+                groupNames: "MyNamespace\\.MyTestClass",
+                categoryNames: "Integration",
+                assemblyNames: "MyProject.Tests");
 
             Assert.False(result.IsError);
             Assert.NotNull(client.LastTestNames);
@@ -875,7 +1074,7 @@ public class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRunTests_SingleAndArrayCombined_DeDuplicatesAndPreservesOrder()
+    public async Task UnityRunTests_SingleStringAndArrayParameters_ConvertProperly()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
@@ -886,11 +1085,15 @@ public class ToolFormattingTests
                 PassCount = 2
             };
 
-            var result = await tools.UnityRunTestsAsync(
-                testName: "TestA",
-                testNames: ["TestA", "TestB"]);
+            // Passing single string
+            var singleResult = await tools.UnityRunTestsAsync(testNames: "TestA");
+            Assert.False(singleResult.IsError);
+            Assert.NotNull(client.LastTestNames);
+            Assert.Equal(["TestA"], client.LastTestNames);
 
-            Assert.False(result.IsError);
+            // Passing array of strings
+            var arrayResult = await tools.UnityRunTestsAsync(testNames: ["TestA", "TestB"]);
+            Assert.False(arrayResult.IsError);
             Assert.NotNull(client.LastTestNames);
             Assert.Equal(["TestA", "TestB"], client.LastTestNames);
         }
@@ -901,7 +1104,7 @@ public class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRunTests_LegacyFilterAndCategory_PassThroughToClient()
+    public async Task UnityRunTests_PluralParametersWithSingleString_PassThroughToClient()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
@@ -913,8 +1116,8 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
-                filter: "MyLegacyFilter",
-                category: "MyLegacyCat");
+                groupNames: "MyLegacyFilter",
+                categoryNames: "MyLegacyCat");
 
             Assert.False(result.IsError);
             Assert.NotNull(client.LastGroupNames);
@@ -944,7 +1147,7 @@ public class ToolFormattingTests
                 Message = "Regex parsing error: Quantifier * following nothing"
             };
 
-            var result = await tools.UnityRunTestsAsync(group: "*Movement*");
+            var result = await tools.UnityRunTestsAsync(groupNames: "*Movement*");
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1890,6 +2093,189 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             var desc = m.GetCustomAttribute<DescriptionAttribute>();
             Assert.NotNull(desc);
             Assert.False(string.IsNullOrWhiteSpace(desc.Description));
+        }
+    }
+
+    [Fact]
+    public void UnityTools_UnityRunTests_Parameters_OnlyExposeCanonicalPluralParameters()
+    {
+        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityRunTestsAsync));
+        Assert.NotNull(method);
+
+        var paramNames = method.GetParameters().Select(p => p.Name).ToList();
+
+        // Canonical plural parameters
+        Assert.Contains("testNames", paramNames);
+        Assert.Contains("groupNames", paramNames);
+        Assert.Contains("categoryNames", paramNames);
+        Assert.Contains("assemblyNames", paramNames);
+        Assert.Contains("mode", paramNames);
+        Assert.Contains("failedOnly", paramNames);
+
+        // Deprecated singular / legacy aliases MUST NOT exist
+        Assert.DoesNotContain("testName", paramNames);
+        Assert.DoesNotContain("group", paramNames);
+        Assert.DoesNotContain("filter", paramNames);
+        Assert.DoesNotContain("category", paramNames);
+        Assert.DoesNotContain("assembly", paramNames);
+
+        // Check default parameter values
+        var modeParam = method.GetParameters().First(p => p.Name == "mode");
+        Assert.Equal("all", modeParam.DefaultValue);
+
+        var failedOnlyParam = method.GetParameters().First(p => p.Name == "failedOnly");
+        Assert.Equal(false, failedOnlyParam.DefaultValue);
+    }
+
+    [Fact]
+    public void UnityTools_UnityRunTests_GroupNames_HasAccurateDescription()
+    {
+        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityRunTestsAsync));
+        Assert.NotNull(method);
+
+        var groupNamesParam = method.GetParameters().FirstOrDefault(p => p.Name == "groupNames");
+        Assert.NotNull(groupNamesParam);
+
+        var descAttr = groupNamesParam.GetCustomAttribute<DescriptionAttribute>();
+        Assert.NotNull(descAttr);
+        Assert.Equal(
+            ".NET Regular Expression pattern(s) to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).",
+            descAttr.Description);
+    }
+
+    [Fact]
+    public void SingleOrArray_JsonSerializationAndDeserialization_SupportsStringAndArray()
+    {
+        // 1. Single string deserialization
+        var single = JsonSerializer.Deserialize<SingleOrArray>("\"MySingleTest\"");
+        Assert.NotNull(single);
+        Assert.Single(single);
+        Assert.Equal("MySingleTest", single[0]);
+
+        // 2. Array of strings deserialization
+        var array = JsonSerializer.Deserialize<SingleOrArray>("[\"Test1\", \"Test2\"]");
+        Assert.NotNull(array);
+        Assert.Equal(2, array.Count);
+        Assert.Equal("Test1", array[0]);
+        Assert.Equal("Test2", array[1]);
+
+        // 3. Empty array deserialization
+        var empty = JsonSerializer.Deserialize<SingleOrArray>("[]");
+        Assert.NotNull(empty);
+        Assert.Empty(empty);
+
+        // 4. Null deserialization
+        var nullResult = JsonSerializer.Deserialize<SingleOrArray>("null");
+        Assert.Null(nullResult);
+
+        // 5. Invalid token (number) throws JsonException
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SingleOrArray>("123"));
+
+        // 6. Serialization produces JSON array
+        var serialized = JsonSerializer.Serialize(new SingleOrArray("Foo", "Bar"));
+        Assert.Equal("[\"Foo\",\"Bar\"]", serialized);
+    }
+
+    [Fact]
+    public void SingleOrArray_ImplicitConversions_WorkBidirectionally()
+    {
+        // String -> SingleOrArray
+        SingleOrArray? fromString = "MyNamespace.MyTest";
+        Assert.NotNull(fromString);
+        Assert.Single(fromString);
+        Assert.Equal("MyNamespace.MyTest", fromString[0]);
+
+        // String[] -> SingleOrArray
+        SingleOrArray? fromArray = new[] { "TestA", "TestB" };
+        Assert.NotNull(fromArray);
+        Assert.Equal(2, fromArray.Count);
+        Assert.Equal("TestA", fromArray[0]);
+        Assert.Equal("TestB", fromArray[1]);
+
+        // SingleOrArray -> String[]
+        string[]? toArray = fromArray;
+        Assert.NotNull(toArray);
+        Assert.Equal(new[] { "TestA", "TestB" }, toArray);
+
+        // Null conversions
+        string? nullString = null;
+        SingleOrArray? fromNullString = nullString;
+        Assert.Null(fromNullString);
+
+        string[]? nullArray = null;
+        SingleOrArray? fromNullArray = nullArray;
+        Assert.Null(fromNullArray);
+
+        SingleOrArray? nullSingleOrArray = null;
+        string[]? toNullArray = nullSingleOrArray;
+        Assert.Null(toNullArray);
+    }
+
+    [Theory]
+    [InlineData("testNames")]
+    [InlineData("groupNames")]
+    [InlineData("categoryNames")]
+    [InlineData("assemblyNames")]
+    public async Task UnityRunTests_IndividualFilters_SupportBothStringAndArray(string filterParam)
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult { Success = true, PassCount = 1 };
+
+            // Single string call
+            switch (filterParam)
+            {
+                case "testNames":
+                    await tools.UnityRunTestsAsync(testNames: "MyTest");
+                    Assert.NotNull(client.LastTestNames);
+                    Assert.Equal(["MyTest"], client.LastTestNames);
+                    break;
+                case "groupNames":
+                    await tools.UnityRunTestsAsync(groupNames: "MyGroup.*");
+                    Assert.NotNull(client.LastGroupNames);
+                    Assert.Equal(["MyGroup.*"], client.LastGroupNames);
+                    break;
+                case "categoryNames":
+                    await tools.UnityRunTestsAsync(categoryNames: "Unit");
+                    Assert.NotNull(client.LastCategoryNames);
+                    Assert.Equal(["Unit"], client.LastCategoryNames);
+                    break;
+                case "assemblyNames":
+                    await tools.UnityRunTestsAsync(assemblyNames: "MyAssembly");
+                    Assert.NotNull(client.LastAssemblyNames);
+                    Assert.Equal(["MyAssembly"], client.LastAssemblyNames);
+                    break;
+            }
+
+            // Array call
+            switch (filterParam)
+            {
+                case "testNames":
+                    await tools.UnityRunTestsAsync(testNames: ["Test1", "Test2"]);
+                    Assert.NotNull(client.LastTestNames);
+                    Assert.Equal(["Test1", "Test2"], client.LastTestNames);
+                    break;
+                case "groupNames":
+                    await tools.UnityRunTestsAsync(groupNames: ["Group1.*", "Group2.*"]);
+                    Assert.NotNull(client.LastGroupNames);
+                    Assert.Equal(["Group1.*", "Group2.*"], client.LastGroupNames);
+                    break;
+                case "categoryNames":
+                    await tools.UnityRunTestsAsync(categoryNames: ["Unit", "Integration"]);
+                    Assert.NotNull(client.LastCategoryNames);
+                    Assert.Equal(["Unit", "Integration"], client.LastCategoryNames);
+                    break;
+                case "assemblyNames":
+                    await tools.UnityRunTestsAsync(assemblyNames: ["Asm1", "Asm2"]);
+                    Assert.NotNull(client.LastAssemblyNames);
+                    Assert.Equal(["Asm1", "Asm2"], client.LastAssemblyNames);
+                    break;
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
         }
     }
 }

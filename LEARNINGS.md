@@ -129,6 +129,10 @@ Calling `TestRunnerApi.CancelTestRun` signals cancellation acceptance, but does 
 ### Leaking Host Processes into Unit Tests
 `Process.GetProcessesByName("Unity")` returns all Unity instances running on the host machine. If unit tests test process discovery without mocking, an unrelated live Editor instance will cause `IsUnityRunning` to return `true` for a temporary test directory, entering unexpected readiness loops. Unit tests must inject a stubbed process provider.
 
+### Multi-Line Test Failure Messages & Stack Trace Sanitization Overhead
+- When NUnit or custom test assertions fail, failure messages frequently contain leading whitespace or multiple lines (`\r\n  Expected: ...\r\n  But was: ...`). Extracting single-line summaries requires finding the first non-empty line after trimming to prevent empty summary lines or inadvertent multi-line tool framing.
+- In suites with dozens or hundreds of test failures, running regular expression sanitizers (`SanitizeTestStackTrace`) and source location extractors (`ExtractSourceLocation`) across every failure incurs noticeable overhead. Capping these regex operations strictly to the tests receiving detailed reporting (`maxDetailedFailures = 5`) eliminates redundant work on discarded stack frames.
+
 ---
 
 ## 5. External Client & Tool Quirks
@@ -141,3 +145,7 @@ Dynamic in-memory compilation injects directive `#line 1 "eval"` so line numbers
 
 ### Protocol Status Prefix Leaks
 When an operation fails immediately upon dispatch, line-oriented socket servers return single-line tokens like `FAILURE <message>`. If client handlers fail to strip the `FAILURE` prefix before passing the message to compiler diagnostic regex parsers, the parser misinterprets `"FAILURE eval"` as a file path and generates corrupt file URIs (`file:///.../FAILURE eval#L1`).
+
+### System.Text.Json Parameter Conversion in MCP Tool Methods
+`System.Text.Json.Serialization.JsonConverterAttribute` targets classes, structs, properties, and fields, but is not valid on method parameters (producing compiler error `CS0592`). When an MCP server registers tools via method reflection (such as `WithTools<T>()` in `ModelContextProtocol.Server`), method parameters cannot be decorated with `[JsonConverter]`. To support flexible parameter deserialization (such as accepting either a JSON string `"value"` or a JSON array `["value"]`), wrap the parameter in a dedicated type (e.g. `SingleOrArray`) decorated with `[JsonConverter(typeof(SingleOrArrayJsonConverter))]`. The MCP argument deserializer automatically invokes the type's converter when binding incoming JSON-RPC tool call arguments.
+

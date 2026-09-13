@@ -200,28 +200,16 @@ public class UnityTools
     [Description("Runs EditMode/PlayMode tests with failure diagnostics.")]
     public async Task<CallToolResult> UnityRunTestsAsync(
         [Description("Exact fully qualified test names in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format. Matches exact names only.")]
-        string[]? testNames = null,
+        SingleOrArray? testNames = null,
 
-        [Description("Single exact fully qualified test name in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format.")]
-        string? testName = null,
-
-        [Description(".NET Regular Expression pattern(s) to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex.")]
-        string[]? groupNames = null,
-
-        [Description("Single .NET Regular Expression pattern to match test names, fixtures, or namespaces (e.g. '.*Movement.*'). Evaluated as .NET Regex.")]
-        string? group = null,
+        [Description(".NET Regular Expression pattern(s) to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).")]
+        SingleOrArray? groupNames = null,
 
         [Description("Test category filter(s) to include or exclude (prefix with '!' to exclude, e.g. '!Integration').")]
-        string[]? categoryNames = null,
-
-        [Description("Single test category filter to include or exclude (prefix with '!' to exclude, e.g. '!Integration').")]
-        string? category = null,
+        SingleOrArray? categoryNames = null,
 
         [Description("Test assembly name(s) without .dll extension to run.")]
-        string[]? assemblyNames = null,
-
-        [Description("Single test assembly name without .dll extension to run.")]
-        string? assembly = null,
+        SingleOrArray? assemblyNames = null,
 
         [Description("Test execution mode: 'all' (default), 'editmode', or 'playmode'.")]
         string? mode = "all",
@@ -229,25 +217,22 @@ public class UnityTools
         [Description("Only run tests that previously failed.")]
         bool failedOnly = false,
 
-        [Description("Legacy filter alias for group (evaluated as a .NET Regular Expression, e.g. '.*Movement.*').")]
-        string? filter = null,
-
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        testNames = Combine(testName, testNames);
-        groupNames = Combine(group ?? filter, groupNames);
-        categoryNames = Combine(category, categoryNames);
-        assemblyNames = Combine(assembly, assemblyNames);
+        string[]? tests = testNames?.ToArray();
+        string[]? groups = groupNames?.ToArray();
+        string[]? categories = categoryNames?.ToArray();
+        string[]? assemblies = assemblyNames?.ToArray();
 
         mode = string.IsNullOrWhiteSpace(mode) ? "all" : mode;
-        var result = await _client.RunTestsAsync(testNames, groupNames, categoryNames, assemblyNames, mode, failedOnly, progress, cancellationToken);
+        var result = await _client.RunTestsAsync(tests, groups, categories, assemblies, mode, failedOnly, progress, cancellationToken);
         var sb = new StringBuilder();
 
-        bool hasFilter = !string.IsNullOrWhiteSpace(filter) || (groupNames != null && groupNames.Length > 0);
-        bool hasCategory = !string.IsNullOrWhiteSpace(category) || (categoryNames != null && categoryNames.Length > 0);
-        bool hasTestNames = testNames != null && testNames.Length > 0;
-        bool hasAssemblyNames = assemblyNames != null && assemblyNames.Length > 0;
+        bool hasFilter = groups != null && groups.Length > 0;
+        bool hasCategory = categories != null && categories.Length > 0;
+        bool hasTestNames = tests != null && tests.Length > 0;
+        bool hasAssemblyNames = assemblies != null && assemblies.Length > 0;
         bool hasAnyFilter = hasFilter || hasCategory || hasTestNames || hasAssemblyNames;
         int totalTests = result.PassCount + result.FailCount + result.SkipCount;
 
@@ -274,8 +259,8 @@ public class UnityTools
         else if (hasAnyFilter && totalTests == 0)
         {
             success = false;
-            string filterDesc = !string.IsNullOrWhiteSpace(filter) ? filter : (groupNames != null ? string.Join(", ", groupNames) : "");
-            string categoryDesc = !string.IsNullOrWhiteSpace(category) ? category : (categoryNames != null ? string.Join(", ", categoryNames) : "");
+            string filterDesc = groups != null ? string.Join(", ", groups) : "";
+            string categoryDesc = categories != null ? string.Join(", ", categories) : "";
 
             if (!string.IsNullOrWhiteSpace(filterDesc) && !string.IsNullOrWhiteSpace(categoryDesc))
             {
@@ -333,12 +318,24 @@ public class UnityTools
             }
         }
 
+        const int maxDetailedFailures = 5;
+        const int maxTotalFailures = 25;
+
         var structuredFailures = new List<StructuredTestFailure>();
         for (int i = 0; i < result.FailedTests.Count; i++)
         {
             var fail = result.FailedTests[i];
-            var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.ProjectRoot);
-            string sanitizedStackTrace = _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace);
+            string? filePath = null;
+            int? lineNumber = null;
+            string? fileUri = null;
+            string sanitizedStackTrace = string.Empty;
+
+            if (i < maxDetailedFailures)
+            {
+                (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.ProjectRoot);
+                sanitizedStackTrace = _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace);
+            }
+
             structuredFailures.Add(new StructuredTestFailure
             {
                 Name = fail.Name,
@@ -356,12 +353,12 @@ public class UnityTools
         {
             sb.AppendLine();
             sb.AppendLine("Failures:");
-            const int maxDetailedFailures = 25;
-            int countToReport = Math.Min(result.FailedTests.Count, maxDetailedFailures);
-            for (int i = 0; i < countToReport; i++)
+            int detailedCount = Math.Min(result.FailedTests.Count, maxDetailedFailures);
+            for (int i = 0; i < detailedCount; i++)
             {
                 var fail = structuredFailures[i];
-                sb.AppendLine($"• {fail.FullName ?? fail.Name} ({fail.Duration.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}s)");
+                string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
+                sb.AppendLine($"• {testIdentifier} ({fail.Duration.ToString("F3", System.Globalization.CultureInfo.InvariantCulture)}s)");
                 if (!string.IsNullOrWhiteSpace(fail.FilePath) && fail.LineNumber.HasValue)
                 {
                     string link = !string.IsNullOrWhiteSpace(fail.FileUri)
@@ -379,9 +376,25 @@ public class UnityTools
                 }
             }
 
-            if (result.FailedTests.Count > maxDetailedFailures)
+            int summaryCount = Math.Min(result.FailedTests.Count, maxTotalFailures);
+            for (int i = detailedCount; i < summaryCount; i++)
             {
-                int remaining = result.FailedTests.Count - maxDetailedFailures;
+                var fail = structuredFailures[i];
+                string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
+                string? oneLineMsg = ExtractOneLineSummaryMessage(fail.Message);
+                if (!string.IsNullOrWhiteSpace(oneLineMsg))
+                {
+                    sb.AppendLine($"• {testIdentifier}: {oneLineMsg}");
+                }
+                else
+                {
+                    sb.AppendLine($"• {testIdentifier}");
+                }
+            }
+
+            if (result.FailedTests.Count > maxTotalFailures)
+            {
+                int remaining = result.FailedTests.Count - maxTotalFailures;
                 sb.AppendLine($"... and {remaining} more failed test(s).");
             }
         }
@@ -413,6 +426,31 @@ public class UnityTools
 
     internal static string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot)
         => DiagnosticFormatter.Default.FormatDiagnostic(diagnostic, projectRoot);
+
+    internal static string? ExtractOneLineSummaryMessage(string? message, int maxLineLength = 200)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return null;
+        }
+
+        using var reader = new StringReader(message);
+        string? line;
+        while ((line = reader.ReadLine()) != null)
+        {
+            string trimmed = line.Trim();
+            if (!string.IsNullOrEmpty(trimmed))
+            {
+                if (maxLineLength > 3 && trimmed.Length > maxLineLength)
+                {
+                    return trimmed.Substring(0, maxLineLength - 3) + "...";
+                }
+                return trimmed;
+            }
+        }
+
+        return null;
+    }
 
 
     [McpServerTool(Name = "unity_stop")]
@@ -469,25 +507,5 @@ public class UnityTools
             }
         }
         return code;
-    }
-
-    internal static string[]? Combine(string? single, string[]? array)
-    {
-        if (array != null && array.Length > 0)
-        {
-            if (!string.IsNullOrWhiteSpace(single) && !array.Contains(single))
-            {
-                var list = new List<string>(array) { single };
-                return list.ToArray();
-            }
-            return array;
-        }
-
-        if (!string.IsNullOrWhiteSpace(single))
-        {
-            return [single];
-        }
-
-        return null;
     }
 }

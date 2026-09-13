@@ -116,6 +116,24 @@ public class McpProtocolTests
         Assert.DoesNotContain("unity_start", toolNames);
         Assert.Equal(4, toolNames.Count);
 
+        var runTestsTool = toolsElem.EnumerateArray().First(t => t.GetProperty("name").GetString() == "unity_run_tests");
+        var inputSchema = runTestsTool.GetProperty("inputSchema");
+        var properties = inputSchema.GetProperty("properties");
+        Assert.True(properties.TryGetProperty("testNames", out _));
+        Assert.True(properties.TryGetProperty("groupNames", out var groupNamesProp));
+        Assert.True(properties.TryGetProperty("categoryNames", out _));
+        Assert.True(properties.TryGetProperty("assemblyNames", out _));
+        Assert.True(properties.TryGetProperty("mode", out _));
+        Assert.True(properties.TryGetProperty("failedOnly", out _));
+
+        Assert.False(properties.TryGetProperty("testName", out _));
+        Assert.False(properties.TryGetProperty("group", out _));
+        Assert.False(properties.TryGetProperty("filter", out _));
+        Assert.False(properties.TryGetProperty("category", out _));
+        Assert.False(properties.TryGetProperty("assembly", out _));
+
+        Assert.Contains(".NET Regular Expression pattern(s)", groupNamesProp.GetProperty("description").GetString());
+
         // 4. tools/call unity_stop
         string callMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"unity_stop\",\"arguments\":{}}}";
         await writer.WriteLineAsync(callMsg);

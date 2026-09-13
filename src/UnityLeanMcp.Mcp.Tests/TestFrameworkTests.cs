@@ -44,7 +44,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            filter = "PassWithWarningTest"
+            groupNames = "PassWithWarningTest"
         });
 
         Assert.False(result.IsError, result.Text);
@@ -58,7 +58,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            filter = "FailTest"
+            groupNames = "FailTest"
         });
 
         Assert.True(result.IsError);
@@ -73,7 +73,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            filter = "IgnoreTest"
+            groupNames = "IgnoreTest"
         });
 
         Assert.False(result.IsError, result.Text);
@@ -87,7 +87,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            category = "!LongRunning"
+            categoryNames = "!LongRunning"
         });
 
         Assert.False(result.IsError, result.Text);
@@ -101,7 +101,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            filter = "SpecificTargetTest"
+            groupNames = "SpecificTargetTest"
         });
 
         Assert.False(result.IsError, result.Text);
@@ -136,7 +136,7 @@ public class TestFrameworkTests
         var initialRun = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            filter = "PassTest"
+            groupNames = "PassTest"
         });
         Assert.False(initialRun.IsError, initialRun.Text);
 
@@ -153,7 +153,7 @@ public class TestFrameworkTests
         var initialRun = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            filter = "FailTest"
+            groupNames = "FailTest"
         });
         Assert.True(initialRun.IsError);
         Assert.Contains("Failures:", initialRun.Text);

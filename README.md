@@ -25,7 +25,7 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 | :--- | :--- | :--- |
 | **`unity_refresh`** | `clean` (optional bool, default `false`) | Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Set `clean: true` only to force clean rebuild by clearing compiler cache. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary. |
 | **`unity_eval`** | `code` (string: raw C# text) | Evaluates C# top-level script source code in-memory. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types. |
-| **`unity_run_tests`** | `filter`, `category`, `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. |
+| **`unity_run_tests`** | `testNames`, `groupNames`, `categoryNames`, `assemblyNames`, `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. Supports string or array of strings for filter parameters. |
 | **`unity_stop`** | `force` (optional bool, default `false`) | Safely terminates the background instance (used to release GUI locks or recover; do not stop routinely). |
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts a headless background instance in batchmode first and keeps it warm for subsequent commands.
