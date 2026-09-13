@@ -387,4 +387,390 @@ public class DecomposedComponentsTests
         Assert.False(result.Interrupted);
         Assert.Equal("Passed", ((UnityTestRunResult)result).ResultState);
     }
+
+    [Theory]
+    [InlineData("ERROR: Missing argument", "Missing argument")]
+    [InlineData("ERROR:Missing", "Missing")]
+    [InlineData("ERROR Missing argument", "Missing argument")]
+    [InlineData("ERROR", "")]
+    [InlineData("FAILURE: Runner failed", "Runner failed")]
+    [InlineData("FAILURE:Runner", "Runner")]
+    [InlineData("FAILURE Runner failed", "Runner failed")]
+    [InlineData("FAILURE", "")]
+    [InlineData("SUCCESS All tests passed", "All tests passed")]
+    [InlineData("SUCCESS:All tests passed", "All tests passed")]
+    [InlineData("SUCCESS", "")]
+    public void UnityClient_StripStatusPrefix_StripsAllPrefixVariants(string input, string expected)
+    {
+        string actual = UnityClient.StripStatusPrefix(input);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task OperationPoller_PollOperationUntilTerminalAsync_WhenSocketReturnsErrorWithColon_StripsPrefixAndUnescapes()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "poller_err_test_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(tempDir);
+        var mockPm = new StubProcessManager(pathResolver);
+        var mockTransport = new StubSocketTransport("ERROR: Something failed\\nDetails at line 10\\tCode 42");
+        var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
+
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op_err_1",
+            Kind = "test",
+            ResultFilePath = Path.Combine(tempDir, "nonexistent.json"),
+            IsMatch = r => r.OperationId == "op_err_1",
+            PollCommand = "POLL op_err_1"
+        };
+
+        var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain("ERROR", result.Message);
+        Assert.Equal("Something failed\nDetails at line 10\tCode 42", result.Message);
+    }
+
+    [Fact]
+    public async Task OperationPoller_PollOperationUntilTerminalAsync_WhenSocketReturnsErrorWithoutColon_StripsPrefixAndUnescapes()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "poller_err_test_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(tempDir);
+        var mockPm = new StubProcessManager(pathResolver);
+        var mockTransport = new StubSocketTransport("ERROR Runner crashed\\nFatal exception");
+        var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
+
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op_err_2",
+            Kind = "test",
+            ResultFilePath = Path.Combine(tempDir, "nonexistent.json"),
+            IsMatch = r => r.OperationId == "op_err_2",
+            PollCommand = "POLL op_err_2"
+        };
+
+        var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain("ERROR", result.Message);
+        Assert.Equal("Runner crashed\nFatal exception", result.Message);
+    }
+
+    [Fact]
+    public async Task OperationPoller_PollOperationUntilTerminalAsync_WhenSocketReturnsBareError_ReturnsEmptyMessage()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "poller_err_test_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(tempDir);
+        var mockPm = new StubProcessManager(pathResolver);
+        var mockTransport = new StubSocketTransport("ERROR");
+        var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
+
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op_err_3",
+            Kind = "test",
+            ResultFilePath = Path.Combine(tempDir, "nonexistent.json"),
+            IsMatch = r => r.OperationId == "op_err_3",
+            PollCommand = "POLL op_err_3"
+        };
+
+        var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(string.Empty, result.Message);
+    }
+
+    [Fact]
+    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithErrorDiagnostics_MarksSuccessFalseAndEnrichesMessage()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        try
+        {
+            var resolver = new UnityPathResolver(tempDir);
+            string errorText = "Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist";
+            File.WriteAllText(resolver.CompilationErrorsFile, errorText);
+
+            var pm = new StubProcessManager(resolver);
+            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
+
+            var result = new UnityRefreshResult
+            {
+                OperationId = "op1",
+                Success = true,
+                Message = "AssetDatabase refresh completed successfully."
+            };
+
+            client.EnrichRefreshResultWithDiagnostics(result);
+
+            Assert.False(result.Success);
+            Assert.Equal(errorText, result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithWarningDiagnosticsOnly_LeavesSuccessTrueAndEnrichesMessage()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        try
+        {
+            var resolver = new UnityPathResolver(tempDir);
+            string warningText = "Assets/Scripts/Foo.cs(10,5): warning CS0219: Variable is assigned but never used";
+            File.WriteAllText(resolver.CompilationErrorsFile, warningText);
+
+            var pm = new StubProcessManager(resolver);
+            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
+
+            var result = new UnityRefreshResult
+            {
+                OperationId = "op2",
+                Success = true,
+                Message = "AssetDatabase refresh completed successfully."
+            };
+
+            client.EnrichRefreshResultWithDiagnostics(result);
+
+            Assert.True(result.Success);
+            Assert.Equal(warningText, result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithUnstructuredErrorText_MarksSuccessFalseAndEnrichesMessage()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        try
+        {
+            var resolver = new UnityPathResolver(tempDir);
+            string unstructuredError = "Fatal compiler error: Unexpected compilation failure occurred.";
+            File.WriteAllText(resolver.CompilationErrorsFile, unstructuredError);
+
+            var pm = new StubProcessManager(resolver);
+            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
+
+            var result = new UnityRefreshResult
+            {
+                OperationId = "op3",
+                Success = true,
+                Message = "AssetDatabase refresh completed successfully."
+            };
+
+            client.EnrichRefreshResultWithDiagnostics(result);
+
+            Assert.False(result.Success);
+            Assert.Equal(unstructuredError, result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithWarningsAndErrors_MarksSuccessFalseAndEnrichesMessage()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        try
+        {
+            var resolver = new UnityPathResolver(tempDir);
+            string diagText = "Assets/Scripts/Foo.cs(5,10): warning CS0219: Variable is assigned but never used\r\nAssets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist";
+            File.WriteAllText(resolver.CompilationErrorsFile, diagText);
+
+            var pm = new StubProcessManager(resolver);
+            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
+
+            var result = new UnityRefreshResult
+            {
+                OperationId = "op4",
+                Success = true,
+                Message = "AssetDatabase refresh completed successfully."
+            };
+
+            client.EnrichRefreshResultWithDiagnostics(result);
+
+            Assert.False(result.Success);
+            Assert.Equal(diagText, result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void UnityClient_EnrichRefreshResultWithDiagnostics_WhenNoCompilationErrorsFile_LeavesResultUnchanged()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        try
+        {
+            var resolver = new UnityPathResolver(tempDir);
+            var pm = new StubProcessManager(resolver);
+            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
+
+            var result = new UnityRefreshResult
+            {
+                OperationId = "op5",
+                Success = true,
+                Message = "AssetDatabase refresh completed successfully."
+            };
+
+            client.EnrichRefreshResultWithDiagnostics(result);
+
+            Assert.True(result.Success);
+            Assert.Equal("AssetDatabase refresh completed successfully.", result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist", false)]
+    [InlineData("Assets/Scripts/Foo.cs(10,5): warning CS0219: Variable is assigned but never used", true)]
+    [InlineData("Unstructured error output", false)]
+    [InlineData("Unstructured informative output", true)]
+    public void UnityClient_EnrichRefreshResultWithDiagnostics_Static_EvaluatesDiagnosticsCorrectly(string errorText, bool expectedSuccess)
+    {
+        var result = new UnityRefreshResult
+        {
+            OperationId = "op6",
+            Success = true,
+            Message = "Initial"
+        };
+
+        UnityClient.EnrichRefreshResultWithDiagnostics(result, errorText);
+
+        Assert.Equal(expectedSuccess, result.Success);
+        Assert.Equal(errorText, result.Message);
+    }
+
+    [Fact]
+    public void RoslynCompilerHelper_ExtractUsingDirectivesFallback_WhenUsingFollowedByCode_PreservesTrailingCodeAndColumnIndex()
+    {
+        string source = "using System; int x = 42;";
+        bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectivesFallback(source, out var usings, out var methodBody);
+
+        Assert.True(found);
+        Assert.Single(usings);
+        Assert.Equal("using System;", usings[0]);
+        Assert.Equal(source.IndexOf("int x = 42;", StringComparison.Ordinal), methodBody.IndexOf("int x = 42;", StringComparison.Ordinal));
+        Assert.Equal(new string(' ', "using System;".Length) + " int x = 42;", methodBody);
+    }
+
+    [Fact]
+    public void RoslynCompilerHelper_ExtractUsingDirectivesFallback_MultipleUsingsOnSingleLine_ExtractsBothAndPreservesCode()
+    {
+        string source = "using System; using System.Collections.Generic; return 1;";
+        bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectivesFallback(source, out var usings, out var methodBody);
+
+        Assert.True(found);
+        Assert.Equal(2, usings.Count);
+        Assert.Equal("using System;", usings[0]);
+        Assert.Equal("using System.Collections.Generic;", usings[1]);
+        Assert.Equal(source.IndexOf("return 1;", StringComparison.Ordinal), methodBody.IndexOf("return 1;", StringComparison.Ordinal));
+        Assert.Equal(new string(' ', source.IndexOf("return 1;", StringComparison.Ordinal)) + "return 1;", methodBody);
+    }
+
+    [Theory]
+    [InlineData("\r\n")]
+    [InlineData("\n")]
+    public void RoslynCompilerHelper_ExtractUsingDirectivesFallback_MultiLineSnippet_PreservesLineCountAndEndings(string lineEnding)
+    {
+        string[] lines = new[]
+        {
+            "using System;",
+            "using System.Collections.Generic;",
+            "",
+            "int a = 10;",
+            "int b = 20;",
+            "return a + b;"
+        };
+        string source = string.Join(lineEnding, lines);
+
+        bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectivesFallback(source, out var usings, out var methodBody);
+
+        Assert.True(found);
+        Assert.Equal(2, usings.Count);
+        Assert.Equal("using System;", usings[0]);
+        Assert.Equal("using System.Collections.Generic;", usings[1]);
+
+        string[] resultLines = methodBody.Split(new[] { lineEnding }, StringSplitOptions.None);
+        Assert.Equal(lines.Length, resultLines.Length);
+        Assert.Equal(new string(' ', "using System;".Length), resultLines[0]);
+        Assert.Equal(new string(' ', "using System.Collections.Generic;".Length), resultLines[1]);
+        Assert.Equal("", resultLines[2]);
+        Assert.Equal("int a = 10;", resultLines[3]);
+        Assert.Equal("int b = 20;", resultLines[4]);
+        Assert.Equal("return a + b;", resultLines[5]);
+
+        if (lineEnding == "\r\n")
+        {
+            Assert.Contains("\r\n", methodBody);
+        }
+        else
+        {
+            Assert.DoesNotContain("\r", methodBody);
+        }
+    }
+
+    [Fact]
+    public void RoslynCompilerHelper_ExtractUsingDirectivesFallback_WhenNoUsings_ReturnsFalseAndPreservesBody()
+    {
+        string source = "int a = 1;\nreturn a;";
+        bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectivesFallback(source, out var usings, out var methodBody);
+
+        Assert.False(found);
+        Assert.Empty(usings);
+        Assert.Equal(source, methodBody);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   \t  \n  ")]
+    public void RoslynCompilerHelper_ExtractUsingDirectivesFallback_WhenNullOrWhitespace_ReturnsFalse(string? source)
+    {
+        bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectivesFallback(source!, out var usings, out var methodBody);
+
+        Assert.False(found);
+        Assert.Empty(usings);
+        Assert.Equal(source ?? "", methodBody);
+    }
+
+    private sealed class StubSocketTransport : IUnitySocketTransport
+    {
+        private readonly string? _response;
+        public StubSocketTransport(string? response) => _response = response;
+        public Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default) => Task.FromResult(_response);
+        public Task<bool> IsSocketReadyAsync(int port, int timeoutSeconds = 2, CancellationToken cancellationToken = default) => Task.FromResult(true);
+    }
+
+    private sealed class StubProcessManager : IUnityProcessManager
+    {
+        public IUnityPathResolver PathResolver { get; }
+        public IUnityExecutableLocator ExecutableLocator => throw new NotImplementedException();
+        public StubProcessManager(IUnityPathResolver pathResolver) => PathResolver = pathResolver;
+        public bool IsUnityRunning(out int? processId) { processId = 1234; return true; }
+        public string GetUnityMode(int? pid = null) => "Batchmode";
+        public string? GetProjectEditorVersion() => "6000.0.0f1";
+        public int ReadPortFile() => 12345;
+        public Task<bool> StartUnityAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> WaitForHealthyAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public void PurgeOperationState() { }
+    }
 }

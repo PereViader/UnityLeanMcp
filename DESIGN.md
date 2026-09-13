@@ -41,6 +41,11 @@ Terminal results are persisted to operation-scoped file paths (`Temp/unity_eval_
 - This eliminates the need for `File.Replace` (and underlying Win32 `ReplaceFileW`), avoiding mandatory replacement locks and sharing collisions with concurrent readers across all platforms.
 - For test re-runs requiring historical context (such as `--failed-only`), the runner dual-writes results to both the operation-scoped file for client polling and the static `unity_test_results.json` for Editor history.
 
+### Operation Result Lifecycle & File Cleanup
+Under state persistence, file-based IPC, and the interruption lifecycle, operation results follow distinct lifecycle and cleanup behaviors depending on their scope:
+- **Operation-Scoped Result Files**: Operation-scoped result files (e.g. `unity_eval_<opId>.json`, `unity_test_run_<opId>.json`) are single-use and automatically deleted by `OperationPoller` upon terminal read to prevent disk clutter and avoid stale reads by future operations.
+- **Shared Static Result Files**: Shared static result files (such as `unity_refresh_result.json`) persist Editor status across domain reloads and tool invocations, and must be preserved by default by `OperationPoller` (unless explicitly configured with `DeleteResultFileOnCompletion = true`).
+
 ### Resilient Inter-Process File I/O Retries
 Files accessed across process boundaries (such as PID files, port discovery files, operation journals, lockfiles, and Editor logs) are subject to transient filesystem contention, atomic replacements, and external scanner interference:
 - File read and write retry helpers (`ReadFileWithRetry`, `WriteAtomic`) must catch both `IOException` and `UnauthorizedAccessException` across intermediate retry attempts.
@@ -65,6 +70,7 @@ All command execution results implement `IOperationResult` (`OperationId`, `Succ
 - **Type-Safe Result Path Resolution**: `IUnityPathResolver` avoids per-command property proliferation (`RefreshResultFile`, `EvalResultFile`, `ExecuteResultFile`, `TestResultsFile`, `GetEvalResultFile`, `GetExecuteResultFile`, `GetTestResultsFile`) by consolidating result file resolution into a single method: `string GetResultFilePath(UnityOperationKind kind, string? operationId = null)`.
 - **Compile-Time Safety via `UnityOperationKind`**: Using a strongly-typed enum (`Refresh`, `Recompile`, `Test`, `Execute`, `Eval`) ensures compile-time safety and exhaustive pattern matching across result path lookups, preventing typos and runtime drift inherent in stringly-typed APIs.
 - **Strict Interface Segregation (ISP)**: `IUnityProcessManager` and `UnityProcessManager` focus strictly on process lifecycle management, process liveness, and socket readiness. Redundant forwarded path resolver properties and methods (`ProjectRoot`, `TempDir`, `PidFile`, `PortFile`, etc.) are eliminated from the manager contract; callers access filesystem paths directly through `processManager.PathResolver`.
+- **Deterministic Process Handle Lifetime**: `System.Diagnostics.Process` handles allocated by `UnityProcessManager` during discovery (`FindProjectUnityPid`) or forced process termination (`StopUnityAsync`) must be explicitly and promptly disposed (via `using` or `finally` blocks) to prevent unmanaged operating system handle leaks during long-running sessions.
 
 ---
 
@@ -78,6 +84,7 @@ All command execution results implement `IOperationResult` (`OperationId`, `Succ
 ### Worker-Thread Early Rejection
 Commands declare metadata polymorphically via `ICommandHandler` (`IsMutating`, `RequiresCompilationSettled`):
 - When a command arrives at the socket server, the worker thread inspects `handler.IsMutating` and checks `UnityLeanMcpOperationStore.ReadThreadSafeSnapshot()` before enqueuing to the main-thread dispatcher.
+- `ReadThreadSafeSnapshot()` serves an isolated in-memory clone of `s_CachedState` under lock when non-null, completely avoiding disk I/O and main-thread-affine `JsonUtility` execution on background worker threads.
 - Conflicting requests (`BUSY <kind> <opId>` or `BUSY compile`) are rejected immediately on the worker thread.
 - This prevents enqueuing onto the main-thread dispatcher when the main thread is occupied with synchronous execution, avoiding deadlocks and TCP client timeouts.
 
@@ -117,12 +124,14 @@ To optimize LLM context window consumption and eliminate agent decision friction
 - **Consolidate Execution into `unity_eval`**: All dynamic C# code execution, static method invocation, and inspection are funneled through `unity_eval`. The redundant `unity_execute_method` tool is retired.
 - **Retire `unity_status` from MCP Catalog**: Autonomous agents frequently waste reasoning turns making pre-flight status calls. Because all execution tools auto-start Unity when not running and autowait for busy states, `unity_status` is removed from the public MCP catalog (while preserved internally for diagnostics and tests).
 - **Proactive Compilation Checks via `unity_refresh`**: Merging clean rebuild capabilities into `unity_refresh(clean: bool = false)` avoids multiple compilation tools. Documenting that `unity_refresh` is fast (<200ms when unchanged) encourages agents to check compilation health after edits.
+- **Compilation Diagnostic Synchronization**: When refreshing or recompiling, compilation error diagnostics published by Unity or background log scanners override optimistic success states, ensuring `UnityRefreshResult.Success` is synchronized to `false` whenever error-severity diagnostics or unparsed compilation errors are detected.
 
 ### `unity_eval` Script Model & Semantics
 - **Top-Level Script Mental Model**: `unity_eval` accepts standard C# top-level script statements, supporting direct statement execution, asynchronous execution via top-level `await`, and returning values via `return <value>;`.
 - **Explicit Returns**: Explicit returns (`return <expr>;`) are required to produce output payloads. Void execution returns an explicit diagnostic note (`"(Evaluation completed without a return statement...)"`), preventing confusion with `null` references.
 - **No Implicit Default Namespaces**: To avoid hidden dependencies, compilation nondeterminism, and namespace collisions, dynamic snippets import no ambient default namespaces. Callers explicitly provide whatever `using` directives they require.
 - **Separation of Concerns in Tool Schemas**: The tool description defines the complete execution contract (statements, await, return rules, using directives), while the parameter description remains strictly focused on text representation (plain text, avoiding JSON wrapping).
+- **Lossless Using Directive Blanking**: When snippets supply `using` directives at top-level, they are hoisted to namespace/file scope to prevent `CS1529`. Both AST and fallback regex blanking replace only matched directive characters with spaces (`' '`), ensuring exact 1:1 error line and column correspondence and preserving any statements placed on the same line.
 
 ### Extensible Result Formatter Registry (Open-Closed Principle)
 Result formatting in `unity_eval` and method execution is decoupled from monolithic `if (result is ...)` cascades via an extensible, priority-based formatter registry conforming to the Open-Closed Principle (OCP):
@@ -169,6 +178,7 @@ To eliminate parameter ambiguity and prevent tool invocation failures by LLM age
 - **Canonical Plural Parameter Surface**: `unity_run_tests` exposes only canonical plural filter parameters (`testNames`, `groupNames`, `categoryNames`, `assemblyNames`, `mode`, `failedOnly`). Deprecated singular or legacy aliases (`testName`, `group`, `filter`, `category`, `assembly`) are eliminated from the tool signature.
 - **Accurate Regular Expression Documentation**: The `groupNames` parameter schema explicitly documents that patterns are evaluated by the Unity Test Framework as .NET Regular Expressions (e.g. `['.*Movement.*']`) rather than shell globs (e.g. `*Movement*`), preventing pre-execution regex compilation exceptions.
 - **Polymorphic String / Array Deserialization**: AI agents often send either a single string (e.g. `"MyTest"`) or an array of strings (e.g. `["MyTest"]`) for filter parameters. The `SingleOrArray` parameter type implements a custom `JsonConverter` that transparently accepts both JSON strings and JSON string arrays during MCP tool dispatch, while providing bidirectional implicit conversions to `string` and `string[]` for direct C# ergonomics, null-safe constructor overloads, and value equality operators (`==`, `!=`).
+- **Encapsulation & Invariant Protection**: `SingleOrArray` is a `sealed class` implementing `IReadOnlyList<string>, IEquatable<SingleOrArray>` rather than inheriting `List<string>`, avoiding CA1002 (do not expose generic lists), preventing unintended external mutations, and strictly preserving the non-empty, non-whitespace string invariant across all constructors and deserializers. C# 12 collection expressions (`[ "a", "b" ]`) are first-class citizens via `[CollectionBuilder(typeof(SingleOrArray), nameof(Create))]`.
 
 ---
 

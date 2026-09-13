@@ -89,7 +89,8 @@ public class TestRunErrorAndIdleTests
             var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
 
             Assert.False(result.Success);
-            Assert.Contains("ERROR: Missing or invalid operation id", result.Message);
+            Assert.DoesNotContain("ERROR", result.Message);
+            Assert.Equal("Missing or invalid operation id", result.Message);
         }
         finally
         {
@@ -117,7 +118,8 @@ public class TestRunErrorAndIdleTests
             var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
 
             Assert.False(result.Success);
-            Assert.Contains("FAILURE: Runner failed to start", result.Message);
+            Assert.DoesNotContain("FAILURE", result.Message);
+            Assert.Equal("Runner failed to start", result.Message);
         }
         finally
         {
@@ -181,7 +183,99 @@ public class TestRunErrorAndIdleTests
             var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
 
             Assert.False(result.Success);
-            Assert.Contains("ERROR: Something went wrong", result.Message);
+            Assert.DoesNotContain("ERROR", result.Message);
+            Assert.Equal("Something went wrong", result.Message);
+        }
+        finally
+        {
+            listener.Stop();
+            cts.Cancel();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenPollResponseIsErrorWithoutColon_StripsPrefixAndUnescapes()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        {
+            if (cmd.StartsWith("RUN_TESTS"))
+            {
+                return "RUNNING";
+            }
+            if (cmd.StartsWith("POLL_TESTS"))
+            {
+                return "ERROR Test runner crashed\\nAt frame 42";
+            }
+            return null;
+        }, cts.Token);
+
+        try
+        {
+            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+
+            Assert.False(result.Success);
+            Assert.DoesNotContain("ERROR", result.Message);
+            Assert.Equal("Test runner crashed\nAt frame 42", result.Message);
+        }
+        finally
+        {
+            listener.Stop();
+            cts.Cancel();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsEscapedErrorOrFailure_StripsPrefixAndUnescapes()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        {
+            if (cmd.StartsWith("RUN_TESTS"))
+            {
+                return "FAILURE: Test execution aborted\\nReason: C:\\\\Temp\\\\failure.log\\t(Code 1)";
+            }
+            return null;
+        }, cts.Token);
+
+        try
+        {
+            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+
+            Assert.False(result.Success);
+            Assert.DoesNotContain("FAILURE", result.Message);
+            Assert.Equal("Test execution aborted\nReason: C:\\Temp\\failure.log\t(Code 1)", result.Message);
+        }
+        finally
+        {
+            listener.Stop();
+            cts.Cancel();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsSuccessWithoutFile_StripsPrefixAndUnescapes()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        {
+            if (cmd.StartsWith("RUN_TESTS"))
+            {
+                return "SUCCESS All tests passed\\nTotal: 10";
+            }
+            return null;
+        }, cts.Token);
+
+        try
+        {
+            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+
+            Assert.True(result.Success);
+            Assert.DoesNotContain("SUCCESS", result.Message);
+            Assert.Equal("All tests passed\nTotal: 10", result.Message);
         }
         finally
         {

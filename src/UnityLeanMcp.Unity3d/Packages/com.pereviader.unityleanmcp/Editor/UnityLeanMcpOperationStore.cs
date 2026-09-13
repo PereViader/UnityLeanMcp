@@ -129,6 +129,10 @@ namespace UnityLeanMcp
                     {
                         System.Threading.Thread.Sleep(10);
                     }
+                    catch (UnauthorizedAccessException) when (i < 2)
+                    {
+                        System.Threading.Thread.Sleep(10);
+                    }
                 }
 
                 if (string.IsNullOrWhiteSpace(json))
@@ -159,11 +163,17 @@ namespace UnityLeanMcp
         {
             lock (s_CacheLock)
             {
+                if (s_CachedState != null)
+                {
+                    return Clone(s_CachedState);
+                }
+
                 if (!File.Exists(OperationFilePath))
                 {
                     s_CachedState = null;
                     return null;
                 }
+
                 return Read();
             }
         }

@@ -32,6 +32,10 @@ Flags such as `EditorApplication.isCompiling` and `EditorApplication.isUpdating`
 ### Compiler Diagnostic Capture Timing
 Compiler diagnostics must be captured during `CompilationPipeline.assemblyCompilationFinished`, before the domain reload occurs. Waiting for `CompilationPipeline.compilationFinished` or a subsequent Editor update tick is too late: the domain reload unloads the assembly context, causing compiler warnings from the old domain to be lost.
 
+### Asynchronous Compilation Failure Overrides Optimistic Refresh Success
+- When triggering AssetDatabase refresh or script recompilation, Unity may return an initial `READY` or success status while compilation errors are asynchronously published to the diagnostics file (`unity_compilation_errors.txt`).
+- Client refresh handlers must parse compilation diagnostics upon operation completion and demote `UnityRefreshResult.Success` to `false` if any error-level diagnostics or unparsed compilation errors exist, preventing false-positive success reporting when builds fail.
+
 ---
 
 ## 2. CLR, Threading & Roslyn Quirks
@@ -46,6 +50,11 @@ Unity does not guarantee execution ordering for `[InitializeOnLoad]` classes acr
 ### Unity API Main-Thread Affinity
 Virtually all Unity APIs are strictly main-thread-affine unless explicitly documented otherwise. This includes APIs that resemble standalone utility code, such as Unity JSON serialization (`JsonUtility`) and data path retrieval (`Application.dataPath`). Background threads must never invoke Unity engine APIs directly.
 
+### Worker-Thread Operation Store Snapshot Caching
+- `UnityLeanMcpOperationStore.ReadThreadSafeSnapshot()` is invoked from background TCP listener threads to inspect active operation state during command dispatch and busy checks.
+- If `ReadThreadSafeSnapshot()` falls back to invoking `Read()` while an in-memory cached state is present, background worker threads execute `JsonUtility.FromJson<UnityLeanMcpOperationState>` and incur redundant disk I/O under lock.
+- Returning `Clone(s_CachedState)` immediately under `s_CacheLock` when `s_CachedState != null` avoids both worker-thread `JsonUtility` execution and disk I/O, ensuring thread safety and preventing background thread engine exceptions.
+
 ### Roslyn Reflection Traps
 When calling Roslyn APIs via reflection across Unity Editor versions:
 - **`CSharpSyntaxTree.GetRoot`**: Has an optional parameter (`GetRoot(CancellationToken cancellationToken = default)`). Reflective lookup specifying 0 parameters (`new Type[0]`) returns `null`. The reflection lookup must explicitly match `GetRoot(CancellationToken)` and supply `default(CancellationToken)`.
@@ -55,7 +64,7 @@ When calling Roslyn APIs via reflection across Unity Editor versions:
 When users or AI agents provide standard C# source code containing `using` directives at the top (e.g. `using System.IO;`):
 - Placing them inside a generated runner method body causes Roslyn error `CS1529: A using directive must precede all other elements defined in the namespace`.
 - Directives must be extracted (matching `UsingDirectiveSyntax` while ignoring `UsingStatementSyntax` and `LocalDeclarationStatementSyntax`) and hoisted to file scope before the class declaration.
-- Extracted directive characters must be replaced with spaces rather than deleted. This preserves exact original line breaks (`\r\n`), ensuring that compiler error line and column numbers remain 1:1 identical to the caller's submitted code.
+- Extracted directive characters must be replaced with spaces rather than deleted (both in the Roslyn AST parser and in the regex-based fallback `ExtractUsingDirectivesFallback`). Replacing entire lines with empty strings deletes any code sharing that line (e.g. `using System; int x = 42;`) and shifts column offsets. Blanking only matched directive spans (`charArray[c] = ' '`) and looping per line preserves multiple directives, trailing statements, total line count, and 1:1 column positioning across both parsing strategies.
 
 ### Optional Package Assemblies in Headless Environments
 In minimalist Unity installations (headless, server, batchmode, or VR builds), package-modular assemblies such as `UnityEngine.UI.dll` (from `com.unity.ugui`) may not be installed or loaded. Emitting unconditional `using UnityEngine.UI;` in dynamically compiled Roslyn wrappers triggers compiler error `CS0234`. Dynamic code wrappers must avoid ambient `using` directives or conditionally probe assembly metadata before emitting optional namespace imports.
@@ -133,6 +142,16 @@ On POSIX platforms (Linux, macOS), setting `SO_REUSEADDR` allows a socket to imm
 - Never set `SO_REUSEADDR` on Windows TCP listeners. Restrict `SO_REUSEADDR` to non-Windows platforms.
 - Background listener threads must inspect the OS via pure CLR `!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)` rather than Unity's `Application.platform`, preserving main-thread affinity rules.
 
+### `System.Diagnostics.Process` Handle Disposal & `HasExited`
+- Calling `Process.GetProcessesByName(...)` or `Process.GetProcessById(...)` allocates native OS process handles wrapped in `Process` instances. These handles are not automatically released until GC/finalization unless explicitly disposed via `Process.Dispose()`.
+- Once a `Process` instance is disposed, its `SafeProcessHandle` is closed. Subsequent queries to properties like `proc.HasExited` throw `InvalidOperationException: No process is associated with this object.`
+- Methods allocating system `Process` candidate arrays internally (such as `FindProjectUnityPid`) must deterministically dispose all allocated instances in a `finally` block when ownership is retained, while external candidates or provider delegates injected for testing must retain caller ownership to avoid invalidating caller assertions.
+
+### Shared Static Result Files vs Operation-Scoped Result Files in Polling Engines
+In file system, concurrency, and inter-process communication (IPC) polling engines:
+- Issuing a blanket `File.Delete(resultFilePath)` in polling engines is harmful for static result files: static files like `unity_refresh_result.json` record the last known Editor compilation/refresh state across sessions, and deleting them after a single tool call wipes out the record for subsequent calls or diagnostic fallback readers.
+- Polling engines must distinguish operation-scoped files (bearing the operation ID, e.g. `unity_eval_<opId>.json`, `unity_test_<opId>.json`) from shared static files. Operation-scoped files are single-use and safely unlinked after terminal consumption to prevent disk clutter and stale reads, whereas shared static result files persist Editor status across domain reloads and tool invocations, and must be preserved by default unless single-use deletion is explicitly configured (`DeleteResultFileOnCompletion = true`).
+
 ---
 
 ## 4. Unity Test Framework Quirks
@@ -178,12 +197,15 @@ Even when server-side tools avoid arbitrary bounded timeouts and poll indefinite
 Dynamic in-memory compilation injects directive `#line 1 "eval"` so line numbers match user-submitted snippets. Naive URI builders treat `"eval"` as a relative file path and prepend the project root, hallucinating non-existent file URIs (`file:///.../eval#L1`) that trigger "File not found" errors in AI agents. Eval diagnostics must format synthetic IDs as `snippet line X, col Y:` rather than file URIs.
 
 ### Protocol Status Prefix Leaks
-When an operation fails immediately upon dispatch, line-oriented socket servers return single-line tokens like `FAILURE <message>`. If client handlers fail to strip the `FAILURE` prefix before passing the message to compiler diagnostic regex parsers, the parser misinterprets `"FAILURE eval"` as a file path and generates corrupt file URIs (`file:///.../FAILURE eval#L1`).
+When an operation fails immediately upon dispatch, line-oriented socket servers return single-line tokens like `FAILURE <message>` or `ERROR: <message>`.
+- If client handlers fail to strip the status prefix before passing the message to compiler diagnostic regex parsers, the parser misinterprets `"FAILURE eval"` as a file path and generates corrupt file URIs (`file:///.../FAILURE eval#L1`).
+- When stripping status prefixes (`ERROR:`, `FAILURE:`, `SUCCESS:`), colon-delimited prefixes must be inspected before searching for whitespace (`response.IndexOf(' ')`). If a whitespace search runs first on colon-delimited payloads without spaces (e.g. `SUCCESS:All tests passed`), the space between subsequent words causes the first word of the payload to be mistakenly stripped.
 
 ### System.Text.Json Parameter Conversion in MCP Tool Methods
 - `System.Text.Json.Serialization.JsonConverterAttribute` targets classes, structs, properties, and fields, but is not valid on method parameters (producing compiler error `CS0592`). When an MCP server registers tools via method reflection (such as `WithTools<T>()` in `ModelContextProtocol.Server`), method parameters cannot be decorated with `[JsonConverter]`. To support flexible parameter deserialization (such as accepting either a JSON string `"value"` or a JSON array `["value"]`), wrap the parameter in a dedicated type (e.g. `SingleOrArray`) decorated with `[JsonConverter(typeof(SingleOrArrayJsonConverter))]`. The MCP argument deserializer automatically invokes the type's converter when binding incoming JSON-RPC tool call arguments.
 - Custom parameter types implementing `IEquatable<T>` must explicitly overload `operator ==` and `operator !=` (CA2231). Without explicit operator overloads, C# `==` falls back to reference equality, causing identical instances to compare as unequal when checked with `==`.
 - Deserializing whitespace or empty strings in custom parameter converters should consistently return `null` if the implicit string operator maps whitespace to `null`, ensuring consistent semantics between direct C# assignment and JSON-RPC dispatch.
+- When refactoring collection types from `List<T>` to an encapsulated `IReadOnlyList<T>` (preventing CA1002), callers utilizing C# 12 collection expressions (e.g. `testNames: ["TestA", "TestB"]`) will fail compilation with `CS1061: does not contain a definition for 'Add'` unless the type is decorated with `[CollectionBuilder(typeof(TargetType), nameof(Create))]` paired with a static `Create(ReadOnlySpan<T>)` builder method.
 
 ### Interface Segregation & Path Resolution Anti-Pattern
 - Forwarding entire sub-service surfaces through a coordinator interface (e.g. `IUnityProcessManager` re-exposing 15+ path properties and methods from `IUnityPathResolver`) creates tight coupling and forces test doubles or mocks to implement dozens of pass-through members unnecessarily, violating the Interface Segregation Principle (ISP). Callers should directly access the dedicated sub-service (e.g. `processManager.PathResolver`).

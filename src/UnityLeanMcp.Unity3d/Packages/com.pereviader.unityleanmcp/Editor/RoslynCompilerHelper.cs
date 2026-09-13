@@ -554,7 +554,7 @@ namespace UnityLeanMcp
             return ExtractUsingDirectivesFallback(sourceCode, out usings, out methodBody);
         }
 
-        private static bool ExtractUsingDirectivesFallback(string sourceCode, out List<string> usings, out string methodBody)
+        internal static bool ExtractUsingDirectivesFallback(string sourceCode, out List<string> usings, out string methodBody)
         {
             usings = new List<string>();
             methodBody = sourceCode ?? "";
@@ -567,12 +567,26 @@ namespace UnityLeanMcp
             for (int i = 0; i < lines.Length; i++)
             {
                 string line = lines[i];
-                if (s_UsingDirectiveRegex.IsMatch(line))
+                while (true)
                 {
-                    usings.Add(line.Trim());
-                    lines[i] = "";
+                    var match = s_UsingDirectiveRegex.Match(line);
+                    if (!match.Success)
+                    {
+                        break;
+                    }
+
+                    usings.Add(match.Value.Trim());
                     foundAny = true;
+
+                    var charArray = line.ToCharArray();
+                    int end = match.Index + match.Length;
+                    for (int c = match.Index; c < end; c++)
+                    {
+                        charArray[c] = ' ';
+                    }
+                    line = new string(charArray);
                 }
+                lines[i] = line;
             }
 
             if (foundAny)

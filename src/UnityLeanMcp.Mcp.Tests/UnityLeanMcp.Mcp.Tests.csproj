@@ -27,4 +27,10 @@
     <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\..\build\Editor\RoslynCompilerHelper.cs" Link="RoslynCompilerHelper.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+  </ItemGroup>
+
 </Project>

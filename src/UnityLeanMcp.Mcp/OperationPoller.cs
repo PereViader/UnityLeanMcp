@@ -20,6 +20,13 @@ public sealed class OperationPollingSpec<TResult> where TResult : class, IOperat
     public bool CheckOperationStoreForInterruption { get; init; } = true;
     public bool ShouldCancelOnAborted { get; init; } = true;
 
+    /// <summary>
+    /// Whether to delete the result file upon terminal completion.
+    /// If null (default), only operation-scoped result files (whose filenames contain OperationId) are deleted;
+    /// shared static result files (e.g. unity_refresh_result.json) are preserved.
+    /// </summary>
+    public bool? DeleteResultFileOnCompletion { get; init; }
+
     public Func<TResult, TResult>? OnResultFound { get; init; }
     public Func<CancellationToken, Task>? OnPollTick { get; init; }
     public Func<string?, CancellationToken, Task>? OnAfterPoll { get; init; }
@@ -129,7 +136,7 @@ public class OperationPoller : IOperationPoller
                 var result = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                 if (result != null)
                 {
-                    DeleteResultFileSilently(spec.ResultFilePath);
+                    DeleteResultFileSilently(spec);
                     return spec.OnResultFound != null ? spec.OnResultFound(result) : result;
                 }
 
@@ -141,7 +148,7 @@ public class OperationPoller : IOperationPoller
                     var finalCheck = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                     if (finalCheck != null)
                     {
-                        DeleteResultFileSilently(spec.ResultFilePath);
+                        DeleteResultFileSilently(spec);
                         return spec.OnResultFound != null ? spec.OnResultFound(finalCheck) : finalCheck;
                     }
 
@@ -207,7 +214,7 @@ public class OperationPoller : IOperationPoller
                             var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                             if (fileRes != null)
                             {
-                                DeleteResultFileSilently(spec.ResultFilePath);
+                                DeleteResultFileSilently(spec);
                                 return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
                             }
 
@@ -229,7 +236,7 @@ public class OperationPoller : IOperationPoller
                             var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                             if (fileRes != null)
                             {
-                                DeleteResultFileSilently(spec.ResultFilePath);
+                                DeleteResultFileSilently(spec);
                                 return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
                             }
 
@@ -252,15 +259,19 @@ public class OperationPoller : IOperationPoller
                         var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                         if (fileRes != null)
                         {
-                            DeleteResultFileSilently(spec.ResultFilePath);
+                            DeleteResultFileSilently(spec);
                             return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
                         }
+
+                        string msg = pollResp.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
+                            ? (pollResp.Length > 6 ? pollResp[6..].Trim() : "")
+                            : (pollResp.Length > 5 ? pollResp[5..].Trim() : "");
 
                         return new TResult
                         {
                             OperationId = spec.OperationId,
                             Success = false,
-                            Message = ProtocolCodec.UnescapeLine(pollResp)
+                            Message = ProtocolCodec.UnescapeLine(msg)
                         };
                     }
 
@@ -269,7 +280,7 @@ public class OperationPoller : IOperationPoller
                         var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                         if (fileRes != null)
                         {
-                            DeleteResultFileSilently(spec.ResultFilePath);
+                            DeleteResultFileSilently(spec);
                             return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
                         }
 
@@ -287,7 +298,7 @@ public class OperationPoller : IOperationPoller
                         var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
                         if (fileRes != null)
                         {
-                            DeleteResultFileSilently(spec.ResultFilePath);
+                            DeleteResultFileSilently(spec);
                             return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
                         }
 
@@ -302,7 +313,7 @@ public class OperationPoller : IOperationPoller
                         {
                             opRes.Payload = ProtocolCodec.UnescapeLine(payload);
                         }
-                        DeleteResultFileSilently(spec.ResultFilePath);
+                        DeleteResultFileSilently(spec);
                         return spec.OnResultFound != null ? spec.OnResultFound(successRes) : successRes;
                     }
                 }
@@ -350,6 +361,30 @@ public class OperationPoller : IOperationPoller
         };
 
         return PollOperationUntilTerminalAsync(spec, cancellationToken);
+    }
+
+    private static void DeleteResultFileSilently<TResult>(OperationPollingSpec<TResult> spec) where TResult : class, IOperationResult, new()
+    {
+        if (string.IsNullOrEmpty(spec.ResultFilePath)) return;
+
+        bool shouldDelete = spec.DeleteResultFileOnCompletion ?? IsOperationScopedResultFile(spec.ResultFilePath, spec.OperationId);
+        if (!shouldDelete) return;
+
+        try
+        {
+            if (File.Exists(spec.ResultFilePath))
+            {
+                File.Delete(spec.ResultFilePath);
+            }
+        }
+        catch { }
+    }
+
+    internal static bool IsOperationScopedResultFile(string filePath, string? operationId)
+    {
+        if (string.IsNullOrEmpty(filePath) || string.IsNullOrEmpty(operationId)) return false;
+        string fileName = Path.GetFileName(filePath);
+        return fileName.Contains(operationId, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void DeleteResultFileSilently(string? filePath)

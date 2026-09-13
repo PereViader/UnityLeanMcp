@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -9,29 +10,70 @@ namespace UnityLeanMcp.Mcp;
 /// <summary>
 /// A collection of strings that can be deserialized from either a single JSON string
 /// or a JSON array of strings, and implicitly converts to and from string and string[].
+/// Encapsulates items as a read-only list protecting the non-empty, non-whitespace invariant.
 /// </summary>
 [JsonConverter(typeof(SingleOrArrayJsonConverter))]
-public class SingleOrArray : List<string>, IEquatable<SingleOrArray>
+[CollectionBuilder(typeof(SingleOrArray), nameof(Create))]
+public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrArray>
 {
-    public SingleOrArray() { }
+    private readonly List<string> _items;
 
-    public SingleOrArray(string single) : base(1)
+    public static SingleOrArray Create(ReadOnlySpan<string?> items)
     {
+        var list = new List<string>(items.Length);
+        foreach (var item in items)
+        {
+            if (!string.IsNullOrWhiteSpace(item))
+            {
+                list.Add(item);
+            }
+        }
+        return new SingleOrArray(list);
+    }
+
+    public SingleOrArray()
+    {
+        _items = new List<string>();
+    }
+
+    public SingleOrArray(string? single)
+    {
+        _items = new List<string>(1);
         if (!string.IsNullOrWhiteSpace(single))
         {
-            Add(single);
+            _items.Add(single);
         }
     }
 
-    public SingleOrArray(params string[]? items)
-        : this((IEnumerable<string>?)items)
+    public SingleOrArray(params string?[]? items)
+        : this((IEnumerable<string?>?)items)
     {
     }
 
-    public SingleOrArray(IEnumerable<string>? collection)
-        : base(collection != null ? collection.Where(s => !string.IsNullOrWhiteSpace(s)) : Enumerable.Empty<string>())
+    public SingleOrArray(IEnumerable<string?>? collection)
     {
+        if (collection == null)
+        {
+            _items = new List<string>();
+        }
+        else
+        {
+            _items = collection
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s!)
+                .ToList();
+        }
     }
+
+    public int Count => _items.Count;
+
+    public string this[int index] => _items[index];
+
+    public IEnumerator<string> GetEnumerator() => _items.GetEnumerator();
+
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public string[] ToArray() => _items.ToArray();
 
     public static implicit operator SingleOrArray?(string? single) =>
         string.IsNullOrWhiteSpace(single) ? null : new SingleOrArray(single);
@@ -56,10 +98,10 @@ public class SingleOrArray : List<string>, IEquatable<SingleOrArray>
     {
         if (ReferenceEquals(this, other)) return true;
         if (other is null) return false;
-        if (Count != other.Count) return false;
-        for (int i = 0; i < Count; i++)
+        if (_items.Count != other._items.Count) return false;
+        for (int i = 0; i < _items.Count; i++)
         {
-            if (this[i] != other[i]) return false;
+            if (_items[i] != other._items[i]) return false;
         }
         return true;
     }
@@ -70,7 +112,7 @@ public class SingleOrArray : List<string>, IEquatable<SingleOrArray>
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        foreach (var item in this)
+        foreach (var item in _items)
         {
             hash.Add(item);
         }
@@ -78,7 +120,7 @@ public class SingleOrArray : List<string>, IEquatable<SingleOrArray>
     }
 
     public override string ToString() =>
-        string.Join(", ", (IEnumerable<string>)this);
+        string.Join(", ", _items);
 }
 
 /// <summary>
@@ -101,7 +143,7 @@ public class SingleOrArrayJsonConverter : JsonConverter<SingleOrArray>
 
         if (reader.TokenType == JsonTokenType.StartArray)
         {
-            var result = new SingleOrArray();
+            var items = new List<string>();
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 if (reader.TokenType == JsonTokenType.String)
@@ -109,7 +151,7 @@ public class SingleOrArrayJsonConverter : JsonConverter<SingleOrArray>
                     string? s = reader.GetString();
                     if (!string.IsNullOrWhiteSpace(s))
                     {
-                        result.Add(s);
+                        items.Add(s);
                     }
                 }
                 else if (reader.TokenType == JsonTokenType.Null)
@@ -121,7 +163,7 @@ public class SingleOrArrayJsonConverter : JsonConverter<SingleOrArray>
                     throw new JsonException($"Unexpected token type '{reader.TokenType}' inside array for {nameof(SingleOrArray)}.");
                 }
             }
-            return result;
+            return new SingleOrArray(items);
         }
 
         throw new JsonException($"Unexpected token type '{reader.TokenType}' for {nameof(SingleOrArray)}. Expected string or array of strings.");

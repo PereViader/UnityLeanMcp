@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -894,20 +895,20 @@ public class UnityClient : IUnityClient
 
             if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
             {
-                return new UnityTestRunResult { RunId = opId, Success = false, Message = initialResponse };
+                return new UnityTestRunResult { RunId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
             }
-        if (initialResponse != null && initialResponse.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
-        {
-            var res = TryReadJsonFile<UnityTestRunResult>(resultFile, r => r.RunId == opId);
-            if (res != null)
+            if (initialResponse != null && initialResponse.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
             {
-                try { File.Delete(resultFile); } catch { }
-                ReportFinalProgress(progress, res);
-                return res;
-            }
+                var res = TryReadJsonFile<UnityTestRunResult>(resultFile, r => r.RunId == opId);
+                if (res != null)
+                {
+                    try { File.Delete(resultFile); } catch { }
+                    ReportFinalProgress(progress, res);
+                    return res;
+                }
 
-            return new UnityTestRunResult { RunId = opId, Success = true, Message = initialResponse };
-        }
+                return new UnityTestRunResult { RunId = opId, Success = true, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
+            }
 
         int lastCompleted = -1;
         string? lastTestName = null;
@@ -1033,19 +1034,63 @@ public class UnityClient : IUnityClient
         return "";
     }
 
-    private void EnrichRefreshResultWithDiagnostics(UnityRefreshResult result)
+    internal void EnrichRefreshResultWithDiagnostics(UnityRefreshResult result)
     {
         string errors = ReadCompilationErrors();
+        EnrichRefreshResultWithDiagnostics(result, errors);
+    }
+
+    internal static void EnrichRefreshResultWithDiagnostics(UnityRefreshResult result, string? errors)
+    {
         if (!string.IsNullOrWhiteSpace(errors))
         {
             result.Message = errors;
+            var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(errors);
+            if (diags.Count > 0)
+            {
+                if (diags.Any(d => string.Equals(d.Severity, "error", StringComparison.OrdinalIgnoreCase)))
+                {
+                    result.Success = false;
+                }
+            }
+            else if (errors.Contains("error", StringComparison.OrdinalIgnoreCase))
+            {
+                result.Success = false;
+            }
         }
     }
 
-    private static string StripStatusPrefix(string response)
+    internal static string StripStatusPrefix(string response)
     {
+        if (response.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+        {
+            return response[6..].Trim();
+        }
+
+        if (response.StartsWith("FAILURE:", StringComparison.OrdinalIgnoreCase))
+        {
+            return response[8..].Trim();
+        }
+
+        if (response.StartsWith("SUCCESS:", StringComparison.OrdinalIgnoreCase))
+        {
+            return response[8..].Trim();
+        }
+
         int spaceIdx = response.IndexOf(' ');
-        return spaceIdx > 0 ? response[(spaceIdx + 1)..].Trim() : response;
+        if (spaceIdx > 0)
+        {
+            return response[(spaceIdx + 1)..].Trim();
+        }
+
+        if (response.Equals("ERROR", StringComparison.OrdinalIgnoreCase) ||
+            response.Equals("FAILURE", StringComparison.OrdinalIgnoreCase) ||
+            response.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return response;
     }
 
     private static T? TryReadJsonFile<T>(string filePath, Func<T, bool> predicate) where T : class =>

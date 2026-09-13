@@ -763,4 +763,196 @@ public class UnityProcessManagerTests
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }
+
+    [Fact]
+    public async Task OperationPoller_StaticResultFile_WithoutOperationId_PreservesResultFileAfterTerminalRead()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_poller_static_preserve_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        try
+        {
+            var pm = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var poller = new OperationPoller(pm, pm.PathResolver, new UnitySocketTransport(NullLogger<UnitySocketTransport>.Instance));
+
+            string opId = "refresh_op_123";
+            string resultFile = pm.PathResolver.GetResultFilePath(UnityOperationKind.Refresh);
+            var refreshResult = new UnityRefreshResult
+            {
+                OperationId = opId,
+                Success = true,
+                Message = "Refresh completed"
+            };
+            File.WriteAllText(resultFile, System.Text.Json.JsonSerializer.Serialize(refreshResult));
+            Assert.True(File.Exists(resultFile));
+
+            var spec = new OperationPollingSpec<UnityRefreshResult>
+            {
+                OperationId = opId,
+                ResultFilePath = resultFile,
+                IsMatch = r => r.OperationId == opId,
+                PollCommand = $"POLL_REFRESH {opId}",
+                PollTimeoutSeconds = 1,
+                PollIntervalMs = 50,
+                DeleteResultFileOnCompletion = null
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.True(File.Exists(resultFile), "Shared static result file should be preserved after terminal read.");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task OperationPoller_StaticResultFile_WhenDeleteExplicitlyTrue_DeletesResultFileAfterTerminalRead()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_poller_static_del_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        try
+        {
+            var pm = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var poller = new OperationPoller(pm, pm.PathResolver, new UnitySocketTransport(NullLogger<UnitySocketTransport>.Instance));
+
+            string opId = "refresh_op_456";
+            string resultFile = pm.PathResolver.GetResultFilePath(UnityOperationKind.Refresh);
+            var refreshResult = new UnityRefreshResult
+            {
+                OperationId = opId,
+                Success = true,
+                Message = "Refresh completed"
+            };
+            File.WriteAllText(resultFile, System.Text.Json.JsonSerializer.Serialize(refreshResult));
+            Assert.True(File.Exists(resultFile));
+
+            var spec = new OperationPollingSpec<UnityRefreshResult>
+            {
+                OperationId = opId,
+                ResultFilePath = resultFile,
+                IsMatch = r => r.OperationId == opId,
+                PollCommand = $"POLL_REFRESH {opId}",
+                PollTimeoutSeconds = 1,
+                PollIntervalMs = 50,
+                DeleteResultFileOnCompletion = true
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.False(File.Exists(resultFile), "Static result file should be deleted when DeleteResultFileOnCompletion is explicitly true.");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task OperationPoller_OperationScopedResultFile_WhenDeleteExplicitlyFalse_PreservesResultFileAfterTerminalRead()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_poller_scoped_keep_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        try
+        {
+            var pm = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var poller = new OperationPoller(pm, pm.PathResolver, new UnitySocketTransport(NullLogger<UnitySocketTransport>.Instance));
+
+            string opId = "eval_keep_op";
+            string resultFile = pm.PathResolver.GetResultFilePath(UnityOperationKind.Eval, opId);
+            var evalResult = new UnityEvalResult
+            {
+                OperationId = opId,
+                Success = true,
+                Payload = "result_ok"
+            };
+            File.WriteAllText(resultFile, System.Text.Json.JsonSerializer.Serialize(evalResult));
+            Assert.True(File.Exists(resultFile));
+
+            var spec = new OperationPollingSpec<UnityEvalResult>
+            {
+                OperationId = opId,
+                ResultFilePath = resultFile,
+                IsMatch = r => r.OperationId == opId,
+                PollCommand = $"POLL_EVAL {opId}",
+                PollTimeoutSeconds = 1,
+                PollIntervalMs = 50,
+                DeleteResultFileOnCompletion = false
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.True(File.Exists(resultFile), "Operation-scoped result file should NOT be deleted when DeleteResultFileOnCompletion is false.");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("Temp/unity_refresh_result.json", "refresh_123", false)]
+    [InlineData("Temp/unity_eval_op123.json", "op123", true)]
+    [InlineData("Temp/unity_test_OP456.json", "op456", true)]
+    [InlineData("Temp/unity_execute_op789.json", "OP789", true)]
+    [InlineData("Temp/unity_refresh_result.json", null, false)]
+    [InlineData(null, "op123", false)]
+    [InlineData("", "", false)]
+    public void OperationPoller_IsOperationScopedResultFile_IdentifiesScopedFilesAccurately(string? filePath, string? opId, bool expected)
+    {
+        bool actual = OperationPoller.IsOperationScopedResultFile(filePath!, opId);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void FindProjectUnityPid_WhenProcessesAllocatedByGetUnityProcesses_DisposesProcessesInFinally()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_dispose_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+
+        using var dummy = StartDummyProcess();
+        var processHandleToDispose = Process.GetProcessById(dummy.Id);
+
+        try
+        {
+            var procManager = new DisposingTestProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance, processHandleToDispose);
+
+            int? result = procManager.FindProjectUnityPid();
+            Assert.Null(result);
+
+            // The process handle allocated by GetUnityProcesses should have been disposed in finally
+            Assert.Throws<InvalidOperationException>(() => processHandleToDispose.HasExited);
+        }
+        finally
+        {
+            try { if (!dummy.HasExited) dummy.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private class DisposingTestProcessManager : UnityProcessManager
+    {
+        private readonly Process _processToReturn;
+
+        public DisposingTestProcessManager(string projectRoot, Microsoft.Extensions.Logging.ILogger<UnityProcessManager> logger, Process processToReturn)
+            : base(projectRoot, logger)
+        {
+            _processToReturn = processToReturn;
+        }
+
+        internal override Process[] GetUnityProcesses()
+        {
+            return new[] { _processToReturn };
+        }
+    }
 }
+

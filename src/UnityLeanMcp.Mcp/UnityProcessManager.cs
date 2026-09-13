@@ -220,9 +220,10 @@ public class UnityProcessManager : IUnityProcessManager
 
     internal int? FindProjectUnityPid(Process[]? candidateProcesses = null, bool allowUnprovenSingleCandidate = false)
     {
+        bool ownsProcesses = candidateProcesses == null && ProcessProvider == null;
+        var processes = candidateProcesses ?? GetUnityProcesses();
         try
         {
-            var processes = candidateProcesses ?? GetUnityProcesses();
             if (processes.Length == 0)
             {
                 return null;
@@ -262,6 +263,16 @@ public class UnityProcessManager : IUnityProcessManager
         {
             _logger.LogDebug(ex, "Failed to query system Unity processes.");
             return null;
+        }
+        finally
+        {
+            if (ownsProcesses && processes != null)
+            {
+                foreach (var p in processes)
+                {
+                    try { p.Dispose(); } catch { }
+                }
+            }
         }
     }
 
@@ -653,7 +664,7 @@ public class UnityProcessManager : IUnityProcessManager
             {
                 try
                 {
-                    var proc = Process.GetProcessById(targetPid.Value);
+                    using var proc = Process.GetProcessById(targetPid.Value);
                     proc.Kill(true);
                     proc.WaitForExit();
                 }

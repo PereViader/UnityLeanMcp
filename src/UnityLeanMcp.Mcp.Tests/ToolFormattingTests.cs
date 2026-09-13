@@ -2332,6 +2332,83 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Empty(fromEmptyItems);
     }
 
+    [Fact]
+    public void SingleOrArray_ImplementsIReadOnlyList_AndIsNotIList()
+    {
+        Assert.True(typeof(SingleOrArray).IsSealed);
+
+        var soa = new SingleOrArray("Test1", "Test2");
+
+        // Implements IReadOnlyList<string>
+        Assert.IsAssignableFrom<IReadOnlyList<string>>(soa);
+        Assert.Equal(2, soa.Count);
+        Assert.Equal("Test1", soa[0]);
+        Assert.Equal("Test2", soa[1]);
+
+        // Does NOT implement IList<string>, IList, or ICollection<string> (CA1002 / Encapsulation)
+        object boxed = soa;
+        Assert.False(boxed is IList<string>);
+        Assert.False(boxed is System.Collections.IList);
+        Assert.False(boxed is ICollection<string>);
+        Assert.False(typeof(IList<string>).IsAssignableFrom(typeof(SingleOrArray)));
+        Assert.False(typeof(System.Collections.IList).IsAssignableFrom(typeof(SingleOrArray)));
+        Assert.False(typeof(ICollection<string>).IsAssignableFrom(typeof(SingleOrArray)));
+
+        // Non-generic IEnumerable GetEnumerator works
+        System.Collections.IEnumerable nonGenericEnum = soa;
+        var nonGenericItems = new List<object?>();
+        foreach (var item in nonGenericEnum)
+        {
+            nonGenericItems.Add(item);
+        }
+        Assert.Equal(new object[] { "Test1", "Test2" }, nonGenericItems);
+    }
+
+    [Fact]
+    public void SingleOrArray_Constructors_ProtectInvariant_FilteringNullEmptyAndWhitespace()
+    {
+        // 1. Single string constructor with whitespace
+        var fromWhitespace = new SingleOrArray("   \t  \r\n  ");
+        Assert.Empty(fromWhitespace);
+
+        // 2. Single string constructor with null
+        var fromNullSingle = new SingleOrArray((string?)null);
+        Assert.Empty(fromNullSingle);
+
+        // 3. Single string constructor with valid string
+        var fromValidSingle = new SingleOrArray("  ValidTest  ");
+        Assert.Single(fromValidSingle);
+        Assert.Equal("  ValidTest  ", fromValidSingle[0]);
+
+        // 4. params string[] constructor with mixed valid, null, empty, and whitespace
+        string?[] mixedParams = ["First", null, "", "   ", "Second", "\t", "Third", " "];
+        var fromMixedParams = new SingleOrArray(mixedParams);
+        Assert.Equal(3, fromMixedParams.Count);
+        Assert.Equal("First", fromMixedParams[0]);
+        Assert.Equal("Second", fromMixedParams[1]);
+        Assert.Equal("Third", fromMixedParams[2]);
+        Assert.Equal(new[] { "First", "Second", "Third" }, fromMixedParams.ToArray());
+
+        // 5. IEnumerable<string?> constructor with mixed valid, null, empty, and whitespace
+        var mixedList = new List<string?> { "Alpha", null, "", "   ", "Beta" };
+        var fromMixedEnumerable = new SingleOrArray(mixedList);
+        Assert.Equal(2, fromMixedEnumerable.Count);
+        Assert.Equal("Alpha", fromMixedEnumerable[0]);
+        Assert.Equal("Beta", fromMixedEnumerable[1]);
+
+        // 6. C# 12 collection expression syntax protects invariant
+        SingleOrArray fromCollectionExpr = ["One", "", "   ", "Two"];
+        Assert.Equal(2, fromCollectionExpr.Count);
+        Assert.Equal("One", fromCollectionExpr[0]);
+        Assert.Equal("Two", fromCollectionExpr[1]);
+
+        // 7. Create method directly protects invariant with nulls
+        var fromCreate = SingleOrArray.Create(["One", null, "", "   ", "Two"]);
+        Assert.Equal(2, fromCreate.Count);
+        Assert.Equal("One", fromCreate[0]);
+        Assert.Equal("Two", fromCreate[1]);
+    }
+
     [Theory]
     [InlineData("HelloWorld", 3, "Hel")]
     [InlineData("HelloWorld", 2, "He")]
@@ -2342,6 +2419,132 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     {
         string? result = UnityTools.ExtractOneLineSummaryMessage(input, maxLineLength: maxLen);
         Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public async Task UnityTools_UsesInjectedPathResolver_ForRefreshEvalAndTestRuns()
+    {
+        string pmDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "pm_root_" + Guid.NewGuid().ToString("N")));
+        string customDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "custom_root_" + Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(Path.Combine(pmDir, "Temp"));
+        Directory.CreateDirectory(Path.Combine(customDir, "Temp"));
+
+        try
+        {
+            var pmPathResolver = new UnityPathResolver(pmDir);
+            var customPathResolver = new UnityPathResolver(customDir);
+            var pm = new FakeUnityProcessManager(pmPathResolver);
+            var client = new FakeUnityClient(pm, pmPathResolver);
+            var tools = new UnityTools(client, pm, pathResolver: customPathResolver);
+
+            string customRootNormalized = customPathResolver.ProjectRoot.Replace('\\', '/');
+            string pmRootNormalized = pmPathResolver.ProjectRoot.Replace('\\', '/');
+
+            // 1. UnityRefreshAsync with compilation errors uses custom path resolver
+            client.RefreshResultToReturn = new UnityRefreshResult
+            {
+                Success = false,
+                Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
+            };
+            var refreshResult = await tools.UnityRefreshAsync();
+            string refreshText = GetResultText(refreshResult);
+            Assert.Contains(customRootNormalized, refreshText);
+            Assert.DoesNotContain(pmRootNormalized, refreshText);
+
+            // 2. UnityEvalAsync with compilation error uses custom path resolver
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
+            };
+            var evalResult = await tools.UnityEvalAsync("var x = 1;");
+            string evalText = GetResultText(evalResult);
+            Assert.Contains(customRootNormalized, evalText);
+            Assert.DoesNotContain(pmRootNormalized, evalText);
+
+            // 3. UnityRunTestsAsync with CompileError uses custom path resolver
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "CompileError",
+                Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
+            };
+            var testCompileResult = await tools.UnityRunTestsAsync();
+            string testCompileText = GetResultText(testCompileResult);
+            Assert.Contains(customRootNormalized, testCompileText);
+            Assert.DoesNotContain(pmRootNormalized, testCompileText);
+
+            // 4. UnityRunTestsAsync with test failure source location uses custom path resolver
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                FailCount = 1,
+                ResultState = "Failed",
+                FailedTests =
+                [
+                    new FailedTestInfo
+                    {
+                        Name = "PlayerTest",
+                        FullName = "Tests.PlayerTest",
+                        Message = "Expected 10 but was 0",
+                        StackTrace = "at Tests.PlayerTest.Run() in Assets/Tests/PlayerTest.cs:line 42",
+                        Duration = 0.01
+                    }
+                ]
+            };
+            var testRunResult = await tools.UnityRunTestsAsync();
+            string testRunText = GetResultText(testRunResult);
+            Assert.Contains(customRootNormalized, testRunText);
+            Assert.DoesNotContain(pmRootNormalized, testRunText);
+        }
+        finally
+        {
+            try { Directory.Delete(pmDir, true); } catch { }
+            try { Directory.Delete(customDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityTools_UsesInjectedDiagnosticFormatter()
+    {
+        var (tempDir, pm, client, _) = CreateTestContext();
+        try
+        {
+            var customFormatter = new CustomMockDiagnosticFormatter();
+            var tools = new UnityTools(client, pm, diagnosticFormatter: customFormatter);
+
+            client.RefreshResultToReturn = new UnityRefreshResult
+            {
+                Success = false,
+                Message = "Assets/Scripts/Foo.cs(1,1): error CS0001: Error"
+            };
+
+            var result = await tools.UnityRefreshAsync();
+            string text = GetResultText(result);
+            Assert.Contains("CUSTOM_FORMATTED_DIAGNOSTIC", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private sealed class CustomMockDiagnosticFormatter : IDiagnosticFormatter
+    {
+        public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
+            => (null, null, null);
+        public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
+        public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText) => [];
+        public string FormatCompilerDiagnostics(
+            string? diagnosticText,
+            string? projectRoot,
+            string? successTrailer = null,
+            string? failureTrailer = null,
+            bool isSuccess = false,
+            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
+            bool isEval = false) => "CUSTOM_FORMATTED_DIAGNOSTIC";
+        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
+            => "CUSTOM_DIAGNOSTIC";
     }
 }
 
