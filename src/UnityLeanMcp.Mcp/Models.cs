@@ -89,6 +89,27 @@ public class UnityTestRunResult : IOperationResult
     public List<FailedTestInfo> FailedTests { get; set; } = new();
 }
 
+public class RunTestsArgs
+{
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = "all";
+
+    [JsonPropertyName("testNames")]
+    public string[]? TestNames { get; set; }
+
+    [JsonPropertyName("groupNames")]
+    public string[]? GroupNames { get; set; }
+
+    [JsonPropertyName("categoryNames")]
+    public string[]? CategoryNames { get; set; }
+
+    [JsonPropertyName("assemblyNames")]
+    public string[]? AssemblyNames { get; set; }
+
+    [JsonPropertyName("failedOnly")]
+    public bool FailedOnly { get; set; }
+}
+
 public class UnityTestRunState
 {
     [JsonPropertyName("runId")]
@@ -102,6 +123,18 @@ public class UnityTestRunState
 
     [JsonPropertyName("category")]
     public string Category { get; set; } = "";
+
+    [JsonPropertyName("testNames")]
+    public string[]? TestNames { get; set; }
+
+    [JsonPropertyName("groupNames")]
+    public string[]? GroupNames { get; set; }
+
+    [JsonPropertyName("categoryNames")]
+    public string[]? CategoryNames { get; set; }
+
+    [JsonPropertyName("assemblyNames")]
+    public string[]? AssemblyNames { get; set; }
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = "";

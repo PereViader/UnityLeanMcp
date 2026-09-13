@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace UnityLeanMcp
@@ -40,12 +40,27 @@ namespace UnityLeanMcp
     }
 
     [Serializable]
+    public class RunTestsArgs
+    {
+        public string mode;
+        public string[] testNames;
+        public string[] groupNames;
+        public string[] categoryNames;
+        public string[] assemblyNames;
+        public bool failedOnly;
+    }
+
+    [Serializable]
     public class UnityTestRunState
     {
         public string runId;
         public string mode;
         public string filter;
         public string category;
+        public string[] testNames;
+        public string[] groupNames;
+        public string[] categoryNames;
+        public string[] assemblyNames;
         public string status;
         public string startedUtc;
         public int totalTests;

@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,11 @@ namespace UnityLeanMcp.Mcp;
 
 public class UnityClient : IUnityClient
 {
+    private static readonly JsonSerializerOptions s_RunArgsJsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     private readonly IUnityProcessManager _processManager;
     private readonly IUnityPathResolver _pathResolver;
     private readonly ILogger<UnityClient> _logger;
@@ -745,9 +751,28 @@ public class UnityClient : IUnityClient
         CancellationToken cancellationToken = default) =>
         RunTestsAsync(filter, category, mode, false, progress, cancellationToken);
 
-    public virtual async Task<UnityTestRunResult> RunTestsAsync(
+    public virtual Task<UnityTestRunResult> RunTestsAsync(
         string? filter,
         string? category,
+        string? mode,
+        bool failedOnly = false,
+        IProgress<ProgressNotificationValue>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        RunTestsAsync(
+            testNames: null,
+            groupNames: !string.IsNullOrEmpty(filter) ? [filter] : null,
+            categoryNames: !string.IsNullOrEmpty(category) ? [category] : null,
+            assemblyNames: null,
+            mode: mode,
+            failedOnly: failedOnly,
+            progress: progress,
+            cancellationToken: cancellationToken);
+
+    public virtual async Task<UnityTestRunResult> RunTestsAsync(
+        string[]? testNames,
+        string[]? groupNames,
+        string[]? categoryNames,
+        string[]? assemblyNames,
         string? mode,
         bool failedOnly = false,
         IProgress<ProgressNotificationValue>? progress = null,
@@ -793,19 +818,19 @@ public class UnityClient : IUnityClient
 
             string opId = Guid.NewGuid().ToString("N");
             string resultFile = _pathResolver.GetTestResultsFile(opId);
-            var sb = new StringBuilder($"RUN_TESTS {opId} {testMode}");
-            if (!string.IsNullOrWhiteSpace(filter))
+
+            var runArgs = new RunTestsArgs
             {
-                sb.Append(" --filter \"").Append(ProtocolCodec.EscapeParam(filter)).Append('"');
-            }
-            if (!string.IsNullOrWhiteSpace(category))
-            {
-                sb.Append(" --category \"").Append(ProtocolCodec.EscapeParam(category)).Append('"');
-            }
-            if (failedOnly)
-            {
-                sb.Append(" --failed-only");
-            }
+                Mode = testMode,
+                TestNames = testNames != null && testNames.Length > 0 ? testNames : null,
+                GroupNames = groupNames != null && groupNames.Length > 0 ? groupNames : null,
+                CategoryNames = categoryNames != null && categoryNames.Length > 0 ? categoryNames : null,
+                AssemblyNames = assemblyNames != null && assemblyNames.Length > 0 ? assemblyNames : null,
+                FailedOnly = failedOnly
+            };
+
+            string json = JsonSerializer.Serialize(runArgs, s_RunArgsJsonOptions);
+            string command = $"RUN_TESTS {opId} {ProtocolCodec.EscapeLine(json)}";
 
             progress?.Report(new ProgressNotificationValue
             {
@@ -814,7 +839,7 @@ public class UnityClient : IUnityClient
             });
 
             _logger.LogInformation("Sending RUN_TESTS operation {OpId} (mode: {Mode})...", opId, testMode);
-            string? initialResponse = await SendCommandAsync(sb.ToString(), 10, cancellationToken);
+            string? initialResponse = await SendCommandAsync(command, 10, cancellationToken);
 
             var immediateResult = TryReadJsonFile<UnityTestRunResult>(resultFile, r => r.RunId == opId);
             if (immediateResult != null)

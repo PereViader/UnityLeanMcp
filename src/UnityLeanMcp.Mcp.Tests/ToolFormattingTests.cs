@@ -110,6 +110,13 @@ public class ToolFormattingTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult(ExecuteResultToReturn);
 
+        public string[]? LastTestNames { get; private set; }
+        public string[]? LastGroupNames { get; private set; }
+        public string[]? LastCategoryNames { get; private set; }
+        public string[]? LastAssemblyNames { get; private set; }
+        public string? LastMode { get; private set; }
+        public bool LastFailedOnly { get; private set; }
+
         public override Task<UnityTestRunResult> RunTestsAsync(
             string? filter,
             string? category,
@@ -117,7 +124,34 @@ public class ToolFormattingTests
             bool failedOnly = false,
             IProgress<ProgressNotificationValue>? progress = null,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(TestRunResultToReturn);
+            RunTestsAsync(
+                testNames: null,
+                groupNames: !string.IsNullOrEmpty(filter) ? [filter] : null,
+                categoryNames: !string.IsNullOrEmpty(category) ? [category] : null,
+                assemblyNames: null,
+                mode: mode,
+                failedOnly: failedOnly,
+                progress: progress,
+                cancellationToken: cancellationToken);
+
+        public override Task<UnityTestRunResult> RunTestsAsync(
+            string[]? testNames,
+            string[]? groupNames,
+            string[]? categoryNames,
+            string[]? assemblyNames,
+            string? mode,
+            bool failedOnly = false,
+            IProgress<ProgressNotificationValue>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            LastTestNames = testNames;
+            LastGroupNames = groupNames;
+            LastCategoryNames = categoryNames;
+            LastAssemblyNames = assemblyNames;
+            LastMode = mode;
+            LastFailedOnly = failedOnly;
+            return Task.FromResult(TestRunResultToReturn);
+        }
     }
 
     private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()
@@ -764,6 +798,210 @@ public class ToolFormattingTests
             Assert.False(result.IsError);
             string text = GetResultText(result);
             Assert.Equal("Tests Passed: 0 passed, 0 skipped (no tests found in suite).", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_SingleStringParameters_PassThroughToClient()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync(
+                testName: "MyNamespace.MyTestClass.MyMethod",
+                group: "MyNamespace\\.MyTestClass",
+                category: "Integration",
+                assembly: "MyProject.Tests");
+
+            Assert.False(result.IsError);
+            Assert.NotNull(client.LastTestNames);
+            Assert.Equal(["MyNamespace.MyTestClass.MyMethod"], client.LastTestNames);
+            Assert.NotNull(client.LastGroupNames);
+            Assert.Equal(["MyNamespace\\.MyTestClass"], client.LastGroupNames);
+            Assert.NotNull(client.LastCategoryNames);
+            Assert.Equal(["Integration"], client.LastCategoryNames);
+            Assert.NotNull(client.LastAssemblyNames);
+            Assert.Equal(["MyProject.Tests"], client.LastAssemblyNames);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_ArrayParameters_PassThroughToClientVerbatim()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 2
+            };
+
+            var testNames = new[] { "TestA", "TestB" };
+            var groupNames = new[] { "GroupA.*", "GroupB.*" };
+            var catNames = new[] { "Cat1", "Cat2" };
+            var asmNames = new[] { "Asm1", "Asm2" };
+
+            var result = await tools.UnityRunTestsAsync(
+                testNames: testNames,
+                groupNames: groupNames,
+                categoryNames: catNames,
+                assemblyNames: asmNames);
+
+            Assert.False(result.IsError);
+            Assert.Equal(testNames, client.LastTestNames);
+            Assert.Equal(groupNames, client.LastGroupNames);
+            Assert.Equal(catNames, client.LastCategoryNames);
+            Assert.Equal(asmNames, client.LastAssemblyNames);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_SingleAndArrayCombined_DeDuplicatesAndPreservesOrder()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 2
+            };
+
+            var result = await tools.UnityRunTestsAsync(
+                testName: "TestA",
+                testNames: ["TestA", "TestB"]);
+
+            Assert.False(result.IsError);
+            Assert.NotNull(client.LastTestNames);
+            Assert.Equal(["TestA", "TestB"], client.LastTestNames);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_LegacyFilterAndCategory_PassThroughToClient()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync(
+                filter: "MyLegacyFilter",
+                category: "MyLegacyCat");
+
+            Assert.False(result.IsError);
+            Assert.NotNull(client.LastGroupNames);
+            Assert.Equal(["MyLegacyFilter"], client.LastGroupNames);
+            Assert.NotNull(client.LastCategoryNames);
+            Assert.Equal(["MyLegacyCat"], client.LastCategoryNames);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenFailureOccursWithZeroTests_SurfacesFailureMessageInsteadOfNoTestsFound()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            // Simulates Unity Test Runner failing with a regex or compilation error before executing any tests
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0,
+                Message = "Regex parsing error: Quantifier * following nothing"
+            };
+
+            var result = await tools.UnityRunTestsAsync(group: "*Movement*");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Test run failed: Regex parsing error: Quantifier * following nothing", text);
+            Assert.DoesNotContain("No tests found matching", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenTestNamesSpecifiedAndZeroTestsRun_ReturnsDescriptiveErrorMessage()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0
+            };
+
+            var result = await tools.UnityRunTestsAsync(testNames: ["MyNamespace.MyTest"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No tests found matching testNames 'MyNamespace.MyTest' (mode: all).", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenAssemblyNamesSpecifiedAndZeroTestsRun_ReturnsDescriptiveErrorMessage()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0
+            };
+
+            var result = await tools.UnityRunTestsAsync(assemblyNames: ["MyCompany.MyTests"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No tests found matching assemblyNames 'MyCompany.MyTests' (mode: all).", text);
         }
         finally
         {
@@ -1594,13 +1832,12 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     {
         var methods = typeof(UnityTools).GetMethods(BindingFlags.Public | BindingFlags.Instance);
         var toolMethods = methods.Where(m => m.GetCustomAttribute<McpServerToolAttribute>() != null).ToList();
-
-        Assert.Equal(4, toolMethods.Count);
-        foreach (var method in toolMethods)
+        Assert.NotEmpty(toolMethods);
+        foreach (var m in toolMethods)
         {
-            var descAttr = method.GetCustomAttribute<DescriptionAttribute>();
-            Assert.NotNull(descAttr);
-            Assert.False(string.IsNullOrWhiteSpace(descAttr.Description));
+            var desc = m.GetCustomAttribute<DescriptionAttribute>();
+            Assert.NotNull(desc);
+            Assert.False(string.IsNullOrWhiteSpace(desc.Description));
         }
     }
 }

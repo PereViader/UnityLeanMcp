@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -198,20 +199,56 @@ public class UnityTools
     [McpServerTool(Name = "unity_run_tests")]
     [Description("Runs EditMode/PlayMode tests with failure diagnostics.")]
     public async Task<CallToolResult> UnityRunTestsAsync(
-        [Description("Test filter string (wildcards and class/method names supported).")] string? filter = null,
-        [Description("Test category filter.")] string? category = null,
-        [Description("Test execution mode: 'all' (default), 'editmode', or 'playmode'.")] string? mode = "all",
-        [Description("Only run tests that previously failed.")] bool failedOnly = false,
+        [Description("Exact fully qualified test names in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format. Matches exact names only.")]
+        string[]? testNames = null,
+
+        [Description("Single exact fully qualified test name in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format.")]
+        string? testName = null,
+
+        [Description(".NET Regular Expression pattern(s) to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex.")]
+        string[]? groupNames = null,
+
+        [Description("Single .NET Regular Expression pattern to match test names, fixtures, or namespaces (e.g. '.*Movement.*'). Evaluated as .NET Regex.")]
+        string? group = null,
+
+        [Description("Test category filter(s) to include or exclude (prefix with '!' to exclude, e.g. '!Integration').")]
+        string[]? categoryNames = null,
+
+        [Description("Single test category filter to include or exclude (prefix with '!' to exclude, e.g. '!Integration').")]
+        string? category = null,
+
+        [Description("Test assembly name(s) without .dll extension to run.")]
+        string[]? assemblyNames = null,
+
+        [Description("Single test assembly name without .dll extension to run.")]
+        string? assembly = null,
+
+        [Description("Test execution mode: 'all' (default), 'editmode', or 'playmode'.")]
+        string? mode = "all",
+
+        [Description("Only run tests that previously failed.")]
+        bool failedOnly = false,
+
+        [Description("Legacy filter alias for group (evaluated as a .NET Regular Expression, e.g. '.*Movement.*').")]
+        string? filter = null,
+
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        testNames = Combine(testName, testNames);
+        groupNames = Combine(group ?? filter, groupNames);
+        categoryNames = Combine(category, categoryNames);
+        assemblyNames = Combine(assembly, assemblyNames);
+
         mode = string.IsNullOrWhiteSpace(mode) ? "all" : mode;
-        var result = await _client.RunTestsAsync(filter, category, mode, failedOnly, progress, cancellationToken);
+        var result = await _client.RunTestsAsync(testNames, groupNames, categoryNames, assemblyNames, mode, failedOnly, progress, cancellationToken);
         var sb = new StringBuilder();
 
-        bool hasFilter = !string.IsNullOrWhiteSpace(filter);
-        bool hasCategory = !string.IsNullOrWhiteSpace(category);
-        bool hasFilterOrCategory = hasFilter || hasCategory;
+        bool hasFilter = !string.IsNullOrWhiteSpace(filter) || (groupNames != null && groupNames.Length > 0);
+        bool hasCategory = !string.IsNullOrWhiteSpace(category) || (categoryNames != null && categoryNames.Length > 0);
+        bool hasTestNames = testNames != null && testNames.Length > 0;
+        bool hasAssemblyNames = assemblyNames != null && assemblyNames.Length > 0;
+        bool hasAnyFilter = hasFilter || hasCategory || hasTestNames || hasAssemblyNames;
         int totalTests = result.PassCount + result.FailCount + result.SkipCount;
 
         bool success = result.Success && result.FailCount == 0;
@@ -229,20 +266,40 @@ public class UnityTools
         {
             sb.AppendLine($"Test run interrupted: {result.Message}");
         }
-        else if (hasFilterOrCategory && totalTests == 0)
+        else if (!result.Success && !string.IsNullOrWhiteSpace(result.Message))
         {
             success = false;
-            if (hasFilter && hasCategory)
+            sb.AppendLine($"Test run failed: {result.Message}");
+        }
+        else if (hasAnyFilter && totalTests == 0)
+        {
+            success = false;
+            string filterDesc = !string.IsNullOrWhiteSpace(filter) ? filter : (groupNames != null ? string.Join(", ", groupNames) : "");
+            string categoryDesc = !string.IsNullOrWhiteSpace(category) ? category : (categoryNames != null ? string.Join(", ", categoryNames) : "");
+
+            if (!string.IsNullOrWhiteSpace(filterDesc) && !string.IsNullOrWhiteSpace(categoryDesc))
             {
-                sb.AppendLine($"No tests found matching filter '{filter}' and category '{category}' (mode: {mode}).");
+                sb.AppendLine($"No tests found matching filter '{filterDesc}' and category '{categoryDesc}' (mode: {mode}).");
             }
-            else if (hasFilter)
+            else if (!string.IsNullOrWhiteSpace(filterDesc))
             {
-                sb.AppendLine($"No tests found matching filter '{filter}' (mode: {mode}).");
+                sb.AppendLine($"No tests found matching filter '{filterDesc}' (mode: {mode}).");
+            }
+            else if (!string.IsNullOrWhiteSpace(categoryDesc))
+            {
+                sb.AppendLine($"No tests found matching category '{categoryDesc}' (mode: {mode}).");
+            }
+            else if (hasTestNames)
+            {
+                sb.AppendLine($"No tests found matching testNames '{string.Join(", ", testNames!)}' (mode: {mode}).");
+            }
+            else if (hasAssemblyNames)
+            {
+                sb.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblyNames!)}' (mode: {mode}).");
             }
             else
             {
-                sb.AppendLine($"No tests found matching category '{category}' (mode: {mode}).");
+                sb.AppendLine($"No tests found matching the specified test filter(s) (mode: {mode}).");
             }
         }
         else if (result.Success)
@@ -411,5 +468,25 @@ public class UnityTools
             }
         }
         return code;
+    }
+
+    internal static string[]? Combine(string? single, string[]? array)
+    {
+        if (array != null && array.Length > 0)
+        {
+            if (!string.IsNullOrWhiteSpace(single) && !array.Contains(single))
+            {
+                var list = new List<string>(array) { single };
+                return list.ToArray();
+            }
+            return array;
+        }
+
+        if (!string.IsNullOrWhiteSpace(single))
+        {
+            return [single];
+        }
+
+        return null;
     }
 }

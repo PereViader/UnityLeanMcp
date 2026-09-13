@@ -177,3 +177,20 @@ This document records observed Unity Editor and Test Framework behavior, togethe
 - **Configurable busy grace periods in testing**: Hardcoded operation grace periods (e.g. 3 seconds waiting for foreign operations to settle) force mock-socket unit tests to idle needlessly. Exposing `BusyGracePeriod` on `UnityClient` allows unit and subsystem tests to inject sub-100ms grace periods, verifying fail-fast diagnostics and retry policies deterministically in milliseconds without sacrificing production default safety.
 - **Three-tier test categorization via xUnit traits**: Partitioning tests into `Category=Unit` (pure C# logic, codecs, formatters, path resolution), `Category=Subsystem` (mock loopback TCP servers verifying protocols, tiered autowaiting, and cancellations without Unity), and `Category=UnityIntegration` (live Unity Editor smoke tests) enables an instant sub-3-second local developer feedback loop (`dotnet test --filter "Category!=UnityIntegration"`) while preserving complete end-to-end safety in CI.
 
+## Unity Test Framework filter mechanics and error reporting (Issue #91)
+
+- **`Filter` parameter semantics in Unity Test Framework**:
+  - `Filter.groupNames` strictly evaluates inputs as .NET Regular Expressions (`FullNameFilter { IsRegex = true }`).
+  - Passing glob patterns (e.g. `*Movement*`) directly into `groupNames` causes a .NET regex compilation exception (`Quantifier * following nothing`) in the Editor before any test execution starts.
+  - `Filter.testNames` performs exact string matching against full test names (`Namespace.Class.MethodName`), evaluated via string equality (`FullNameFilter { IsRegex = false }`). Test names cannot be regex patterns or method-only substrings.
+  - `Filter.assemblyNames` filters test fixtures by target assembly name (e.g. `MyProject.Tests`).
+  - `Filter.categoryNames` filters tests decorated with NUnit's `[Category("...")]` attribute.
+  - Subcommand frontends and MCP tools must pass filter parameters verbatim without lossy heuristic translations (such as silently translating `*` to `.*`), allowing users and AI agents to leverage Unity's native regex semantics deterministically.
+- **Support both single strings and arrays across all filter parameters**:
+  - AI agents and tool callers frequently pass either a single string (e.g. `testName: "MyTest"`, `group: "MyRegex"`) or an array of strings (`testNames: ["Test1", "Test2"]`, `groupNames: ["Regex1", "Regex2"]`).
+  - Providing dual-accepting parameter signatures (`testName` / `testNames`, `group` / `groupNames`, `category` / `categoryNames`, `assembly` / `assemblyNames`, plus legacy `filter`) combined into clean arrays ensures robust ergonomics for agents without brittle type coercion failures.
+- **Error masking trap when test runs fail before execution**:
+  - When Unity Test Framework aborts early due to invalid regex syntax in `groupNames`, assembly compilation errors, or test runner exceptions, `totalTests` is 0 and `Success` is `false` with a diagnostic message.
+  - If client-side result formatting checks `hasAnyFilter && totalTests == 0` prior to checking `!result.Success && !string.IsNullOrWhiteSpace(result.Message)`, it falsely reports `"No tests found matching filter..."`. This completely masks the true underlying exception from the developer or AI agent, misleading them into believing their test names were wrong rather than detecting a broken regex or runner failure.
+  - Formatting and reporting logic must always prioritize surfacing `!result.Success` errors over zero-count filter messages.
+

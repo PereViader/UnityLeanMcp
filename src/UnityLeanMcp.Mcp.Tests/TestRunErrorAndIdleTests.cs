@@ -471,5 +471,91 @@ public class TestRunErrorAndIdleTests
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_SendsStructuredJsonCommandOverSocket()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        string? receivedCommand = null;
+        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        {
+            if (cmd.StartsWith("RUN_TESTS"))
+            {
+                receivedCommand = cmd;
+                return "ERROR: Intended mock stop";
+            }
+            return null;
+        }, cts.Token);
+
+        try
+        {
+            var result = await client.RunTestsAsync(
+                testNames: ["TestA", "TestB"],
+                groupNames: ["Grp1.*"],
+                categoryNames: ["Fast"],
+                assemblyNames: ["MyAsm"],
+                mode: "editmode",
+                failedOnly: false,
+                progress: null,
+                cancellationToken: cts.Token);
+
+            Assert.NotNull(receivedCommand);
+            Assert.StartsWith("RUN_TESTS ", receivedCommand);
+            string[] parts = receivedCommand.Split(' ', 3);
+            Assert.Equal(3, parts.Length);
+            string json = ProtocolCodec.UnescapeLine(parts[2]);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            Assert.Equal("editmode", root.GetProperty("mode").GetString());
+            Assert.Equal(2, root.GetProperty("testNames").GetArrayLength());
+            Assert.Equal("TestA", root.GetProperty("testNames")[0].GetString());
+            Assert.Equal("Grp1.*", root.GetProperty("groupNames")[0].GetString());
+            Assert.Equal("Fast", root.GetProperty("categoryNames")[0].GetString());
+            Assert.Equal("MyAsm", root.GetProperty("assemblyNames")[0].GetString());
+            Assert.False(root.GetProperty("failedOnly").GetBoolean());
+        }
+        finally
+        {
+            listener.Stop();
+            cts.Cancel();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_LegacyOverload_SerializesFilterAsGroupNames()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        string? receivedCommand = null;
+        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        {
+            if (cmd.StartsWith("RUN_TESTS"))
+            {
+                receivedCommand = cmd;
+                return "ERROR: Intended mock stop";
+            }
+            return null;
+        }, cts.Token);
+
+        try
+        {
+            var result = await client.RunTestsAsync("LegacyFilter", "LegacyCategory", "playmode", false, null, cts.Token);
+
+            Assert.NotNull(receivedCommand);
+            string[] parts = receivedCommand.Split(' ', 3);
+            string json = ProtocolCodec.UnescapeLine(parts[2]);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            Assert.Equal("playmode", root.GetProperty("mode").GetString());
+            Assert.False(root.TryGetProperty("testNames", out _));
+            Assert.Equal("LegacyFilter", root.GetProperty("groupNames")[0].GetString());
+            Assert.Equal("LegacyCategory", root.GetProperty("categoryNames")[0].GetString());
+        }
+        finally
+        {
+            listener.Stop();
+            cts.Cancel();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
 #pragma warning restore CS0618
 }

@@ -122,46 +122,82 @@ namespace UnityLeanMcp
                 return;
             }
 
-            string[] args = CommandHelper.SplitArguments(payload);
-            if (args.Length < 2)
+            string trimmedPayload = (payload ?? "").Trim();
+            string[] requestParts = trimmedPayload.Split(new[] { ' ' }, 2);
+            if (requestParts.Length < 2 || string.IsNullOrWhiteSpace(requestParts[0]))
             {
-                writer.WriteLine("ERROR: Missing operation id or test mode (all/playmode/editmode)");
+                writer.WriteLine("ERROR: Missing operation id or test parameters");
                 return;
             }
 
-            string operationId = args[0];
-            TestMode mode = args[1].ToLowerInvariant() switch
+            string operationId = requestParts[0];
+            string remainder = requestParts[1].Trim();
+
+            RunTestsArgs testArgs;
+            TestMode mode;
+
+            if (remainder.StartsWith("{"))
             {
-                "playmode" => TestMode.PlayMode,
-                "editmode" => TestMode.EditMode,
-                "all" => TestMode.EditMode | TestMode.PlayMode,
-                _ => (TestMode)(-1)
-            };
+                string unescapedJson = ProtocolCodec.UnescapeLine(remainder);
+                testArgs = JsonUtility.FromJson<RunTestsArgs>(unescapedJson) ?? new RunTestsArgs();
+                mode = (testArgs.mode ?? "all").ToLowerInvariant() switch
+                {
+                    "playmode" => TestMode.PlayMode,
+                    "editmode" => TestMode.EditMode,
+                    "all" => TestMode.EditMode | TestMode.PlayMode,
+                    _ => (TestMode)(-1)
+                };
+            }
+            else
+            {
+                string[] args = CommandHelper.SplitArguments(payload);
+                if (args.Length < 2)
+                {
+                    writer.WriteLine("ERROR: Missing operation id or test mode (all/playmode/editmode)");
+                    return;
+                }
+
+                mode = args[1].ToLowerInvariant() switch
+                {
+                    "playmode" => TestMode.PlayMode,
+                    "editmode" => TestMode.EditMode,
+                    "all" => TestMode.EditMode | TestMode.PlayMode,
+                    _ => (TestMode)(-1)
+                };
+
+                string filter = "";
+                string category = "";
+                bool failedOnly = false;
+
+                for (int i = 2; i < args.Length; i++)
+                {
+                    if (args[i] == "--filter" && i + 1 < args.Length)
+                    {
+                        filter = args[++i];
+                    }
+                    else if (args[i] == "--category" && i + 1 < args.Length)
+                    {
+                        category = args[++i];
+                    }
+                    else if (args[i] == "--failed-only")
+                    {
+                        failedOnly = true;
+                    }
+                }
+
+                testArgs = new RunTestsArgs
+                {
+                    mode = args[1],
+                    groupNames = !string.IsNullOrEmpty(filter) ? new[] { filter } : null,
+                    categoryNames = !string.IsNullOrEmpty(category) ? new[] { category } : null,
+                    failedOnly = failedOnly
+                };
+            }
 
             if ((int)mode == -1)
             {
                 writer.WriteLine("ERROR: Invalid test mode. Must be all, playmode, or editmode");
                 return;
-            }
-
-            string filter = "";
-            string category = "";
-            bool failedOnly = false;
-
-            for (int i = 2; i < args.Length; i++)
-            {
-                if (args[i] == "--filter" && i + 1 < args.Length)
-                {
-                    filter = args[++i];
-                }
-                else if (args[i] == "--category" && i + 1 < args.Length)
-                {
-                    category = args[++i];
-                }
-                else if (args[i] == "--failed-only")
-                {
-                    failedOnly = true;
-                }
             }
 
             var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKinds.Test, OperationStatus.Queued, out var existing);
@@ -186,7 +222,7 @@ namespace UnityLeanMcp
             try
             {
                 List<string> failedTests = null;
-                if (failedOnly)
+                if (testArgs.failedOnly)
                 {
                     failedTests = GetPreviouslyFailedTestNames();
                     if (failedTests.Count == 0)
@@ -213,7 +249,7 @@ namespace UnityLeanMcp
                 // Persist the complete run identity before acknowledging the command.
                 // The client can therefore recover if this socket is closed by a reload
                 // immediately after the command is dispatched.
-                string runId = WriteTestRunningState(operationId, mode, filter, category);
+                string runId = WriteTestRunningState(operationId, mode, testArgs);
                 if (string.IsNullOrEmpty(runId))
                 {
                     writer.WriteLine("ERROR: Could not persist test run state.");
@@ -225,7 +261,7 @@ namespace UnityLeanMcp
                 writer.WriteLine("RUNNING");
                 writer.Flush();
 
-                RunTests(mode, filter, category, runId, failedTests?.ToArray());
+                RunTests(mode, testArgs, runId, failedTests?.ToArray());
             }
             catch (Exception ex)
             {
@@ -274,7 +310,7 @@ namespace UnityLeanMcp
             return failedNames;
         }
 
-        private static string WriteTestRunningState(string runId, TestMode mode, string filter, string category)
+        private static string WriteTestRunningState(string runId, TestMode mode, RunTestsArgs args)
         {
             if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
             {
@@ -288,12 +324,19 @@ namespace UnityLeanMcp
                     Directory.CreateDirectory(TempDirectory);
                 }
 
+                string filterSummary = args.groupNames != null && args.groupNames.Length > 0 ? string.Join(", ", args.groupNames) : "";
+                string categorySummary = args.categoryNames != null && args.categoryNames.Length > 0 ? string.Join(", ", args.categoryNames) : "";
+
                 var state = new UnityTestRunState
                 {
                     runId = runId,
                     mode = mode.ToString(),
-                    filter = filter ?? "",
-                    category = category ?? "",
+                    filter = filterSummary,
+                    category = categorySummary,
+                    testNames = args.testNames,
+                    groupNames = args.groupNames,
+                    categoryNames = args.categoryNames,
+                    assemblyNames = args.assemblyNames,
                     status = OperationStatus.Queued,
                     startedUtc = DateTime.UtcNow.ToString("o"),
                     totalTests = 0,
@@ -321,7 +364,7 @@ namespace UnityLeanMcp
             }
         }
 
-        private static void RunTests(TestMode mode, string filterText, string categoryText, string runId, string[] testNames = null)
+        private static void RunTests(TestMode mode, RunTestsArgs args, string runId, string[] explicitTestNames = null)
         {
             try
             {
@@ -330,12 +373,17 @@ namespace UnityLeanMcp
                     RegisterCallbacks();
                 }
 
+                string[] effectiveTestNames = explicitTestNames != null && explicitTestNames.Length > 0
+                    ? explicitTestNames
+                    : (args.testNames != null && args.testNames.Length > 0 ? args.testNames : null);
+
                 var filter = new Filter
                 {
                     testMode = mode,
-                    testNames = testNames != null && testNames.Length > 0 ? testNames : null,
-                    groupNames = !string.IsNullOrEmpty(filterText) ? new[] { filterText } : null,
-                    categoryNames = !string.IsNullOrEmpty(categoryText) ? new[] { categoryText } : null
+                    testNames = effectiveTestNames,
+                    groupNames = args.groupNames != null && args.groupNames.Length > 0 ? args.groupNames : null,
+                    categoryNames = args.categoryNames != null && args.categoryNames.Length > 0 ? args.categoryNames : null,
+                    assemblyNames = args.assemblyNames != null && args.assemblyNames.Length > 0 ? args.assemblyNames : null
                 };
 
                 UpdateTestRunStatus(runId, OperationStatus.Running);
@@ -343,7 +391,7 @@ namespace UnityLeanMcp
                 s_Callbacks.BindRun(runId);
 
                 var settings = new ExecutionSettings(filter);
-                Debug.Log($"UnityLeanMcp: Executing {mode} tests with filter '{filterText}', category '{categoryText}', testNames count '{(testNames?.Length ?? 0)}'...");
+                Debug.Log($"UnityLeanMcp: Executing {mode} tests with testNames count '{(filter.testNames?.Length ?? 0)}', groupNames count '{(filter.groupNames?.Length ?? 0)}', categoryNames count '{(filter.categoryNames?.Length ?? 0)}', assemblyNames count '{(filter.assemblyNames?.Length ?? 0)}'...");
                 s_CurrentTestJobGuid = s_RunnerApi.Execute(settings);
             }
             catch (Exception ex)
