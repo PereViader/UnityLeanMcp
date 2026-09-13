@@ -1169,6 +1169,57 @@ public class ToolFormattingTests
     }
 
     [Fact]
+    public async Task UnityRunTests_WhenStackTraceContainsRunnerPlumbing_SanitizesPlumbingFromOutput()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            var failed = new List<FailedTestInfo>
+            {
+                new FailedTestInfo
+                {
+                    Name = "Test_AssertFailure",
+                    FullName = "MySuite.Test_AssertFailure",
+                    Duration = 0.25,
+                    Message = "Expected 10 but got 5",
+                    StackTrace = string.Join(Environment.NewLine, new[]
+                    {
+                        "  at MySuite.Test_AssertFailure () [0x00010] in Assets/Tests/Editor/DummyTest.cs:42",
+                        "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
+                        "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj, System.Reflection.BindingFlags invokeAttr, System.Reflection.Binder binder, System.Object[] parameters, System.Globalization.CultureInfo culture) [0x0006a] in <...>:0",
+                        "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0",
+                        "  at UnityEditor.TestTools.TestRunner.EditorEnumeratorTestWorkItem.Execute () [0x0003b] in <...>:0"
+                    })
+                }
+            };
+
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "Failed",
+                PassCount = 1,
+                FailCount = 1,
+                SkipCount = 0,
+                Duration = 0.5,
+                FailedTests = failed
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string humanText = GetResultText(result);
+            Assert.Contains("MySuite.Test_AssertFailure ()", humanText);
+            Assert.DoesNotContain("System.Reflection", humanText);
+            Assert.DoesNotContain("TestMethodCommand", humanText);
+            Assert.DoesNotContain("EditorEnumeratorTestWorkItem", humanText);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task UnityRefresh_ReturnsStructuredDiagnostics()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
@@ -1352,6 +1403,8 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             ExtractSourceLocationCalled = true;
             return ("CustomFile.cs", 1, "file:///CustomFile.cs#L1");
         }
+
+        public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
 
         public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
         {

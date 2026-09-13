@@ -338,13 +338,14 @@ public class UnityTools
         {
             var fail = result.FailedTests[i];
             var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.ProjectRoot);
+            string sanitizedStackTrace = _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace);
             structuredFailures.Add(new StructuredTestFailure
             {
                 Name = fail.Name,
                 FullName = fail.FullName,
                 Duration = fail.Duration,
                 Message = fail.Message,
-                StackTrace = fail.StackTrace,
+                StackTrace = sanitizedStackTrace,
                 FilePath = filePath,
                 LineNumber = lineNumber,
                 FileUri = fileUri

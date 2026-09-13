@@ -156,4 +156,134 @@ public class DecomposedComponentsTests
 
         try { Directory.Delete(tempDir, true); } catch { }
     }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_SyncTestWithReflectionPlumbing_PreservesUserCodeAndStripsPlumbing()
+    {
+        var formatter = new DiagnosticFormatter();
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            "  at MyProject.Engine.Compute () [0x00010] in C:\\Engine.cs:10",
+            "  at MyProject.Tests.PlayerTests.MoveTest () [0x00025] in C:\\PlayerTests.cs:42",
+            "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
+            "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj, System.Reflection.BindingFlags invokeAttr, System.Reflection.Binder binder, System.Object[] parameters, System.Globalization.CultureInfo culture) [0x0006a] in <...>:0",
+            "  at System.Reflection.MethodBase.Invoke (System.Object obj, System.Object[] parameters) [0x00000] in <...>:0",
+            "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0",
+            "  at UnityEditor.TestTools.TestRunner.EditorEnumeratorTestWorkItem.Execute () [0x0003b] in <...>:0",
+            "  at UnityEditor.TestTools.TestRunner.TestWorkItem.PerformWork () [0x00000] in <...>:0"
+        });
+
+        string sanitized = formatter.SanitizeTestStackTrace(rawTrace);
+
+        Assert.Contains("MyProject.Engine.Compute", sanitized);
+        Assert.Contains("MyProject.Tests.PlayerTests.MoveTest", sanitized);
+        Assert.DoesNotContain("System.Reflection", sanitized);
+        Assert.DoesNotContain("TestMethodCommand", sanitized);
+        Assert.DoesNotContain("EditorEnumeratorTestWorkItem", sanitized);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_UserCodeUsesReflection_DoesNotCreateFalsePositive()
+    {
+        var formatter = new DiagnosticFormatter();
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            "  at System.Reflection.MethodBase.Invoke (System.Object obj, System.Object[] parameters) [0x00000] in <...>:0",
+            "  at MyProject.ReflectionHelper.Call (System.String name) [0x00005] in C:\\ReflectionHelper.cs:15",
+            "  at MyProject.Tests.PlayerTests.MoveTest () [0x00025] in C:\\PlayerTests.cs:42",
+            "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
+            "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj, System.Reflection.BindingFlags invokeAttr, System.Reflection.Binder binder, System.Object[] parameters, System.Globalization.CultureInfo culture) [0x0006a] in <...>:0",
+            "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0"
+        });
+
+        string sanitized = formatter.SanitizeTestStackTrace(rawTrace);
+
+        // User reflection and user code must be preserved in full
+        Assert.Contains("System.Reflection.MethodBase.Invoke", sanitized);
+        Assert.Contains("MyProject.ReflectionHelper.Call", sanitized);
+        Assert.Contains("MyProject.Tests.PlayerTests.MoveTest", sanitized);
+
+        // Framework runner reflection and commands must be stripped
+        Assert.DoesNotContain("InternalInvoke", sanitized);
+        Assert.DoesNotContain("TestMethodCommand", sanitized);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_CoroutineTest_StripsRunnerPlumbing()
+    {
+        var formatter = new DiagnosticFormatter();
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            "  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual) [0x00000] in <...>:0",
+            "  at MyProject.Player.Move (UnityEngine.Vector3 dir) [0x00010] in C:\\Player.cs:25",
+            "  at MyProject.Tests.PlayerTests+<MoveOverTime>d__1.MoveNext () [0x00030] in C:\\PlayerTests.cs:51",
+            "  at UnityEngine.TestTools.EnumerableTestMethodCommand.AdvanceEnumerator (System.Collections.IEnumerator enumerator) [0x00010] in <...>:0",
+            "  at UnityEditor.TestTools.TestRunner.EditorEnumeratorTestWorkItem.Execute () [0x0003b] in <...>:0"
+        });
+
+        string sanitized = formatter.SanitizeTestStackTrace(rawTrace);
+
+        Assert.Contains("UnityEngine.Assertions.Assert.AreEqual", sanitized);
+        Assert.Contains("MyProject.Player.Move", sanitized);
+        Assert.Contains("MyProject.Tests.PlayerTests+<MoveOverTime>d__1.MoveNext", sanitized);
+        Assert.DoesNotContain("EnumerableTestMethodCommand", sanitized);
+        Assert.DoesNotContain("EditorEnumeratorTestWorkItem", sanitized);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_AsyncTaskTest_StripsRunnerPlumbing()
+    {
+        var formatter = new DiagnosticFormatter();
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            "  at MyProject.Service.CallAsync () [0x00010] in C:\\Service.cs:30",
+            "  at MyProject.Tests.ServiceTests+<MyAsyncTest>d__0.MoveNext () [0x00020] in C:\\ServiceTests.cs:40",
+            "  at UnityEngine.TestTools.TaskTestMethodCommand.ExecuteEnumerable (NUnit.Framework.Internal.ITestExecutionContext context) [0x00015] in <...>:0",
+            "  at UnityEditor.TestTools.TestRunner.EditorEnumeratorTestWorkItem.Execute () [0x0003b] in <...>:0"
+        });
+
+        string sanitized = formatter.SanitizeTestStackTrace(rawTrace);
+
+        Assert.Contains("MyProject.Service.CallAsync", sanitized);
+        Assert.Contains("MyProject.Tests.ServiceTests+<MyAsyncTest>d__0.MoveNext", sanitized);
+        Assert.DoesNotContain("TaskTestMethodCommand", sanitized);
+        Assert.DoesNotContain("EditorEnumeratorTestWorkItem", sanitized);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_DirectAssertFailureInTestMethod_KeepsOnlyTestMethod()
+    {
+        var formatter = new DiagnosticFormatter();
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            "  at MyProject.Tests.PlayerTests.DirectFailTest () [0x00001] in C:\\PlayerTests.cs:20",
+            "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
+            "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0"
+        });
+
+        string sanitized = formatter.SanitizeTestStackTrace(rawTrace);
+
+        Assert.Equal("  at MyProject.Tests.PlayerTests.DirectFailTest () [0x00001] in C:\\PlayerTests.cs:20", sanitized);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_NoFrameworkMarker_ReturnsOriginalStackTrace()
+    {
+        var formatter = new DiagnosticFormatter();
+        string customTrace = "  at SomeCustomTool.Run ()\r\n  at SomeOtherTool.Start ()";
+
+        string sanitized = formatter.SanitizeTestStackTrace(customTrace);
+
+        Assert.Equal(customTrace, sanitized);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_SanitizeTestStackTrace_NullOrEmpty_ReturnsEmpty()
+    {
+        var formatter = new DiagnosticFormatter();
+
+        Assert.Equal(string.Empty, formatter.SanitizeTestStackTrace(null));
+        Assert.Equal(string.Empty, formatter.SanitizeTestStackTrace(""));
+        Assert.Equal(string.Empty, formatter.SanitizeTestStackTrace("   \r\n  "));
+    }
 }

@@ -194,3 +194,25 @@ This document records observed Unity Editor and Test Framework behavior, togethe
   - If client-side result formatting checks `hasAnyFilter && totalTests == 0` prior to checking `!result.Success && !string.IsNullOrWhiteSpace(result.Message)`, it falsely reports `"No tests found matching filter..."`. This completely masks the true underlying exception from the developer or AI agent, misleading them into believing their test names were wrong rather than detecting a broken regex or runner failure.
   - Formatting and reporting logic must always prioritize surfacing `!result.Success` errors over zero-count filter messages.
 
+## Test failure stack trace token optimization and runner plumbing stripping (Issue #93)
+
+- **Eliminating internal NUnit runner plumbing from test failure traces**:
+  - Unity Test Framework runs tests through a deep NUnit runner pipeline (`TestMethodCommand`, `UnityTestMethodCommand`, `EnumerableTestMethodCommand`, `TaskTestMethodCommand`, `UnityEditor.TestTools.TestRunner.*`, `UnityEngine.TestRunner.*`, `NUnit.Framework.Internal.*`).
+  - When a test assertion fails or throws an unhandled exception, Unity captures 20–50 lines of framework runner and reflection frames beneath the actual test entry point.
+  - In MCP tool responses (`unity_run_tests`), these internal plumbing lines waste 1,000–3,000 tokens per failure, polluting conversational context without providing any diagnostic benefit to the AI agent or developer.
+- **Anchor on framework runner markers & scan backwards past invocation plumbing**:
+  - Naive truncation heuristics (such as stopping on the first `System.Reflection` frame from the top of the stack trace) cause catastrophic false positives if user test code or libraries invoke reflection.
+  - Instead, anchor detection on the first framework runner marker encountered from the top of the stack trace:
+    - `NUnit.Framework.Internal.`
+    - `UnityEditor.TestTools.TestRunner.`
+    - `UnityEngine.TestRunner.`
+    - `TestMethodCommand` (matching `TestMethodCommand.Execute`, `UnityTestMethodCommand`, `EnumerableTestMethodCommand`, `TaskTestMethodCommand`)
+  - Once the first framework marker index is found, scan backwards past immediate reflection invocation plumbing (`System.Reflection.`, `System.RuntimeMethodHandle`, `(wrapper `) to pinpoint the actual test entry point method frame.
+  - Truncating all lines below this test entry point cleanly strips the 20–50 internal runner frames across synchronous tests (`[Test]`), coroutines (`[UnityTest] IEnumerator`), and asynchronous tests (`[Test] async Task`).
+- **Assertion frames and source location preservation**:
+  - Assertion frames (e.g. `Assert.AreEqual`, `LogAssert.Expect`, helper assertion methods) reside at the very top of the stack trace and pinpoint the exact line where the failure occurred.
+  - Keeping all frames from the top down to the test entry point without depth limits ensures that failure locations, nested helper calls, and assertion lines remain 100% visible and navigable via RFC 8089 URIs (`file:///...#LLine`).
+- **Safe fallback behavior**:
+  - If a stack trace contains no recognized framework runner markers (such as foreign test runners, unmanaged crashes, or atypical formatting), the sanitizer returns the original stack trace intact rather than guessing or truncating user frames.
+
+

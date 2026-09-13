@@ -9,6 +9,7 @@ namespace UnityLeanMcp.Mcp;
 public interface IDiagnosticFormatter
 {
     (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot);
+    string SanitizeTestStackTrace(string? stackTrace);
     List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText);
     string FormatCompilerDiagnostics(
         string? diagnosticText,
@@ -116,6 +117,59 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
         return (null, null, null);
     }
+
+    public string SanitizeTestStackTrace(string? stackTrace)
+    {
+        if (string.IsNullOrWhiteSpace(stackTrace))
+            return string.Empty;
+
+        var lines = stackTrace.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+        // 1. Locate the first line matching the initial shared framework runner marker
+        int markerIndex = -1;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string trimmed = lines[i].TrimStart();
+            if (IsFrameworkRunnerMarker(trimmed))
+            {
+                markerIndex = i;
+                break;
+            }
+        }
+
+        if (markerIndex == -1)
+        {
+            return stackTrace.TrimEnd();
+        }
+
+        // 2. Scan backwards from the marker past any intermediate invocation plumbing (reflection, native wrappers)
+        int testEntryPointIndex = markerIndex - 1;
+        while (testEntryPointIndex >= 0 && (string.IsNullOrWhiteSpace(lines[testEntryPointIndex]) || IsInvocationPlumbing(lines[testEntryPointIndex].TrimStart())))
+        {
+            testEntryPointIndex--;
+        }
+
+        if (testEntryPointIndex < 0)
+        {
+            return stackTrace.TrimEnd();
+        }
+
+        // 3. Keep all lines from 0 to testEntryPointIndex inclusive
+        var keptLines = new string[testEntryPointIndex + 1];
+        Array.Copy(lines, 0, keptLines, 0, testEntryPointIndex + 1);
+        return string.Join(Environment.NewLine, keptLines).TrimEnd();
+    }
+
+    internal static bool IsFrameworkRunnerMarker(string line) =>
+        line.Contains("NUnit.Framework.Internal.") ||
+        line.Contains("UnityEditor.TestTools.TestRunner.") ||
+        line.Contains("UnityEngine.TestRunner.") ||
+        line.Contains("TestMethodCommand");
+
+    internal static bool IsInvocationPlumbing(string line) =>
+        line.Contains("System.Reflection.") ||
+        line.Contains("System.RuntimeMethodHandle") ||
+        line.Contains("(wrapper ");
 
     public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
     {
