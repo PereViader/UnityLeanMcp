@@ -63,6 +63,11 @@ In minimalist Unity installations (headless, server, batchmode, or VR builds), p
 ### Type Hierarchy Formatter Matching Order
 In hierarchical type matchers, `UnityEngine.Transform` inherits from `UnityEngine.Component`. Specialized formatters for `Transform` must precede generic `Component` checks; otherwise, `Transform` instances are captured and misformatted by generic component inspection logic.
 
+### Operation-Scoped Resource Lifetime & Out-of-Lock Disposal
+When managing static references to active operation resources (such as `ConsoleLogCapture` or `CancellationTokenSource`) across asynchronous, domain-reloaded, or interrupted operations:
+- Methods marking operations interrupted (e.g. `MarkInterrupted`) must strictly verify that `targetOperationId` matches the currently active operation before disposing static runtime resources. Disposing `s_ActiveLogCapture` unconditionally when `targetOperationId` does not match causes active, concurrent operations to lose log capture mid-flight.
+- Never invoke disposable or cancelable callbacks (such as `CancellationTokenSource.Cancel()`, `CancellationTokenSource.Dispose()`, or `ConsoleLogCapture.Dispose()`) while holding internal synchronization locks (`s_CtsLock`). Cancellation callbacks or event unsubscriptions can execute external code or cause lock contention; resources should be extracted and nulled within the lock and disposed safely outside of it.
+
 ---
 
 ## 3. Operating System & Filesystem Quirks
@@ -72,6 +77,11 @@ On Windows (NTFS / Win32):
 - `File.Replace` (backed by Win32 `ReplaceFileW`) requires exclusive write access to the destination file. If another process or background thread has the destination file open—even with `FileShare.ReadWrite`—`ReplaceFileW` fails with `ERROR_SHARING_VIOLATION`.
 - `File.Delete` places files into a transient `DELETE_PENDING` state until all open handles close. During this window, subsequent file creation or replacement attempts fail with sharing violations, and concurrent readers observe 0-byte files.
 - **Solution**: Avoid static shared result files. Use operation-scoped unique result paths (`Temp/unity_<kind>_<opId>.json`) and atomically move temporary files into place via `File.Move(tempPath, targetPath)`. Moving to an uncreated path avoids `ReplaceFileW` and requires no exclusive replacement locks.
+
+### Windows NTFS Transient Contention & `UnauthorizedAccessException` vs `IOException`
+On Windows NTFS, transient file contention (such as anti-virus scanning, Windows Search indexing, or atomic file replacements via move/delete) frequently manifests as Win32 `ERROR_ACCESS_DENIED` (5), which the .NET CLR surfaces as `UnauthorizedAccessException` rather than `IOException` (which usually wraps `ERROR_SHARING_VIOLATION` (32) or `ERROR_LOCK_VIOLATION` (33)).
+- File retry routines (e.g. `UnityProcessManager.ReadFileWithRetry`, `CommandHelper.ReadFileWithRetry`, `UnityLeanMcpOperationStore.WriteAtomic`) must catch both `IOException` and `UnauthorizedAccessException` during intermediate retries.
+- Catching only `IOException` causes intermittent read failures on Windows when reading PID, port, lock, or log files while another process briefly holds an inspection or deletion handle.
 
 ### Windows Locked Assembly Renaming Workaround
 On Windows, when publishing a .NET assembly (e.g. `dotnet publish ... -o .../MCP~`) while the target DLL is held open by a running host process (such as an IDE language server or MCP runner), file replacement fails with `MSB3021` / `MSB3026`.
@@ -101,6 +111,12 @@ Unity lockfiles (`UnityLockfile`) are platform-dependent:
 In line-oriented protocols where single-line status responses encode string payloads:
 - Failing to escape backslashes (`\\` -> `\\\\`) causes Windows path separators (`C:\new\read`) to be unescaped into newline (`\n` -> `ew`) and carriage return (`\r` -> `ead`) control characters, corrupting filesystem paths.
 - Codecs must symmetrically escape and unescape `\\`, `\"`, `\r`, `\n`, and `\t`.
+
+### Winsock `SO_REUSEADDR` Port Hijacking on Windows
+On POSIX platforms (Linux, macOS), setting `SO_REUSEADDR` allows a socket to immediately rebind to a local port in `TIME_WAIT` state (e.g. following quick restarts or domain reloads).
+- On Windows (Winsock), `SO_REUSEADDR` behaves fundamentally differently: it permits multiple sockets across different processes to bind simultaneously to the exact same IP:port even while another process is actively listening (`listen()`), enabling socket port hijacking and traffic theft.
+- Never set `SO_REUSEADDR` on Windows TCP listeners. Restrict `SO_REUSEADDR` to non-Windows platforms.
+- Background listener threads must inspect the OS via pure CLR `!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)` rather than Unity's `Application.platform`, preserving main-thread affinity rules.
 
 ---
 
@@ -132,6 +148,9 @@ Calling `TestRunnerApi.CancelTestRun` signals cancellation acceptance, but does 
 ### Multi-Line Test Failure Messages & Stack Trace Sanitization Overhead
 - When NUnit or custom test assertions fail, failure messages frequently contain leading whitespace or multiple lines (`\r\n  Expected: ...\r\n  But was: ...`). Extracting single-line summaries requires finding the first non-empty line after trimming to prevent empty summary lines or inadvertent multi-line tool framing.
 - In suites with dozens or hundreds of test failures, running regular expression sanitizers (`SanitizeTestStackTrace`) and source location extractors (`ExtractSourceLocation`) across every failure incurs noticeable overhead. Capping these regex operations strictly to the tests receiving detailed reporting (`maxDetailedFailures = 5`) eliminates redundant work on discarded stack frames.
+
+### `UnityTestRunResult.Interrupted` State Symmetry & `IOperationResult` Contract
+In polymorphic operation result handling (`IOperationResult`), `Interrupted` is exposed as a mutable boolean property (`bool Interrupted { get; set; }`). In `UnityTestRunResult`, `Interrupted` maps onto `ResultState == "Interrupted"` / `resultState == "Interrupted"`. If code assigns `Interrupted = false` to clear interruption state, a one-way setter that only assigns on `true` leaves `Interrupted` returning `true`, violating the Liskov Substitution Principle and property symmetry. The setter must explicitly restore `ResultState` / `resultState` to `"Passed"` (if `Success` is true), `"Failed"` (if `FailCount > 0`), or `""`.
 
 ---
 

@@ -93,7 +93,21 @@ namespace UnityLeanMcp
 
         public string OperationId { get => runId; set => runId = value; }
         public bool Success { get => success; set => success = value; }
-        public bool Interrupted { get => resultState == "Interrupted"; set { if (value) resultState = "Interrupted"; } }
+        public bool Interrupted
+        {
+            get => resultState == "Interrupted";
+            set
+            {
+                if (value)
+                {
+                    resultState = "Interrupted";
+                }
+                else if (resultState == "Interrupted")
+                {
+                    resultState = success ? "Passed" : (failCount > 0 ? "Failed" : "");
+                }
+            }
+        }
         public string Message { get => message; set => message = value; }
     }
 

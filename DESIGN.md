@@ -41,6 +41,11 @@ Terminal results are persisted to operation-scoped file paths (`Temp/unity_eval_
 - This eliminates the need for `File.Replace` (and underlying Win32 `ReplaceFileW`), avoiding mandatory replacement locks and sharing collisions with concurrent readers across all platforms.
 - For test re-runs requiring historical context (such as `--failed-only`), the runner dual-writes results to both the operation-scoped file for client polling and the static `unity_test_results.json` for Editor history.
 
+### Resilient Inter-Process File I/O Retries
+Files accessed across process boundaries (such as PID files, port discovery files, operation journals, lockfiles, and Editor logs) are subject to transient filesystem contention, atomic replacements, and external scanner interference:
+- File read and write retry helpers (`ReadFileWithRetry`, `WriteAtomic`) must catch both `IOException` and `UnauthorizedAccessException` across intermediate retry attempts.
+- On Windows NTFS, file access contention frequently manifests as Win32 `ERROR_ACCESS_DENIED` (surfaced as `UnauthorizedAccessException`) rather than `ERROR_SHARING_VIOLATION` (surfaced as `IOException`). Treating both exceptions as transient retry conditions ensures deterministic inter-process communication across platforms.
+
 ### Hierarchical Polling Precedence & IDLE Race Prevention
 Polling handlers must evaluate operation state in strict hierarchical precedence:
 1. **Terminal Result File**: Check the operation-scoped result file for a matching client-generated `operationId`.
@@ -52,6 +57,9 @@ Polling handlers must evaluate operation state in strict hierarchical precedence
 Operation-specific mechanics (cancellation, domain-reload recovery, Editor restart recovery, and shutdown cleanup) are decoupled from the core server loop via polymorphic lifecycle handlers (`IOperationLifecycleHandler`, `OperationLifecycleRegistry`):
 - Each command kind registers its own handler conforming to the Open-Closed Principle (OCP).
 - New operation types implement lifecycle hooks without modifying server dispatchers or switch statements.
+
+### Polymorphic Operation Result Symmetry (`IOperationResult`)
+All command execution results implement `IOperationResult` (`OperationId`, `Success`, `Interrupted`, `Message`). Concrete results that map boolean interface flags to underlying domain status strings (such as `UnityTestRunResult.Interrupted` mapping to `ResultState` / `resultState`) must provide symmetric getters and setters: setting `Interrupted = false` when an operation was previously marked interrupted must restore the underlying state cleanly based on outcome (`Success` / `FailCount`), preventing sticky flag bugs across polymorphic consumers.
 
 ---
 
@@ -81,6 +89,12 @@ Line-oriented socket communication uses strict single-line framing:
 ### Clean Shutdown & Transport Decoupling
 - Socket-initiated Editor shutdown (`EXIT`) stops listener services and calls `EditorApplication.Exit(0)` immediately. Standard quitting hooks mark in-flight operations as interrupted in durable state.
 - A broken TCP connection indicates transport interruption, not that the underlying Unity operation failed. Clients rediscover the endpoint and resume polling by `operationId`.
+- Listener socket initialization on background threads configures `SO_REUSEADDR` conditionally using pure CLR `RuntimeInformation.IsOSPlatform(OSPlatform.Windows)`, enabling quick `TIME_WAIT` rebinding on POSIX while avoiding Winsock socket port hijacking vulnerabilities on Windows.
+
+### Thread-Safe Operation Resource Tracking & Disposal
+- Static references to active operation resources (such as cancellation token sources and console log captures) must be scoped strictly to the owning operation ID.
+- Operations marking prior or foreign operations interrupted must verify that the target operation ID matches the active operation before resetting state or disposing resources.
+- Cancellation triggers and resource disposal must be executed outside of synchronization locks (`s_CtsLock`) to prevent deadlocks caused by synchronous cancellation callbacks or event unsubscription contention.
 
 ---
 

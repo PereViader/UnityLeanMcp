@@ -286,4 +286,105 @@ public class DecomposedComponentsTests
         Assert.Equal(string.Empty, formatter.SanitizeTestStackTrace(""));
         Assert.Equal(string.Empty, formatter.SanitizeTestStackTrace("   \r\n  "));
     }
+
+    [Fact]
+    public void UnityTestRunResult_InterruptedSetter_SettingTrue_SetsResultStateToInterrupted()
+    {
+        var result = new UnityTestRunResult
+        {
+            Success = true,
+            ResultState = "Passed"
+        };
+
+        result.Interrupted = true;
+
+        Assert.True(result.Interrupted);
+        Assert.Equal("Interrupted", result.ResultState);
+    }
+
+    [Fact]
+    public void UnityTestRunResult_InterruptedSetter_SettingFalse_WhenInterruptedAndSuccess_RestoresPassed()
+    {
+        var result = new UnityTestRunResult
+        {
+            Success = true,
+            FailCount = 0,
+            ResultState = "Interrupted"
+        };
+
+        Assert.True(result.Interrupted);
+
+        result.Interrupted = false;
+
+        Assert.False(result.Interrupted);
+        Assert.Equal("Passed", result.ResultState);
+    }
+
+    [Fact]
+    public void UnityTestRunResult_InterruptedSetter_SettingFalse_WhenInterruptedAndFailCount_RestoresFailed()
+    {
+        var result = new UnityTestRunResult
+        {
+            Success = false,
+            FailCount = 2,
+            ResultState = "Interrupted"
+        };
+
+        Assert.True(result.Interrupted);
+
+        result.Interrupted = false;
+
+        Assert.False(result.Interrupted);
+        Assert.Equal("Failed", result.ResultState);
+    }
+
+    [Fact]
+    public void UnityTestRunResult_InterruptedSetter_SettingFalse_WhenInterruptedAndNoFailures_ClearsResultState()
+    {
+        var result = new UnityTestRunResult
+        {
+            Success = false,
+            FailCount = 0,
+            ResultState = "Interrupted"
+        };
+
+        Assert.True(result.Interrupted);
+
+        result.Interrupted = false;
+
+        Assert.False(result.Interrupted);
+        Assert.Equal(string.Empty, result.ResultState);
+    }
+
+    [Fact]
+    public void UnityTestRunResult_InterruptedSetter_SettingFalse_WhenNotInterrupted_PreservesOriginalResultState()
+    {
+        var result = new UnityTestRunResult
+        {
+            Success = true,
+            ResultState = "Passed"
+        };
+
+        result.Interrupted = false;
+
+        Assert.False(result.Interrupted);
+        Assert.Equal("Passed", result.ResultState);
+    }
+
+    [Fact]
+    public void UnityTestRunResult_InterruptedSetter_ViaIOperationResultInterface_MaintainsContractSymmetry()
+    {
+        IOperationResult result = new UnityTestRunResult
+        {
+            Success = true,
+            ResultState = "Passed"
+        };
+
+        result.Interrupted = true;
+        Assert.True(result.Interrupted);
+
+        result.Interrupted = false;
+        Assert.False(result.Interrupted);
+        Assert.Equal("Passed", ((UnityTestRunResult)result).ResultState);
+    }
 }

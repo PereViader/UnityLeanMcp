@@ -65,7 +65,21 @@ public class UnityTestRunResult : IOperationResult
     public bool Success { get; set; }
 
     [JsonIgnore]
-    public bool Interrupted { get => ResultState == "Interrupted"; set { if (value) ResultState = "Interrupted"; } }
+    public bool Interrupted
+    {
+        get => ResultState == "Interrupted";
+        set
+        {
+            if (value)
+            {
+                ResultState = "Interrupted";
+            }
+            else if (ResultState == "Interrupted")
+            {
+                ResultState = Success ? "Passed" : (FailCount > 0 ? "Failed" : "");
+            }
+        }
+    }
 
     [JsonPropertyName("failCount")]
     public int FailCount { get; set; }

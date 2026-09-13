@@ -87,6 +87,126 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
+    public void ReadFileWithRetry_WhenTransientUnauthorizedAccessException_RetriesAndSucceeds()
+    {
+        int attempts = 0;
+        string result = UnityProcessManager.ReadFileWithRetry(
+            "dummy_path.txt",
+            maxRetries: 5,
+            delayMs: 1,
+            fromOffset: 0,
+            reader: (path, offset) =>
+            {
+                attempts++;
+                if (attempts < 3)
+                {
+                    throw new UnauthorizedAccessException("Simulated access denied");
+                }
+                return "Recovered content";
+            });
+
+        Assert.Equal("Recovered content", result);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public void ReadFileWithRetry_WhenTransientIOException_RetriesAndSucceeds()
+    {
+        int attempts = 0;
+        string result = UnityProcessManager.ReadFileWithRetry(
+            "dummy_path.txt",
+            maxRetries: 5,
+            delayMs: 1,
+            fromOffset: 0,
+            reader: (path, offset) =>
+            {
+                attempts++;
+                if (attempts < 3)
+                {
+                    throw new IOException("Simulated sharing violation");
+                }
+                return "Recovered from IO exception";
+            });
+
+        Assert.Equal("Recovered from IO exception", result);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public void ReadFileWithRetry_WhenMixedTransientExceptions_RetriesAndSucceeds()
+    {
+        int attempts = 0;
+        string result = UnityProcessManager.ReadFileWithRetry(
+            "dummy_path.txt",
+            maxRetries: 5,
+            delayMs: 1,
+            fromOffset: 0,
+            reader: (path, offset) =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new UnauthorizedAccessException("Attempt 1: Access denied");
+                }
+                if (attempts == 2)
+                {
+                    throw new IOException("Attempt 2: Sharing violation");
+                }
+                return "Recovered after mixed exceptions";
+            });
+
+        Assert.Equal("Recovered after mixed exceptions", result);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public void ReadFileWithRetry_WhenUnauthorizedAccessExceptionExceedsMaxRetries_ThrowsUnauthorizedAccessException()
+    {
+        int attempts = 0;
+        var ex = Assert.Throws<UnauthorizedAccessException>(() =>
+            UnityProcessManager.ReadFileWithRetry(
+                "dummy_path.txt",
+                maxRetries: 3,
+                delayMs: 1,
+                fromOffset: 0,
+                reader: (path, offset) =>
+                {
+                    attempts++;
+                    throw new UnauthorizedAccessException("Persistent access denied");
+                }));
+
+        Assert.Contains("Persistent access denied", ex.Message);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task ReadFileWithRetry_WhenFileInitiallyLocked_RetriesAndReadsContent()
+    {
+        string tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, "Retry file content", Encoding.UTF8);
+
+            using var stream = new FileStream(tempFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            // Release the lock asynchronously after a short delay
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(50);
+                stream.Dispose();
+            });
+
+            string result = UnityProcessManager.ReadFileWithRetry(tempFile, maxRetries: 10, delayMs: 25);
+
+            Assert.Equal("Retry file content", result);
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task EnsureUnityRunningAsync_WhenUnityAlreadyRunning_IgnoresHistoricalCompilationErrorsInLogFile()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_" + Guid.NewGuid().ToString("N"));

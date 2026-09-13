@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using UnityEditor;
@@ -221,7 +222,10 @@ namespace UnityLeanMcp
             var listener = new TcpListener(IPAddress.Loopback, port);
             try
             {
-                listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                }
                 listener.Start();
                 return listener;
             }

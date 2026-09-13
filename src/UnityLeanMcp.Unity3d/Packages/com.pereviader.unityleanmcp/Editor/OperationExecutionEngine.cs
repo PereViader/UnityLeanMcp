@@ -18,31 +18,46 @@ namespace UnityLeanMcp
 
         public static CancellationTokenSource RegisterActiveOperation(string operationId, bool isCancelable)
         {
+            CancellationTokenSource cts;
+            CancellationTokenSource oldCtsToDispose = null;
+            ConsoleLogCapture oldCaptureToDispose = null;
             lock (s_CtsLock)
             {
-                s_ActiveCts?.Dispose();
-                s_ActiveCts = new CancellationTokenSource();
+                oldCtsToDispose = s_ActiveCts;
+                oldCaptureToDispose = s_ActiveLogCapture;
+                cts = new CancellationTokenSource();
+                s_ActiveCts = cts;
                 s_ActiveOperationId = operationId;
                 s_ActiveIsCancelable = isCancelable;
-                return s_ActiveCts;
+                s_ActiveLogCapture = null;
             }
+
+            oldCtsToDispose?.Dispose();
+            DisposeCapture(oldCaptureToDispose);
+            return cts;
         }
 
         public static bool TryCancel(string operationId)
         {
+            CancellationTokenSource ctsToCancel = null;
             lock (s_CtsLock)
             {
                 if (s_ActiveCts != null && s_ActiveIsCancelable && (string.IsNullOrEmpty(operationId) || s_ActiveOperationId == operationId))
                 {
-                    try
-                    {
-                        s_ActiveCts.Cancel();
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"UnityLeanMcp: Failed to cancel active operation: {ex.Message}");
-                    }
+                    ctsToCancel = s_ActiveCts;
+                }
+            }
+
+            if (ctsToCancel != null)
+            {
+                try
+                {
+                    ctsToCancel.Cancel();
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"UnityLeanMcp: Failed to cancel active operation: {ex.Message}");
                 }
             }
             return false;
@@ -50,18 +65,23 @@ namespace UnityLeanMcp
 
         public static void MarkInterrupted(string operationKind, string resultFilePath, string message, string targetOperationId = null)
         {
+            CancellationTokenSource ctsToDispose = null;
+            ConsoleLogCapture captureToDispose = null;
             lock (s_CtsLock)
             {
                 if (string.IsNullOrEmpty(targetOperationId) || s_ActiveOperationId == targetOperationId)
                 {
-                    s_ActiveCts?.Dispose();
+                    ctsToDispose = s_ActiveCts;
                     s_ActiveCts = null;
                     s_ActiveOperationId = null;
                     s_ActiveIsCancelable = false;
+                    captureToDispose = s_ActiveLogCapture;
+                    s_ActiveLogCapture = null;
                 }
             }
 
-            DisposeCapture(s_ActiveLogCapture);
+            ctsToDispose?.Dispose();
+            DisposeCapture(captureToDispose);
 
             var operation = UnityLeanMcpOperationStore.Read();
             string opId = targetOperationId ?? operation?.operationId;
@@ -107,6 +127,8 @@ namespace UnityLeanMcp
             UnityLeanMcpDispatcher.EnsureInitialized();
 
             CancellationTokenSource cts;
+            CancellationTokenSource oldCtsToDispose = null;
+            ConsoleLogCapture oldCaptureToDispose = null;
             lock (s_CtsLock)
             {
                 if (s_ActiveOperationId == operationId && s_ActiveCts != null)
@@ -116,13 +138,18 @@ namespace UnityLeanMcp
                 }
                 else
                 {
-                    s_ActiveCts?.Dispose();
+                    oldCtsToDispose = s_ActiveCts;
+                    oldCaptureToDispose = s_ActiveLogCapture;
                     s_ActiveCts = new CancellationTokenSource();
                     s_ActiveOperationId = operationId;
                     s_ActiveIsCancelable = canCancel;
+                    s_ActiveLogCapture = null;
                     cts = s_ActiveCts;
                 }
             }
+
+            oldCtsToDispose?.Dispose();
+            DisposeCapture(oldCaptureToDispose);
 
             if (cts.IsCancellationRequested)
             {
@@ -133,9 +160,22 @@ namespace UnityLeanMcp
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             var logCapture = new ConsoleLogCapture();
+            bool isActive;
             lock (s_CtsLock)
             {
-                s_ActiveLogCapture = logCapture;
+                isActive = (s_ActiveOperationId == operationId);
+                if (isActive)
+                {
+                    s_ActiveLogCapture = logCapture;
+                }
+            }
+
+            if (!isActive)
+            {
+                DisposeCapture(logCapture);
+                string cancelMsg = GetCancellationMessage(operationKind);
+                FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, 0, null, new List<ConsoleLogEntry>(), interrupted: true);
+                return;
             }
 
             object result = null;
@@ -386,16 +426,23 @@ namespace UnityLeanMcp
             List<ConsoleLogEntry> logs = null,
             bool interrupted = false)
         {
+            CancellationTokenSource ctsToDispose = null;
+            ConsoleLogCapture captureToDispose = null;
             lock (s_CtsLock)
             {
                 if (s_ActiveOperationId == operationId)
                 {
-                    s_ActiveCts?.Dispose();
+                    ctsToDispose = s_ActiveCts;
                     s_ActiveCts = null;
                     s_ActiveOperationId = null;
                     s_ActiveIsCancelable = false;
+                    captureToDispose = s_ActiveLogCapture;
+                    s_ActiveLogCapture = null;
                 }
             }
+
+            ctsToDispose?.Dispose();
+            DisposeCapture(captureToDispose);
 
             if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
             {
@@ -439,7 +486,14 @@ namespace UnityLeanMcp
                     s_ActiveLogCapture = null;
                 }
             }
-            logCapture.Dispose();
+            try
+            {
+                logCapture.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"UnityLeanMcp: Failed to dispose log capture: {ex.Message}");
+            }
         }
 
         private static string GetCancellationMessage(string operationKind)

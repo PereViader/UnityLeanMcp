@@ -579,18 +579,27 @@ public class UnityProcessManager : IUnityProcessManager
 
     public static string ReadFileWithRetry(string path, int maxRetries = 5, int delayMs = 100, long fromOffset = 0)
     {
+        return ReadFileWithRetry(path, maxRetries, delayMs, fromOffset, ReadFileFromOffset);
+    }
+
+    internal static string ReadFileWithRetry(string path, int maxRetries, int delayMs, long fromOffset, Func<string, long, string> reader)
+    {
         for (int i = 0; i < maxRetries; i++)
         {
             try
             {
-                return ReadFileFromOffset(path, fromOffset);
+                return reader(path, fromOffset);
             }
             catch (IOException) when (i < maxRetries - 1)
             {
                 Thread.Sleep(delayMs);
             }
+            catch (UnauthorizedAccessException) when (i < maxRetries - 1)
+            {
+                Thread.Sleep(delayMs);
+            }
         }
-        return ReadFileFromOffset(path, fromOffset);
+        return reader(path, fromOffset);
     }
 
     private static string ReadFileFromOffset(string path, long fromOffset)
