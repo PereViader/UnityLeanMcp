@@ -2168,6 +2168,12 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var nullResult = JsonSerializer.Deserialize<SingleOrArray>("null");
         Assert.Null(nullResult);
 
+        // 4b. Whitespace / empty string deserialization returns null
+        var emptyStringResult = JsonSerializer.Deserialize<SingleOrArray>("\"\"");
+        Assert.Null(emptyStringResult);
+        var whitespaceStringResult = JsonSerializer.Deserialize<SingleOrArray>("\"   \"");
+        Assert.Null(whitespaceStringResult);
+
         // 5. Invalid token (number) throws JsonException
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SingleOrArray>("123"));
 
@@ -2278,4 +2284,64 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }
+
+    [Fact]
+    public void SingleOrArray_EqualityOperators_CompareByValueAndHandleNulls()
+    {
+        SingleOrArray? a = new SingleOrArray("Test1", "Test2");
+        SingleOrArray? b = new SingleOrArray("Test1", "Test2");
+        SingleOrArray? c = new SingleOrArray("Test1", "Different");
+        SingleOrArray? d = null;
+        SingleOrArray? e = null;
+
+        // Value equality via ==
+        Assert.True(a == b);
+        Assert.False(a != b);
+
+        // Inequality via == and !=
+        Assert.False(a == c);
+        Assert.True(a != c);
+
+        // Null comparisons
+        Assert.False(a == d);
+        Assert.True(a != d);
+        Assert.False(d == a);
+        Assert.True(d != a);
+        Assert.True(d == e);
+        Assert.False(d != e);
+
+        // Same reference equality
+        SingleOrArray? aRef = a;
+        Assert.True(a == aRef);
+        Assert.False(a != aRef);
+    }
+
+    [Fact]
+    public void SingleOrArray_Constructors_HandleNullArgumentsSafely()
+    {
+        // params string[]? with null array
+        var fromNullArray = new SingleOrArray((string[])null!);
+        Assert.Empty(fromNullArray);
+
+        // IEnumerable<string>? with null collection
+        var fromNullCollection = new SingleOrArray((IEnumerable<string>)null!);
+        Assert.Empty(fromNullCollection);
+
+        // Whitespace and empty strings filtered out
+        var fromEmptyItems = new SingleOrArray("  ", "", "\t");
+        Assert.Empty(fromEmptyItems);
+    }
+
+    [Theory]
+    [InlineData("HelloWorld", 3, "Hel")]
+    [InlineData("HelloWorld", 2, "He")]
+    [InlineData("HelloWorld", 1, "H")]
+    [InlineData("HelloWorld", 0, "HelloWorld")]
+    [InlineData("HelloWorld", -1, "HelloWorld")]
+    public void UnityTools_ExtractOneLineSummaryMessage_HandlesShortMaxLineLengthsSafely(string input, int maxLen, string expected)
+    {
+        string? result = UnityTools.ExtractOneLineSummaryMessage(input, maxLineLength: maxLen);
+        Assert.Equal(expected, result);
+    }
 }
+

@@ -274,13 +274,13 @@ public class UnityTools
             {
                 sb.AppendLine($"No tests found matching category '{categoryDesc}' (mode: {mode}).");
             }
-            else if (hasTestNames)
+            else if (tests is { Length: > 0 })
             {
-                sb.AppendLine($"No tests found matching testNames '{string.Join(", ", testNames!)}' (mode: {mode}).");
+                sb.AppendLine($"No tests found matching testNames '{string.Join(", ", tests)}' (mode: {mode}).");
             }
-            else if (hasAssemblyNames)
+            else if (assemblies is { Length: > 0 })
             {
-                sb.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblyNames!)}' (mode: {mode}).");
+                sb.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblies)}' (mode: {mode}).");
             }
             else
             {
@@ -321,20 +321,13 @@ public class UnityTools
         const int maxDetailedFailures = 5;
         const int maxTotalFailures = 25;
 
-        var structuredFailures = new List<StructuredTestFailure>();
-        for (int i = 0; i < result.FailedTests.Count; i++)
+        int detailedCount = Math.Min(result.FailedTests.Count, maxDetailedFailures);
+        var structuredFailures = new List<StructuredTestFailure>(detailedCount);
+        for (int i = 0; i < detailedCount; i++)
         {
             var fail = result.FailedTests[i];
-            string? filePath = null;
-            int? lineNumber = null;
-            string? fileUri = null;
-            string sanitizedStackTrace = string.Empty;
-
-            if (i < maxDetailedFailures)
-            {
-                (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.ProjectRoot);
-                sanitizedStackTrace = _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace);
-            }
+            var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _processManager.ProjectRoot);
+            string sanitizedStackTrace = _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace);
 
             structuredFailures.Add(new StructuredTestFailure
             {
@@ -353,7 +346,6 @@ public class UnityTools
         {
             sb.AppendLine();
             sb.AppendLine("Failures:");
-            int detailedCount = Math.Min(result.FailedTests.Count, maxDetailedFailures);
             for (int i = 0; i < detailedCount; i++)
             {
                 var fail = structuredFailures[i];
@@ -379,7 +371,7 @@ public class UnityTools
             int summaryCount = Math.Min(result.FailedTests.Count, maxTotalFailures);
             for (int i = detailedCount; i < summaryCount; i++)
             {
-                var fail = structuredFailures[i];
+                var fail = result.FailedTests[i];
                 string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
                 string? oneLineMsg = ExtractOneLineSummaryMessage(fail.Message);
                 if (!string.IsNullOrWhiteSpace(oneLineMsg))
@@ -441,9 +433,11 @@ public class UnityTools
             string trimmed = line.Trim();
             if (!string.IsNullOrEmpty(trimmed))
             {
-                if (maxLineLength > 3 && trimmed.Length > maxLineLength)
+                if (maxLineLength > 0 && trimmed.Length > maxLineLength)
                 {
-                    return trimmed.Substring(0, maxLineLength - 3) + "...";
+                    return maxLineLength > 3
+                        ? trimmed.Substring(0, maxLineLength - 3) + "..."
+                        : trimmed.Substring(0, maxLineLength);
                 }
                 return trimmed;
             }

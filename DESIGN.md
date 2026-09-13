@@ -119,8 +119,8 @@ Unity Test Framework appends 20–50 lines of internal NUnit runner plumbing bel
 
 ### Test Failure Detail Capping & Conciseness
 When test suites experience large numbers of failures, emitting full stack traces for every test can consume 5,000–10,000 context tokens. To balance deep diagnostic information with token efficiency:
-- **Detailed Failure Capping (Max 5)**: The first 5 failures report full diagnostic details, including execution duration, RFC 8089 source location links, full multi-line failure messages, and sanitized stack traces.
-- **Concise One-Line Summaries (Max 20)**: Failures 6 through 25 are formatted as concise single-line entries (`• {fullName}: {oneLineMessage}`), extracting the first non-empty message line (truncated to 200 characters if long) and omitting stack traces and location links.
+- **Detailed Failure Capping (Max 5)**: The first 5 failures report full diagnostic details, including execution duration, RFC 8089 source location links, full multi-line failure messages, and sanitized stack traces. Intermediate `StructuredTestFailure` diagnostic models are allocated strictly for this detailed subset.
+- **Concise One-Line Summaries (Max 20)**: Failures 6 through 25 are formatted as concise single-line entries (`• {fullName}: {oneLineMessage}`), extracting the first non-empty message line (truncated to 200 characters if long) directly from test results without intermediate allocations, omitting stack traces and location links.
 - **Total Failure Cap & Truncation (Max 25 Total)**: At most 25 failures total are listed in the response. Any failures exceeding 25 are truncated with an omission notice (`... and X more failed test(s).`). If 5 or fewer tests fail, all failures are rendered with full details without summary sections or truncation notices.
 
 ### Interactive GUI Editor Termination Protection
@@ -132,7 +132,7 @@ When Unity runs in interactive GUI mode, terminating the Editor risks losing uns
 To eliminate parameter ambiguity and prevent tool invocation failures by LLM agents:
 - **Canonical Plural Parameter Surface**: `unity_run_tests` exposes only canonical plural filter parameters (`testNames`, `groupNames`, `categoryNames`, `assemblyNames`, `mode`, `failedOnly`). Deprecated singular or legacy aliases (`testName`, `group`, `filter`, `category`, `assembly`) are eliminated from the tool signature.
 - **Accurate Regular Expression Documentation**: The `groupNames` parameter schema explicitly documents that patterns are evaluated by the Unity Test Framework as .NET Regular Expressions (e.g. `['.*Movement.*']`) rather than shell globs (e.g. `*Movement*`), preventing pre-execution regex compilation exceptions.
-- **Polymorphic String / Array Deserialization**: AI agents often send either a single string (e.g. `"MyTest"`) or an array of strings (e.g. `["MyTest"]`) for filter parameters. The `SingleOrArray` parameter type implements a custom `JsonConverter` that transparently accepts both JSON strings and JSON string arrays during MCP tool dispatch, while providing bidirectional implicit conversions to `string` and `string[]` for direct C# ergonomics.
+- **Polymorphic String / Array Deserialization**: AI agents often send either a single string (e.g. `"MyTest"`) or an array of strings (e.g. `["MyTest"]`) for filter parameters. The `SingleOrArray` parameter type implements a custom `JsonConverter` that transparently accepts both JSON strings and JSON string arrays during MCP tool dispatch, while providing bidirectional implicit conversions to `string` and `string[]` for direct C# ergonomics, null-safe constructor overloads, and value equality operators (`==`, `!=`).
 
 ---
 

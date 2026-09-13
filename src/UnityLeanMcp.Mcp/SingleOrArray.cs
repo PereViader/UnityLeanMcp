@@ -23,13 +23,13 @@ public class SingleOrArray : List<string>, IEquatable<SingleOrArray>
         }
     }
 
-    public SingleOrArray(params string[] items)
-        : this((IEnumerable<string>)items)
+    public SingleOrArray(params string[]? items)
+        : this((IEnumerable<string>?)items)
     {
     }
 
-    public SingleOrArray(IEnumerable<string> collection)
-        : base(collection.Where(s => !string.IsNullOrWhiteSpace(s)))
+    public SingleOrArray(IEnumerable<string>? collection)
+        : base(collection != null ? collection.Where(s => !string.IsNullOrWhiteSpace(s)) : Enumerable.Empty<string>())
     {
     }
 
@@ -41,6 +41,16 @@ public class SingleOrArray : List<string>, IEquatable<SingleOrArray>
 
     public static implicit operator string[]?(SingleOrArray? val) =>
         val == null ? null : val.ToArray();
+
+    public static bool operator ==(SingleOrArray? left, SingleOrArray? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is null || right is null) return false;
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(SingleOrArray? left, SingleOrArray? right) =>
+        !(left == right);
 
     public bool Equals(SingleOrArray? other)
     {
@@ -86,7 +96,7 @@ public class SingleOrArrayJsonConverter : JsonConverter<SingleOrArray>
         if (reader.TokenType == JsonTokenType.String)
         {
             string? s = reader.GetString();
-            return !string.IsNullOrWhiteSpace(s) ? new SingleOrArray(s) : new SingleOrArray();
+            return !string.IsNullOrWhiteSpace(s) ? new SingleOrArray(s) : null;
         }
 
         if (reader.TokenType == JsonTokenType.StartArray)
