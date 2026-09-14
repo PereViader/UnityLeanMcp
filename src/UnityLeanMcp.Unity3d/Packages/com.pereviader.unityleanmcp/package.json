@@ -1,6 +1,6 @@
 {
   "name": "com.pereviader.unityleanmcp",
-  "version": "0.8.0-preview.8",
+  "version": "0.0.0",
   "displayName": "UnityLeanMcp",
   "description": "A lean, sub-second MCP server connecting AI coding agents to the Unity Editor without polluting the context window.",
   "unity": "2021.3",
