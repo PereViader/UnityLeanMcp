@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,9 +12,11 @@ public record McpToolResult(bool IsError, string Text, JsonElement RawResult);
 
 public class McpTestClient : IAsyncDisposable
 {
+    private const int MaxStderrTailCharacters = 8 * 1024;
     private readonly Process _process;
     private readonly StreamWriter _writer;
     private readonly StreamReader _reader;
+    private readonly BoundedStderrTail _stderrTail = new(MaxStderrTailCharacters);
     private int _nextId = 1;
     private bool _initialized;
 
@@ -39,9 +42,9 @@ public class McpTestClient : IAsyncDisposable
 
         _process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start UnityLeanMcp.Mcp process.");
         
-        // Drain stderr to avoid pipe deadlock
-        _process.ErrorDataReceived += (_, _) => { };
-        _process.BeginErrorReadLine();
+        // Drain stderr continuously to avoid pipe deadlock while retaining only
+        // a bounded tail for actionable diagnostics when the server exits early.
+        _ = DrainStderrAsync(_process.StandardError);
 
         _writer = _process.StandardInput;
         _reader = _process.StandardOutput;
@@ -64,20 +67,13 @@ public class McpTestClient : IAsyncDisposable
 
     public static string GetMcpServerDllPath()
     {
-        string root = GetRepoRoot();
         string unityRoot = GetUnityProjectRoot();
         string publishedDll = Path.Combine(unityRoot, "Packages", "com.pereviader.unityleanmcp", "MCP~", "UnityLeanMcp.Mcp.dll");
-        string debugDll = Path.Combine(root, "src", "UnityLeanMcp.Mcp", "bin", "Debug", "net10.0", "UnityLeanMcp.Mcp.dll");
-
-        if (File.Exists(publishedDll) && File.Exists(debugDll))
-        {
-            return File.GetLastWriteTimeUtc(debugDll) >= File.GetLastWriteTimeUtc(publishedDll) ? debugDll : publishedDll;
-        }
-        if (File.Exists(debugDll)) return debugDll;
         if (File.Exists(publishedDll)) return publishedDll;
 
-        throw new FileNotFoundException($"Could not find UnityLeanMcp.Mcp.dll at {publishedDll} or {debugDll}");
-
+        throw new FileNotFoundException(
+            $"Could not find the published Release UnityLeanMcp.Mcp.dll at {publishedDll}. Run dotnet publish before starting integration tests.",
+            publishedDll);
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -104,7 +100,7 @@ public class McpTestClient : IAsyncDisposable
         string? response = await _reader.ReadLineAsync(cancellationToken);
         if (string.IsNullOrEmpty(response))
         {
-            throw new InvalidOperationException("MCP server closed connection during initialization.");
+            throw CreateUnexpectedEofException("during initialization");
         }
 
         // Send notifications/initialized
@@ -151,7 +147,7 @@ public class McpTestClient : IAsyncDisposable
             string? responseLine = await _reader.ReadLineAsync(cts.Token);
             if (string.IsNullOrEmpty(responseLine))
             {
-                throw new InvalidOperationException($"MCP server closed connection without response for tool '{toolName}'.");
+                throw CreateUnexpectedEofException($"without response for tool '{toolName}'");
             }
 
             using var doc = JsonDocument.Parse(responseLine);
@@ -213,5 +209,92 @@ public class McpTestClient : IAsyncDisposable
 
         _process.Dispose();
         await Task.CompletedTask;
+    }
+
+    private async Task DrainStderrAsync(StreamReader stderr)
+    {
+        char[] buffer = new char[1024];
+        try
+        {
+            int read;
+            while ((read = await stderr.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+            {
+                _stderrTail.Append(new string(buffer, 0, read));
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal is expected when the client tears down the child process.
+        }
+        catch (IOException)
+        {
+            // A broken child-process pipe must not prevent the test from reporting
+            // the primary protocol failure and the stderr captured up to that point.
+        }
+    }
+
+    private InvalidOperationException CreateUnexpectedEofException(string context)
+    {
+        string processState;
+        try
+        {
+            processState = _process.HasExited
+                ? $" Process exited with code {_process.ExitCode}."
+                : " Process is still running.";
+        }
+        catch (InvalidOperationException)
+        {
+            processState = " Process state is unavailable.";
+        }
+
+        return new InvalidOperationException(
+            $"MCP server closed connection {context}.{processState} Stderr tail:\n{_stderrTail.GetText()}");
+    }
+}
+
+internal sealed class BoundedStderrTail
+{
+    private const string TruncationMarker = "... (stderr truncated; showing the most recent output)\n";
+    private readonly object _gate = new();
+    private readonly int _maxCharacters;
+    private readonly StringBuilder _buffer;
+    private bool _truncated;
+
+    public BoundedStderrTail(int maxCharacters)
+    {
+        if (maxCharacters <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxCharacters));
+        }
+
+        _maxCharacters = maxCharacters;
+        _buffer = new StringBuilder(Math.Min(maxCharacters, 1024));
+    }
+
+    public void Append(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _buffer.Append(value);
+            if (_buffer.Length > _maxCharacters)
+            {
+                _buffer.Remove(0, _buffer.Length - _maxCharacters);
+                _truncated = true;
+            }
+        }
+    }
+
+    public string GetText()
+    {
+        lock (_gate)
+        {
+            string text = _buffer.ToString();
+            return _truncated ? TruncationMarker + text : text;
+        }
     }
 }

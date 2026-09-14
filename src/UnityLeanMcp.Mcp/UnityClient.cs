@@ -31,29 +31,41 @@ public class UnityClient : IUnityClient
         IUnityPathResolver pathResolver,
         ILogger<UnityClient> logger,
         IUnitySocketTransport? socketTransport = null,
-        IOperationPoller? operationPoller = null)
+        IOperationPoller? operationPoller = null,
+        UnityClientOptions? options = null)
     {
         _processManager = processManager;
         _pathResolver = pathResolver;
         _logger = logger;
         _socketTransport = socketTransport ?? new UnitySocketTransport(logger);
         _operationPoller = operationPoller ?? new OperationPoller(_processManager, _pathResolver, _socketTransport, logger);
+        if (options != null)
+        {
+            PollIntervalMs = options.PollIntervalMs;
+            if (options.BusyGracePeriod.HasValue)
+            {
+                BusyGracePeriod = options.BusyGracePeriod.Value;
+            }
+        }
     }
 
-    public UnityClient(IUnityProcessManager processManager, ILogger<UnityClient> logger)
-        : this(processManager, processManager.PathResolver, logger)
+    public UnityClient(
+        IUnityProcessManager processManager,
+        ILogger<UnityClient> logger,
+        UnityClientOptions? options = null)
+        : this(processManager, processManager.PathResolver, logger, options: options)
     {
     }
 
     /// <summary>
     /// Interval in milliseconds between polling checks during long-running operations. Defaults to 500ms.
     /// </summary>
-    public int PollIntervalMs { get; set; } = 500;
+    public int PollIntervalMs { get; init; } = 500;
 
     /// <summary>
     /// Grace period to wait when an active foreign mutating operation is detected before failing fast. Defaults to 3 seconds.
     /// </summary>
-    public TimeSpan BusyGracePeriod { get; set; } = TimeSpan.FromSeconds(3);
+    public TimeSpan BusyGracePeriod { get; init; } = TimeSpan.FromSeconds(3);
 
 
     /// <summary>
@@ -254,7 +266,7 @@ public class UnityClient : IUnityClient
         {
             await _processManager.EnsureUnityRunningAsync(cancellationToken);
         }
-        catch (UnityCompilationException ex)
+        catch (Exception ex) when (ex is UnityCompilationException or FileNotFoundException or InvalidOperationException)
         {
             return new UnityRefreshResult
             {
@@ -275,7 +287,12 @@ public class UnityClient : IUnityClient
         {
             if (busyInfo.isCompilation)
             {
-                var waitResult = await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+                var waitResult = await WaitForCompilationToSettleAsync(
+                    opId,
+                    isRecompile,
+                    progress,
+                    acceptCurrentCompilationState: true,
+                    cancellationToken: cancellationToken);
                 if (!waitResult.Success || !isRecompile)
                 {
                     return waitResult;
@@ -307,12 +324,24 @@ public class UnityClient : IUnityClient
 
         // Send refresh/recompile command
         string? initialResponse = await SendCommandAsync(triggerCommand, 10, cancellationToken);
+
+        var initialTerminalResult = TryCreateRefreshTerminalResult(initialResponse, opId);
+        if (initialTerminalResult != null)
+        {
+            return initialTerminalResult;
+        }
+
         var initBusy = ParseBusyResponse(initialResponse);
         if (initBusy.isBusy)
         {
             if (initBusy.isCompilation)
             {
-                return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+                return await WaitForCompilationToSettleAsync(
+                    opId,
+                    isRecompile,
+                    progress,
+                    acceptCurrentCompilationState: true,
+                    cancellationToken: cancellationToken);
             }
             else
             {
@@ -328,12 +357,23 @@ public class UnityClient : IUnityClient
                 }
 
                 initialResponse = await SendCommandAsync(triggerCommand, 10, cancellationToken);
+                initialTerminalResult = TryCreateRefreshTerminalResult(initialResponse, opId);
+                if (initialTerminalResult != null)
+                {
+                    return initialTerminalResult;
+                }
+
                 var retryBusy = ParseBusyResponse(initialResponse);
                 if (retryBusy.isBusy)
                 {
                     if (retryBusy.isCompilation)
                     {
-                        return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+                        return await WaitForCompilationToSettleAsync(
+                            opId,
+                            isRecompile,
+                            progress,
+                            acceptCurrentCompilationState: true,
+                            cancellationToken: cancellationToken);
                     }
 
                     return new UnityRefreshResult
@@ -346,109 +386,173 @@ public class UnityClient : IUnityClient
             }
         }
 
-        return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+        return await WaitForCompilationToSettleAsync(
+            opId,
+            isRecompile,
+            progress,
+            // A newly submitted operation must not infer success from an
+            // uncorrelated READY response. Only an explicitly observed active
+            // compilation may settle without this operation's result file.
+            acceptCurrentCompilationState: false,
+            cancellationToken: cancellationToken);
+    }
+
+    private async Task<UnityRefreshResult> RefreshIfNeededAsync(
+        IProgress<ProgressNotificationValue>? progress,
+        CancellationToken cancellationToken)
+    {
+        string probeId = Guid.NewGuid().ToString("N");
+
+        try
+        {
+            // Keep the existing auto-start guarantee before consulting the
+            // readiness probe. A stale port must never make Eval/tests skip
+            // startup and then dispatch into a dead Editor.
+            await _processManager.EnsureUnityRunningAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is UnityCompilationException or FileNotFoundException or InvalidOperationException)
+        {
+            return new UnityRefreshResult
+            {
+                OperationId = probeId,
+                Success = false,
+                Message = ex.Message
+            };
+        }
+
+        string? readiness = await SendCommandAsync($"POLL_REFRESH CHECK {probeId}", 2, cancellationToken);
+
+        // The probe is deliberately fail-open. A missing, stale, or negative
+        // response must use the existing correlated refresh workflow so an
+        // externally changed asset or script is never silently skipped.
+        if (string.Equals(readiness, "READY", StringComparison.OrdinalIgnoreCase))
+        {
+            return new UnityRefreshResult
+            {
+                OperationId = probeId,
+                Success = true,
+                Message = "No pending AssetDatabase refresh or compilation."
+            };
+        }
+
+        return await RefreshAsync(isRecompile: false, progress, cancellationToken);
     }
 
     private async Task<UnityRefreshResult> WaitForCompilationToSettleAsync(
         string opId,
         bool isRecompile,
         IProgress<ProgressNotificationValue>? progress,
+        bool acceptCurrentCompilationState,
         CancellationToken cancellationToken)
     {
         int compileProgress = 30;
+        bool currentCompilationWasProven = acceptCurrentCompilationState;
+
+        UnityRefreshResult CompleteRefreshResult(UnityRefreshResult result)
+        {
+            progress?.Report(new ProgressNotificationValue
+            {
+                Progress = 90,
+                Total = 100,
+                Message = "Compilation finished, waiting for Editor to settle..."
+            });
+
+            EnrichRefreshResultWithDiagnostics(result);
+
+            if (result.Success)
+            {
+                progress?.Report(new ProgressNotificationValue
+                {
+                    Progress = 100,
+                    Total = 100,
+                    Message = isRecompile
+                        ? "Clean script recompilation completed."
+                        : "AssetDatabase refresh completed."
+                });
+            }
+
+            return result;
+        }
 
         var spec = new OperationPollingSpec<UnityRefreshResult>
         {
             OperationId = opId,
             Kind = null,
             ShouldCancelOnAborted = false,
+            RequireDurableResult = true,
             OperationDisplayName = "refresh operation",
-            ResultFilePath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh),
+            ResultFilePath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId),
             IsMatch = r => r.OperationId == opId,
             PollCommand = $"POLL_REFRESH {opId}",
             PollTimeoutSeconds = 2,
             PollIntervalMs = PollIntervalMs,
-            OnResultFound = r =>
-            {
-                progress?.Report(new ProgressNotificationValue
-                {
-                    Progress = 90,
-                    Total = 100,
-                    Message = "Compilation finished, waiting for Editor to settle..."
-                });
-
-                EnrichRefreshResultWithDiagnostics(r);
-
-                if (r.Success)
-                {
-                    progress?.Report(new ProgressNotificationValue
-                    {
-                        Progress = 100,
-                        Total = 100,
-                        Message = isRecompile
-                            ? "Clean script recompilation completed."
-                            : "AssetDatabase refresh completed."
-                    });
-                }
-
-                return r;
-            },
+            OnResultFound = CompleteRefreshResult,
             CustomResponseHandler = async (pollResp, ct) =>
             {
-                if (pollResp == "READY")
+                var busy = ParseBusyResponse(pollResp);
+                if (busy.isCompilation)
                 {
-                    progress?.Report(new ProgressNotificationValue
-                    {
-                        Progress = 90,
-                        Total = 100,
-                        Message = "Compilation finished, waiting for Editor to settle..."
-                    });
-
-                    var refreshResultPath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh);
-                    var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId)
-                        ?? TryReadJsonFile<UnityRefreshResult>(refreshResultPath, _ => true)
-                        ?? new UnityRefreshResult
-                        {
-                            OperationId = opId,
-                            Success = true,
-                            Message = "AssetDatabase refresh completed successfully."
-                        };
-
-                    EnrichRefreshResultWithDiagnostics(result);
-
-                    if (result.Success)
-                    {
-                        progress?.Report(new ProgressNotificationValue
-                        {
-                            Progress = 100,
-                            Total = 100,
-                            Message = isRecompile
-                                ? "Clean script recompilation completed."
-                                : "AssetDatabase refresh completed."
-                        });
-                    }
-
-                    return result;
+                    currentCompilationWasProven = true;
+                    return null;
                 }
 
-                if (pollResp == "COMPILATION_ERROR")
+                if (string.Equals(pollResp, "READY", StringComparison.OrdinalIgnoreCase))
                 {
-                    progress?.Report(new ProgressNotificationValue
+                    var refreshResultPath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId);
+                    var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId);
+                    if (result != null)
                     {
-                        Progress = 90,
-                        Total = 100,
-                        Message = "Compilation finished, waiting for Editor to settle..."
-                    });
+                        // Let the poller's next iteration consume the
+                        // operation-scoped file through OnResultFound. That
+                        // keeps terminal cleanup and completion reporting on
+                        // the normal authoritative-result path.
+                        return null;
+                    }
 
-                    // Allow brief moment for diagnostics file to settle
+                    if (!acceptCurrentCompilationState || !currentCompilationWasProven)
+                    {
+                        return null;
+                    }
+
+                    result = new UnityRefreshResult
+                    {
+                        OperationId = opId,
+                        Success = true,
+                        Message = "The already-running compilation completed successfully."
+                    };
+
+                    return CompleteRefreshResult(result);
+                }
+
+                if (string.Equals(pollResp, "COMPILATION_ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    var refreshResultPath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId);
+                    var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId);
+                    if (result != null)
+                    {
+                        // Let the poller's next iteration consume the
+                        // operation-scoped file through OnResultFound. That
+                        // keeps terminal cleanup and completion reporting on
+                        // the normal authoritative-result path.
+                        return null;
+                    }
+
+                    if (!acceptCurrentCompilationState || !currentCompilationWasProven)
+                    {
+                        return null;
+                    }
+
+                    // Allow a short settle delay for diagnostics from the already
+                    // observed compilation to become visible. This is not an
+                    // operation timeout.
                     await Task.Delay(200, ct);
                     string diag = ReadCompilationErrors();
-                    return new UnityRefreshResult
+                    return CompleteRefreshResult(new UnityRefreshResult
                     {
                         OperationId = opId,
                         Success = false,
                         Message = !string.IsNullOrWhiteSpace(diag) ? diag : "Unity script compilation failed."
-                    };
+                    });
                 }
 
                 return null;
@@ -481,6 +585,40 @@ public class UnityClient : IUnityClient
         return await PollOperationUntilTerminalAsync(spec, cancellationToken);
     }
 
+    private static UnityRefreshResult? TryCreateRefreshTerminalResult(string? response, string operationId)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        string trimmed = response.Trim();
+        if (trimmed.StartsWith("INTERRUPTION", StringComparison.OrdinalIgnoreCase))
+        {
+            string message = trimmed.Length > 12 ? trimmed[12..].Trim() : "Operation interrupted.";
+            return new UnityRefreshResult
+            {
+                OperationId = operationId,
+                Success = false,
+                Interrupted = true,
+                Message = ProtocolCodec.UnescapeLine(message)
+            };
+        }
+
+        if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
+        {
+            return new UnityRefreshResult
+            {
+                OperationId = operationId,
+                Success = false,
+                Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(trimmed))
+            };
+        }
+
+        return null;
+    }
+
     public Task<UnityEvalResult> EvalAsync(string code, CancellationToken cancellationToken) =>
         EvalAsync(code, null, cancellationToken);
 
@@ -496,7 +634,7 @@ public class UnityClient : IUnityClient
         {
             Progress = 0,
             Total = 100,
-            Message = "Refreshing AssetDatabase prior to evaluation..."
+            Message = "Checking compilation and pending AssetDatabase changes before evaluation..."
         });
 
         IProgress<ProgressNotificationValue>? refreshProgress = progress == null ? null : new ProgressRelay(p =>
@@ -506,11 +644,11 @@ public class UnityClient : IUnityClient
             {
                 Progress = scaled,
                 Total = 100,
-                Message = p.Message ?? "Refreshing AssetDatabase prior to evaluation..."
+                Message = p.Message ?? "Checking compilation and pending AssetDatabase changes before evaluation..."
             });
         });
 
-        var refreshResult = await RefreshAsync(isRecompile: false, refreshProgress, cancellationToken);
+        var refreshResult = await RefreshIfNeededAsync(refreshProgress, cancellationToken);
         if (!refreshResult.Success)
         {
             return new UnityEvalResult
@@ -539,7 +677,19 @@ public class UnityClient : IUnityClient
             string command = $"EVAL {opId} {escapedCode}";
 
             _logger.LogInformation("Sending EVAL operation {OpId}...", opId);
-            string? initialResponse = await SendCommandAsync(command, 10, cancellationToken);
+            string? initialResponse;
+            try
+            {
+                initialResponse = await SendCommandAsync(command, 10, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The command may have reached Unity before its RUNNING
+                // acknowledgement was returned. Ensure that an accepted
+                // operation is cancelled even though polling never began.
+                await CancelOperationAsync(opId, "eval");
+                throw;
+            }
 
             // Check if result already available
             var immediateResult = TryReadJsonFile<UnityEvalResult>(resultFile, r => r.OperationId == opId);
@@ -560,7 +710,7 @@ public class UnityClient : IUnityClient
                         Message = "Unity is compiling script assemblies. Waiting for compilation to complete..."
                     });
 
-                    var compResult = await RefreshAsync(isRecompile: false, refreshProgress, cancellationToken);
+                    var compResult = await RefreshIfNeededAsync(refreshProgress, cancellationToken);
                     if (!compResult.Success)
                     {
                         return new UnityEvalResult
@@ -780,10 +930,35 @@ public class UnityClient : IUnityClient
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        if (!TestModeParser.TryNormalize(mode, out string testMode))
+        {
+            return new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "InvalidInput",
+                Message = TestModeParser.InvalidModeMessage
+            };
+        }
+
+        if (!TestFilterValidation.TryValidate(
+                testNames,
+                groupNames,
+                categoryNames,
+                assemblyNames,
+                out string invalidFilterMessage))
+        {
+            return new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "InvalidInput",
+                Message = invalidFilterMessage
+            };
+        }
+
         progress?.Report(new ProgressNotificationValue
         {
             Progress = 0,
-            Message = "Checking compilation and refreshing AssetDatabase..."
+            Message = "Checking compilation and pending AssetDatabase changes before tests..."
         });
 
         IProgress<ProgressNotificationValue>? refreshProgress = progress == null ? null : new ProgressRelay(p =>
@@ -791,11 +966,11 @@ public class UnityClient : IUnityClient
             progress.Report(new ProgressNotificationValue
             {
                 Progress = 0,
-                Message = p.Message ?? "Checking compilation and refreshing AssetDatabase..."
+                Message = p.Message ?? "Checking compilation and pending AssetDatabase changes before tests..."
             });
         });
 
-        var refreshResult = await RefreshAsync(isRecompile: false, refreshProgress, cancellationToken);
+        var refreshResult = await RefreshIfNeededAsync(refreshProgress, cancellationToken);
         if (!refreshResult.Success)
         {
             return new UnityTestRunResult
@@ -805,14 +980,6 @@ public class UnityClient : IUnityClient
                 Message = refreshResult.Message
             };
         }
-
-        string testMode = mode?.Trim().ToLowerInvariant() switch
-        {
-            "playmode" => "playmode",
-            "editmode" => "editmode",
-            "all" => "all",
-            _ => "all"
-        };
 
         while (true)
         {
@@ -841,7 +1008,16 @@ public class UnityClient : IUnityClient
             });
 
             _logger.LogInformation("Sending RUN_TESTS operation {OpId} (mode: {Mode})...", opId, testMode);
-            string? initialResponse = await SendCommandAsync(command, 10, cancellationToken);
+            string? initialResponse;
+            try
+            {
+                initialResponse = await SendCommandAsync(command, 10, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await CancelOperationAsync(opId, "test");
+                throw;
+            }
 
             var immediateResult = TryReadJsonFile<UnityTestRunResult>(resultFile, r => r.RunId == opId);
             if (immediateResult != null)
@@ -862,7 +1038,7 @@ public class UnityClient : IUnityClient
                         Message = "Unity is compiling script assemblies. Waiting for compilation to complete..."
                     });
 
-                    var compResult = await RefreshAsync(isRecompile: false, refreshProgress, cancellationToken);
+                    var compResult = await RefreshIfNeededAsync(refreshProgress, cancellationToken);
                     if (!compResult.Success)
                     {
                         return new UnityTestRunResult
@@ -897,19 +1073,6 @@ public class UnityClient : IUnityClient
             {
                 return new UnityTestRunResult { RunId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
             }
-            if (initialResponse != null && initialResponse.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
-            {
-                var res = TryReadJsonFile<UnityTestRunResult>(resultFile, r => r.RunId == opId);
-                if (res != null)
-                {
-                    try { File.Delete(resultFile); } catch { }
-                    ReportFinalProgress(progress, res);
-                    return res;
-                }
-
-                return new UnityTestRunResult { RunId = opId, Success = true, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
-            }
-
         int lastCompleted = -1;
         string? lastTestName = null;
         string? lastStatus = null;
@@ -924,6 +1087,7 @@ public class UnityClient : IUnityClient
             PollCommand = $"POLL_TESTS {opId}",
             PollTimeoutSeconds = 5,
             PollIntervalMs = PollIntervalMs,
+            RequireDurableResult = true,
             OnResultFound = res =>
             {
                 ReportFinalProgress(progress, res);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -118,6 +120,7 @@ public class ToolFormattingTests
         public string[]? LastAssemblyNames { get; private set; }
         public string? LastMode { get; private set; }
         public bool LastFailedOnly { get; private set; }
+        public int RunTestsCallCount { get; private set; }
 
         public override Task<UnityTestRunResult> RunTestsAsync(
             string? filter,
@@ -146,6 +149,7 @@ public class ToolFormattingTests
             IProgress<ProgressNotificationValue>? progress = null,
             CancellationToken cancellationToken = default)
         {
+            RunTestsCallCount++;
             LastTestNames = testNames;
             LastGroupNames = groupNames;
             LastCategoryNames = categoryNames;
@@ -186,7 +190,10 @@ public class ToolFormattingTests
         Directory.CreateDirectory(tempSubDir);
         try
         {
-            var realPm = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var realPm = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => new[] { Process.GetCurrentProcess() }
+            };
             int testPid = Environment.ProcessId;
 
             // When PidFile exists with matching PID -> Batchmode
@@ -411,6 +418,31 @@ public class ToolFormattingTests
     }
 
     [Fact]
+    public async Task UnityEval_WhenLogsAreNull_ReturnsInterruptedMessageWithoutThrowing()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Interrupted = true,
+                Message = "Command interrupted by Unity recompilation.",
+                Logs = null!
+            };
+
+            var result = await tools.UnityEvalAsync("return 42;");
+
+            Assert.True(result.IsError);
+            Assert.Equal("Command interrupted by Unity recompilation.", GetResultText(result));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task UnityEval_WithNullReturnPayload_ReturnsNullLiteral()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
@@ -614,6 +646,106 @@ public class ToolFormattingTests
     }
 
     [Fact]
+    public async Task UnityRunTests_WhenFailedTestsAreNull_ReturnsInterruptedMessageWithoutThrowing()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                Interrupted = true,
+                Message = "Test run interrupted by Unity recompilation.",
+                FailedTests = null!
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Equal("Test run interrupted: Test run interrupted by Unity recompilation.", text);
+            Assert.DoesNotContain("Failures:", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenModeIsUnsupported_ReturnsValidationErrorBeforeCallingClient()
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            var result = await tools.UnityRunTestsAsync(mode: "smoketest");
+
+            Assert.True(result.IsError);
+            Assert.Equal(TestModeParser.InvalidModeMessage, GetResultText(result));
+            Assert.Equal(0, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task UnityRunTests_WhenModeIsBlankOrNull_NormalizesToAllAndCallsClient(string? mode)
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync(mode: mode);
+
+            Assert.False(result.IsError);
+            Assert.Equal("all", client.LastMode);
+            Assert.Equal(1, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("all", "all")]
+    [InlineData("editmode", "editmode")]
+    [InlineData("playmode", "playmode")]
+    [InlineData(" EDITMODE ", "editmode")]
+    public async Task UnityRunTests_WhenModeIsValid_PassesCanonicalModeToClient(string mode, string expectedMode)
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync(mode: mode);
+
+            Assert.False(result.IsError);
+            Assert.Equal(expectedMode, client.LastMode);
+            Assert.Equal(1, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task UnityRunTests_MoreThan25Failures_CapsDetailedOutputAndSummarizesRemainder()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
@@ -663,6 +795,58 @@ public class ToolFormattingTests
             // Past index 24 (25..29) are truncated and summarized
             Assert.DoesNotContain("• MySuite.Test_Method_25", text);
             Assert.Contains("... and 5 more failed test(s).", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_LargeDetailedFailures_ReservesBudgetForLaterSummaries()
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            string largeStackTrace = new string('S', McpOutputLimits.MaxFailureStackTraceCharacters * 2);
+            var failedTests = new List<FailedTestInfo>();
+            for (int i = 0; i < 25; i++)
+            {
+                failedTests.Add(new FailedTestInfo
+                {
+                    Name = $"LargeFailure_{i}",
+                    FullName = $"Suite.LargeFailure_{i}",
+                    Message = $"Failure summary {i}",
+                    StackTrace = largeStackTrace,
+                    Duration = 0.05
+                });
+            }
+
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                ResultState = "Failed",
+                FailCount = failedTests.Count,
+                FailedTests = failedTests
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+
+            Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+            Assert.Contains("• Suite.LargeFailure_0 (0.050s)", text);
+            Assert.Contains(McpOutputLimits.FailureStackTraceTruncationMarker, text);
+            Assert.Contains(McpOutputLimits.DetailedFailureOutputTruncationMarker, text);
+
+            // Every later failure remains discoverable as a compact summary despite the large
+            // first-five detail payload consuming most of the aggregate response budget.
+            for (int i = 5; i < failedTests.Count; i++)
+            {
+                Assert.Contains($"• Suite.LargeFailure_{i}: Failure summary {i}", text);
+                Assert.DoesNotContain($"• Suite.LargeFailure_{i} (0.050s)", text);
+            }
         }
         finally
         {
@@ -786,6 +970,116 @@ public class ToolFormattingTests
         finally
         {
             try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityEval_PublicOutput_EnforcesUtf8BudgetWithoutSplittingEmoji()
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = true,
+                Payload = string.Concat(Enumerable.Repeat("界😀", McpOutputLimits.MaxFormattedOutputCharacters / 2))
+            };
+
+            var result = await tools.UnityEvalAsync("return value;");
+            string text = GetResultText(result);
+
+            Assert.False(result.IsError);
+            Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+            Assert.True(Encoding.UTF8.GetByteCount(text) <= McpOutputLimits.MaxFormattedOutputBytes);
+            Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, text);
+            AssertValidUtf16(text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void BoundedTextBuilder_ByteBudgetPreservesSurrogatePairs()
+    {
+        var builder = new BoundedTextBuilder(
+            maxCharacters: 64,
+            maxBytes: 16,
+            aggregateMarker: "[truncated]");
+
+        builder.Append("😀😀😀😀😀");
+        string text = builder.ToString();
+
+        Assert.True(text.Length <= 64);
+        Assert.True(Encoding.UTF8.GetByteCount(text) <= 16);
+        Assert.Equal("😀[truncated]", text);
+        AssertValidUtf16(text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BoundedTextBuilder_BoundedEntryPointsDoNotSplitSurrogatePairs(bool trimTrailingWhitespace)
+    {
+        var builder = new BoundedTextBuilder(
+            maxCharacters: 64,
+            maxBytes: 1024,
+            aggregateMarker: "[aggregate]");
+        const string marker = "[x]";
+        string value = trimTrailingWhitespace ? "😀😀😀😀  \t" : "😀😀😀😀";
+
+        if (trimTrailingWhitespace)
+        {
+            builder.AppendTrimmedBounded(value, maxCharacters: 6, marker: marker);
+        }
+        else
+        {
+            builder.AppendBounded(value, maxCharacters: 6, marker: marker);
+        }
+
+        string text = builder.ToString();
+
+        Assert.Equal("😀[x]", text);
+        AssertValidUtf16(text);
+    }
+
+    [Fact]
+    public void McpOutputLimits_TruncateDoesNotSplitSurrogatePairs()
+    {
+        string text = McpOutputLimits.Truncate("😀😀😀😀", maxCharacters: 6, marker: "[x]");
+
+        Assert.Equal("😀[x]", text);
+        AssertValidUtf16(text);
+    }
+
+    [Theory]
+    [InlineData(5, "😀[x]")]
+    [InlineData(6, "😀[x]")]
+    [InlineData(7, "😀😀[x]")]
+    [InlineData(4, "[x]")]
+    [InlineData(3, "[x]")]
+    public void McpOutputLimits_Truncate_PreservesSurrogatePairIntegrityAtAllCutoffs(int maxCharacters, string expected)
+    {
+        string input = "😀😀😀😀";
+        string result = McpOutputLimits.Truncate(input, maxCharacters, "[x]");
+        Assert.Equal(expected, result);
+        AssertValidUtf16(result);
+    }
+
+    private static void AssertValidUtf16(string value)
+    {
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]))
+            {
+                Assert.True(i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]));
+                i++;
+            }
+            else
+            {
+                Assert.False(char.IsLowSurrogate(value[i]));
+            }
         }
     }
 
@@ -1096,6 +1390,103 @@ public class ToolFormattingTests
             Assert.False(arrayResult.IsError);
             Assert.NotNull(client.LastTestNames);
             Assert.Equal(["TestA", "TestB"], client.LastTestNames);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("testNames", "")]
+    [InlineData("testNames", " ")]
+    [InlineData("groupNames", "")]
+    [InlineData("groupNames", " ")]
+    [InlineData("categoryNames", "")]
+    [InlineData("categoryNames", " ")]
+    [InlineData("assemblyNames", "")]
+    [InlineData("assemblyNames", " ")]
+    public async Task UnityRunTests_BlankSingleFilter_ReturnsErrorBeforeCallingClient(string filterName, string value)
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            CallToolResult result = filterName switch
+            {
+                "testNames" => await tools.UnityRunTestsAsync(testNames: value),
+                "groupNames" => await tools.UnityRunTestsAsync(groupNames: value),
+                "categoryNames" => await tools.UnityRunTestsAsync(categoryNames: value),
+                "assemblyNames" => await tools.UnityRunTestsAsync(assemblyNames: value),
+                _ => throw new ArgumentOutOfRangeException(nameof(filterName))
+            };
+
+            Assert.True(result.IsError);
+            Assert.Contains($"Invalid test filter '{filterName}'", GetResultText(result));
+            Assert.Equal(0, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("testNames")]
+    [InlineData("groupNames")]
+    [InlineData("categoryNames")]
+    [InlineData("assemblyNames")]
+    public async Task UnityRunTests_BlankArrayElement_ReturnsErrorBeforeCallingClient(string filterName)
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            CallToolResult result = filterName switch
+            {
+                "testNames" => await tools.UnityRunTestsAsync(testNames: ["Valid", " ", "AlsoValid"]),
+                "groupNames" => await tools.UnityRunTestsAsync(groupNames: ["Valid.*", " ", "AlsoValid.*"]),
+                "categoryNames" => await tools.UnityRunTestsAsync(categoryNames: ["Valid", " ", "AlsoValid"]),
+                "assemblyNames" => await tools.UnityRunTestsAsync(assemblyNames: ["Valid", " ", "AlsoValid"]),
+                _ => throw new ArgumentOutOfRangeException(nameof(filterName))
+            };
+
+            Assert.True(result.IsError);
+            Assert.Contains($"Invalid test filter '{filterName}'", GetResultText(result));
+            Assert.Equal(0, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_ValidMixedSingleAndArrayFilters_PassThroughWithoutBroadening()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync(
+                testNames: "Namespace.Fixture.Test",
+                groupNames: ["Namespace.Fixture.*", "OtherFixture.*"],
+                categoryNames: "Fast",
+                assemblyNames: ["Project.Tests", "Project.EditorTests"]);
+
+            Assert.False(result.IsError);
+            Assert.NotNull(client.LastTestNames);
+            Assert.Equal(["Namespace.Fixture.Test"], client.LastTestNames);
+            Assert.NotNull(client.LastGroupNames);
+            Assert.Equal(["Namespace.Fixture.*", "OtherFixture.*"], client.LastGroupNames);
+            Assert.NotNull(client.LastCategoryNames);
+            Assert.Equal(["Fast"], client.LastCategoryNames);
+            Assert.NotNull(client.LastAssemblyNames);
+            Assert.Equal(["Project.Tests", "Project.EditorTests"], client.LastAssemblyNames);
+            Assert.Equal(1, client.RunTestsCallCount);
         }
         finally
         {
@@ -1559,6 +1950,58 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
+    public void FormatCompilerDiagnostics_WhenRawTextIsOversized_PreservesSuccessTrailerWithinLimit()
+    {
+        string diagnosticText = new string('r', McpOutputLimits.MaxFormattedOutputCharacters * 2);
+
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            diagnosticText,
+            projectRoot: null,
+            successTrailer: "Refresh succeeded.",
+            isSuccess: true);
+
+        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.EndsWith("Refresh succeeded.", formatted);
+        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, formatted);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_WhenManyStructuredErrors_PreservesFailureTrailerWithinLimit()
+    {
+        string diagnosticText = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(1, 10_000).Select(i =>
+                $"Assets/Scripts/Error{i}.cs(1,1): error CS1000: Failure {i}"));
+
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            diagnosticText,
+            projectRoot: "/project",
+            failureTrailer: "Compilation failed.");
+
+        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.True(Encoding.UTF8.GetByteCount(formatted) <= McpOutputLimits.MaxFormattedOutputBytes);
+        Assert.EndsWith("Compilation failed.", formatted);
+        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, formatted);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_WhenDiagnosticMessageIsOversized_PreservesFailureTrailerWithinLimit()
+    {
+        string diagnosticText =
+            $"Assets/Scripts/Error.cs(1,1): error CS1000: {new string('m', McpOutputLimits.MaxFormattedOutputCharacters * 2)}";
+
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            diagnosticText,
+            projectRoot: "/project",
+            failureTrailer: "Compilation failed.");
+
+        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.True(Encoding.UTF8.GetByteCount(formatted) <= McpOutputLimits.MaxFormattedOutputBytes);
+        Assert.EndsWith("Compilation failed.", formatted);
+        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, formatted);
+    }
+
+    [Fact]
     public async Task DiagnosticFormatter_CustomImplementationCanBeInjectedIntoUnityTools()
     {
         var customFormatter = new TestCustomDiagnosticFormatter();
@@ -2015,6 +2458,65 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Equal(expectedUri, uri);
     }
 
+    [Theory]
+    [InlineData(
+        "Assets/My Scripts/50% complete/#draft?.cs",
+        7,
+        "/Users/tester/My Project",
+        "file:///Users/tester/My%20Project/Assets/My%20Scripts/50%25%20complete/%23draft%3F.cs#L7")]
+    [InlineData(
+        "C:\\Work Folder\\foo#bar%?.cs",
+        42,
+        "C:\\Project",
+        "file:///C:/Work%20Folder/foo%23bar%25%3F.cs#L42")]
+    [InlineData(
+        "/home/tester/Проект/naïve file.cs",
+        3,
+        "/home/tester",
+        "file:///home/tester/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82/na%C3%AFve%20file.cs#L3")]
+    [InlineData(
+        "\\\\build-server\\Shared Folder\\foo#bar.cs",
+        5,
+        "C:/Project",
+        "file://build-server/Shared%20Folder/foo%23bar.cs#L5")]
+    public void BuildFileUri_EncodesRawPathComponentsAcrossPlatformStyles(
+        string file,
+        int line,
+        string projectRoot,
+        string expectedUri)
+    {
+        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, projectRoot));
+    }
+
+    [Fact]
+    public void BuildFileUri_EncodesExtractedSpecialCharactersAndPreservesLineAnchor()
+    {
+        const string stackTrace = "at Suite.Test() in C:\\Project Folder\\Assets\\file#name%.cs:line 12";
+
+        var (file, line, uri) = UnityTools.ExtractSourceLocation(stackTrace, "C:/Project");
+
+        Assert.Equal("C:\\Project Folder\\Assets\\file#name%.cs", file);
+        Assert.Equal(12, line);
+        Assert.Equal("file:///C:/Project%20Folder/Assets/file%23name%25.cs#L12", uri);
+    }
+
+    [Theory]
+    [InlineData(
+        "file:///C:/Project%20Folder/Source%23.cs",
+        19,
+        "file:///C:/Project%20Folder/Source%23.cs#L19")]
+    [InlineData(
+        "file://build-server/Shared Folder/naïve%20file.cs#L8",
+        19,
+        "file://build-server/Shared%20Folder/na%C3%AFve%20file.cs#L8")]
+    public void BuildFileUri_EncodesExistingFileUriWithoutDoubleEncodingOrReplacingAnchor(
+        string fileUri,
+        int line,
+        string expectedUri)
+    {
+        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(fileUri, line, "C:/Project"));
+    }
+
     // ==========================================
     // 7. Tool description regression tests
     // ==========================================
@@ -2022,7 +2524,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     [Theory]
     [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary.")]
     [InlineData("unity_eval", "Evaluates C# top-level script source code in-memory against the active Unity Editor to query or modify state. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result; void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
-    [InlineData("unity_run_tests", "Runs EditMode/PlayMode tests with failure diagnostics.")]
+    [InlineData("unity_run_tests", "Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported. Set failedOnly to run only tests that previously failed. Pending changes are refreshed automatically, so a preceding unity_refresh is normally unnecessary.")]
     public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
     {
         var methods = typeof(UnityTools).GetMethods(BindingFlags.Public | BindingFlags.Instance);
@@ -2168,11 +2670,21 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var nullResult = JsonSerializer.Deserialize<SingleOrArray>("null");
         Assert.Null(nullResult);
 
-        // 4b. Whitespace / empty string deserialization returns null
+        // 4b. Whitespace / empty string deserialization retains an invalid marker
+        // so the tool can reject it instead of broadening to an unfiltered run.
         var emptyStringResult = JsonSerializer.Deserialize<SingleOrArray>("\"\"");
-        Assert.Null(emptyStringResult);
+        Assert.NotNull(emptyStringResult);
+        Assert.True(emptyStringResult.HasBlankItems);
+        Assert.Empty(emptyStringResult);
         var whitespaceStringResult = JsonSerializer.Deserialize<SingleOrArray>("\"   \"");
-        Assert.Null(whitespaceStringResult);
+        Assert.NotNull(whitespaceStringResult);
+        Assert.True(whitespaceStringResult.HasBlankItems);
+        Assert.Empty(whitespaceStringResult);
+
+        var whitespaceArrayResult = JsonSerializer.Deserialize<SingleOrArray>("[\"Valid\", \" \"]");
+        Assert.NotNull(whitespaceArrayResult);
+        Assert.True(whitespaceArrayResult.HasBlankItems);
+        Assert.Equal(["Valid"], whitespaceArrayResult.ToArray());
 
         // 5. Invalid token (number) throws JsonException
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SingleOrArray>("123"));
@@ -2327,9 +2839,10 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var fromNullCollection = new SingleOrArray((IEnumerable<string>)null!);
         Assert.Empty(fromNullCollection);
 
-        // Whitespace and empty strings filtered out
+        // Whitespace and empty strings are retained as invalid metadata.
         var fromEmptyItems = new SingleOrArray("  ", "", "\t");
         Assert.Empty(fromEmptyItems);
+        Assert.Equal(3, fromEmptyItems.BlankItemCount);
     }
 
     [Fact]
@@ -2365,11 +2878,13 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
-    public void SingleOrArray_Constructors_ProtectInvariant_FilteringNullEmptyAndWhitespace()
+    public void SingleOrArray_Constructors_RetainBlankValuesAsValidationMetadata()
     {
         // 1. Single string constructor with whitespace
         var fromWhitespace = new SingleOrArray("   \t  \r\n  ");
         Assert.Empty(fromWhitespace);
+        Assert.True(fromWhitespace.HasBlankItems);
+        Assert.Equal(1, fromWhitespace.BlankItemCount);
 
         // 2. Single string constructor with null
         var fromNullSingle = new SingleOrArray((string?)null);
@@ -2384,6 +2899,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         string?[] mixedParams = ["First", null, "", "   ", "Second", "\t", "Third", " "];
         var fromMixedParams = new SingleOrArray(mixedParams);
         Assert.Equal(3, fromMixedParams.Count);
+        Assert.Equal(4, fromMixedParams.BlankItemCount);
         Assert.Equal("First", fromMixedParams[0]);
         Assert.Equal("Second", fromMixedParams[1]);
         Assert.Equal("Third", fromMixedParams[2]);
@@ -2393,18 +2909,21 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var mixedList = new List<string?> { "Alpha", null, "", "   ", "Beta" };
         var fromMixedEnumerable = new SingleOrArray(mixedList);
         Assert.Equal(2, fromMixedEnumerable.Count);
+        Assert.Equal(2, fromMixedEnumerable.BlankItemCount);
         Assert.Equal("Alpha", fromMixedEnumerable[0]);
         Assert.Equal("Beta", fromMixedEnumerable[1]);
 
-        // 6. C# 12 collection expression syntax protects invariant
+        // 6. C# 12 collection expression syntax retains invalid metadata.
         SingleOrArray fromCollectionExpr = ["One", "", "   ", "Two"];
         Assert.Equal(2, fromCollectionExpr.Count);
+        Assert.Equal(2, fromCollectionExpr.BlankItemCount);
         Assert.Equal("One", fromCollectionExpr[0]);
         Assert.Equal("Two", fromCollectionExpr[1]);
 
-        // 7. Create method directly protects invariant with nulls
+        // 7. Create method directly retains invalid metadata with nulls.
         var fromCreate = SingleOrArray.Create(["One", null, "", "   ", "Two"]);
         Assert.Equal(2, fromCreate.Count);
+        Assert.Equal(2, fromCreate.BlankItemCount);
         Assert.Equal("One", fromCreate[0]);
         Assert.Equal("Two", fromCreate[1]);
     }
@@ -2547,4 +3066,3 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             => "CUSTOM_DIAGNOSTIC";
     }
 }
-

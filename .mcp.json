@@ -3,9 +3,10 @@
     "unity-lean-mcp": {
       "command": "dotnet",
       "args": [
-        "UnityLeanMcp.Mcp.dll"
-      ],
-      "cwd": "C:/Users/perev/Code/UnityCliRunner/src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/"
+        "src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll",
+        "--project",
+        "src/UnityLeanMcp.Unity3d"
+      ]
     }
   }
 }

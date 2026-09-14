@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <StartupObject>UnityLeanMcp.Mcp.Tests.TestProcessEntryPoint</StartupObject>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -28,7 +30,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\build\Editor\RoslynCompilerHelper.cs" Link="RoslynCompilerHelper.cs">
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RoslynCompilerHelper.cs" Link="RoslynCompilerHelper.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\WorkerThreadSnapshots.cs" Link="WorkerThreadSnapshots.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\OperationStateCache.cs" Link="OperationStateCache.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\WorkerDiagnosticsLogger.cs" Link="WorkerDiagnosticsLogger.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ServerThreadShutdown.cs" Link="ServerThreadShutdown.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpStaticHistoryWriter.cs" Link="UnityLeanMcpStaticHistoryWriter.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\McpConfigurationPaths.cs" Link="McpConfigurationPaths.cs">
       <Nullable>disable</Nullable>
     </Compile>
   </ItemGroup>

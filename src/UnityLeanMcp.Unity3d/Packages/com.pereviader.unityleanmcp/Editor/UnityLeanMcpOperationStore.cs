@@ -33,11 +33,11 @@ namespace UnityLeanMcp
     internal static class UnityLeanMcpOperationStore
     {
         private const string EditorSessionKey = "UnityLeanMcp.EditorSessionId";
-        private static readonly object s_CacheLock = new object();
-        private static UnityLeanMcpOperationState s_CachedState;
+        private static readonly OperationStateCache s_CachedState = new OperationStateCache();
         private static string s_EditorSessionId;
 
         internal static string OperationFilePath => UnityLeanMcpPaths.OperationFile;
+        private static string WorkerOperationFilePath => UnityLeanMcpPaths.WorkerOperationFile;
 
         internal static string EditorSessionId
         {
@@ -108,35 +108,23 @@ namespace UnityLeanMcp
         {
             try
             {
-                if (!File.Exists(OperationFilePath))
+                string json;
+                WorkerThreadSnapshots.FileReadStatus fileStatus =
+                    WorkerThreadSnapshots.TryReadFileWithStatus(OperationFilePath, out json);
+                if (fileStatus == WorkerThreadSnapshots.FileReadStatus.Missing)
                 {
-                    SetCachedState(null);
+                    s_CachedState.Clear();
                     return null;
                 }
 
-                string json = null;
-                for (int i = 0; i < 3; i++)
+                if (fileStatus == WorkerThreadSnapshots.FileReadStatus.Unavailable)
                 {
-                    try
-                    {
-                        json = File.ReadAllText(OperationFilePath);
-                        if (!string.IsNullOrWhiteSpace(json))
-                        {
-                            break;
-                        }
-                    }
-                    catch (IOException) when (i < 2)
-                    {
-                        System.Threading.Thread.Sleep(10);
-                    }
-                    catch (UnauthorizedAccessException) when (i < 2)
-                    {
-                        System.Threading.Thread.Sleep(10);
-                    }
+                    return FromWorkerSnapshot(s_CachedState.GetCached());
                 }
 
                 if (string.IsNullOrWhiteSpace(json))
                 {
+                    s_CachedState.Clear();
                     return null;
                 }
 
@@ -144,7 +132,7 @@ namespace UnityLeanMcp
                 if (state == null || !IsValidToken(state.operationId) || !IsValidToken(state.kind))
                 {
                     QuarantineMalformedRecord();
-                    SetCachedState(null);
+                    s_CachedState.Clear();
                     return null;
                 }
 
@@ -153,29 +141,16 @@ namespace UnityLeanMcp
             }
             catch (Exception ex)
             {
-                SetCachedState(null);
+                s_CachedState.Clear();
                 Debug.LogError($"UnityLeanMcp: Failed to read operation journal: {ex}");
                 return null;
             }
         }
 
-        internal static UnityLeanMcpOperationState ReadThreadSafeSnapshot()
+        internal static WorkerOperationStateSnapshot ReadThreadSafeSnapshot()
         {
-            lock (s_CacheLock)
-            {
-                if (s_CachedState != null)
-                {
-                    return Clone(s_CachedState);
-                }
-
-                if (!File.Exists(OperationFilePath))
-                {
-                    s_CachedState = null;
-                    return null;
-                }
-
-                return Read();
-            }
+            s_CachedState.Read(WorkerOperationFilePath, out var snapshot);
+            return snapshot;
         }
 
         internal static bool Update(string operationId, string status)
@@ -203,7 +178,7 @@ namespace UnityLeanMcp
             try
             {
                 File.Delete(OperationFilePath);
-                SetCachedState(null);
+                s_CachedState.Clear();
                 return true;
             }
             catch (Exception ex)
@@ -276,6 +251,22 @@ namespace UnityLeanMcp
             }
         }
 
+        /// <summary>
+        /// Attempts to update a shared history snapshot without allowing
+        /// contention on that non-authoritative file to affect the durable
+        /// operation result.
+        /// </summary>
+        internal static bool TryWriteStaticHistory(string path, string content, string operationId)
+        {
+            if (UnityLeanMcpStaticHistoryWriter.TryWrite(path, content, out var failure))
+            {
+                return true;
+            }
+
+            Debug.LogWarning($"UnityLeanMcp: Failed to update static history for operation '{operationId}': {failure.Message}");
+            return false;
+        }
+
         private static bool IsValidToken(string value)
         {
             if (string.IsNullOrEmpty(value) || value.Length > 128)
@@ -296,24 +287,33 @@ namespace UnityLeanMcp
 
         private static void SetCachedState(UnityLeanMcpOperationState state)
         {
-            lock (s_CacheLock)
-            {
-                s_CachedState = Clone(state);
-            }
+            s_CachedState.Set(ToWorkerSnapshot(state));
         }
 
-        private static UnityLeanMcpOperationState Clone(UnityLeanMcpOperationState state)
+        private static UnityLeanMcpOperationState FromWorkerSnapshot(WorkerOperationStateSnapshot state)
         {
             if (state == null) return null;
             return new UnityLeanMcpOperationState
             {
-                operationId = state.operationId,
-                kind = state.kind,
-                status = state.status,
-                editorSessionId = state.editorSessionId,
-                startedUtc = state.startedUtc,
-                updatedUtc = state.updatedUtc
+                operationId = state.OperationId,
+                kind = state.Kind,
+                status = state.Status,
+                editorSessionId = state.EditorSessionId,
+                startedUtc = state.StartedUtc,
+                updatedUtc = state.UpdatedUtc
             };
+        }
+
+        private static WorkerOperationStateSnapshot ToWorkerSnapshot(UnityLeanMcpOperationState state)
+        {
+            if (state == null) return null;
+            return new WorkerOperationStateSnapshot(
+                state.operationId,
+                state.kind,
+                state.status,
+                state.editorSessionId,
+                state.startedUtc,
+                state.updatedUtc);
         }
 
         private static void QuarantineMalformedRecord()

@@ -9,6 +9,7 @@ public interface IUnityPathResolver
     string PortFile { get; }
     string LogFile { get; }
     string PidFile { get; }
+    string StartupLockFile { get; }
     string TestRunningFile { get; }
     string GetResultFilePath(UnityOperationKind kind, string? operationId = null);
 }

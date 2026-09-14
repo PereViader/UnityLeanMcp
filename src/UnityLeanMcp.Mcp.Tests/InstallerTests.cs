@@ -555,4 +555,97 @@ public class InstallerTests
             if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
         }
     }
+
+    [Theory]
+    [InlineData(".mcp.json", "mcpServers")]
+    [InlineData(".cursor/mcp.json", "mcpServers")]
+    [InlineData(".vscode/mcp.json", "servers")]
+    public void TrackedMcpConfig_UsesCheckoutRelativeServerAndProjectPaths(string relativeConfigPath, string rootKey)
+    {
+        string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        string configPath = Path.Combine(repositoryRoot, relativeConfigPath.Replace('/', Path.DirectorySeparatorChar));
+
+        Assert.True(File.Exists(configPath), $"Expected tracked MCP config at {configPath}");
+
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        JsonElement server = document.RootElement
+            .GetProperty(rootKey)
+            .GetProperty("unity-lean-mcp");
+
+        Assert.Equal("dotnet", server.GetProperty("command").GetString());
+        string[] args = server.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll",
+                "--project",
+                "src/UnityLeanMcp.Unity3d"
+            },
+            args);
+        Assert.False(server.TryGetProperty("cwd", out _));
+        Assert.DoesNotContain("C:/Users/perev/", File.ReadAllText(configPath), StringComparison.OrdinalIgnoreCase);
+        Assert.False(Path.IsPathRooted(args[0]));
+        Assert.EndsWith("/MCP~/UnityLeanMcp.Mcp.dll", args[0], StringComparison.Ordinal);
+        Assert.True(Directory.Exists(Path.Combine(repositoryRoot, args[2].Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_WhenPackageIsInsideRepository_ReturnsPortablePaths()
+    {
+        string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
+        string projectRoot = Path.Combine(repositoryRoot, "src", "UnityProject");
+        string mcpDirectory = Path.Combine(projectRoot, "Packages", "com.example.mcp", "MCP~");
+
+        try
+        {
+            bool portable = UnityLeanMcp.McpConfigurationPaths.TryGetPortablePaths(
+                repositoryRoot,
+                mcpDirectory,
+                projectRoot,
+                out string relativeMcpDll,
+                out string relativeProjectRoot);
+
+            Assert.True(portable);
+            Assert.Equal("src/UnityProject/Packages/com.example.mcp/MCP~/UnityLeanMcp.Mcp.dll", relativeMcpDll);
+            Assert.Equal("src/UnityProject", relativeProjectRoot);
+        }
+        finally
+        {
+            if (Directory.Exists(repositoryRoot)) Directory.Delete(repositoryRoot, true);
+        }
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_WhenProjectIsRepositoryRoot_UsesDotPath()
+    {
+        string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
+        string mcpDirectory = Path.Combine(repositoryRoot, "Packages", "com.example.mcp", "MCP~");
+
+        bool portable = UnityLeanMcp.McpConfigurationPaths.TryGetPortablePaths(
+            repositoryRoot,
+            mcpDirectory,
+            repositoryRoot,
+            out string relativeMcpDll,
+            out string relativeProjectRoot);
+
+        Assert.True(portable);
+        Assert.Equal("Packages/com.example.mcp/MCP~/UnityLeanMcp.Mcp.dll", relativeMcpDll);
+        Assert.Equal(".", relativeProjectRoot);
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_WhenPackageIsOutsideRepository_RequestsInstallerSpecificPaths()
+    {
+        string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
+        string externalPackage = Path.Combine(Path.GetTempPath(), "mcp_package_" + Guid.NewGuid().ToString("N"), "MCP~");
+
+        bool portable = UnityLeanMcp.McpConfigurationPaths.TryGetPortablePaths(
+            repositoryRoot,
+            externalPackage,
+            repositoryRoot,
+            out _,
+            out _);
+
+        Assert.False(portable);
+    }
 }

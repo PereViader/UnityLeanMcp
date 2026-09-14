@@ -11,12 +11,11 @@ namespace UnityLeanMcp
         public void Handle(string payload, StreamWriter writer)
         {
             string operationId = payload?.Trim();
-            PollHelper.PollOperationResult<UnityExecuteResult>(
+            PollHelper.PollOperationResult(
                 operationId,
-                UnityLeanMcpPaths.GetExecuteResultFile(operationId),
+                UnityLeanMcpPaths.GetWorkerExecuteResultFile(operationId),
                 null,
                 writer,
-                res => res.operationId,
                 PollHelper.WriteOperationResultResponse);
         }
     }

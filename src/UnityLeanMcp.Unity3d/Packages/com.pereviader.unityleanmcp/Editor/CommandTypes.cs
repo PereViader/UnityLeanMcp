@@ -20,6 +20,7 @@ namespace UnityLeanMcp
         public const string Compiling = "Compiling";
         public const string Refreshing = "Refreshing";
         public const string Recompiling = "Recompiling";
+        public const string Cancelling = "Cancelling";
         public const string Requested = "Requested";
         public const string WaitingForUnity = "WaitingForUnity";
         public const string Reloading = "Reloading";
@@ -62,6 +63,7 @@ namespace UnityLeanMcp
         public string[] categoryNames;
         public string[] assemblyNames;
         public string status;
+        public string jobGuid;
         public string startedUtc;
         public int totalTests;
         public int completedTests;

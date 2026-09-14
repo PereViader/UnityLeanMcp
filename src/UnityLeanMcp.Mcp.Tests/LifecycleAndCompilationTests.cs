@@ -123,6 +123,50 @@ public class LifecycleAndCompilationTests
     }
 
     [Fact]
+    public async Task TestPollReadsDurableOperationAndResultOnWorkerCacheMiss()
+    {
+        string operationFile = Path.Combine(_fixture.UnityRoot, "Temp", "unity_lean_mcp_operation.json");
+        string opId = "worker-cache-miss-" + Guid.NewGuid().ToString("N");
+        string resultFile = Path.Combine(_fixture.UnityRoot, "Temp", $"unity_eval_{opId}.json");
+        string operationJson = $"{{\"operationId\":\"{opId}\",\"kind\":\"eval\",\"status\":\"Executing\",\"editorSessionId\":\"test\",\"startedUtc\":\"2026-09-08T12:00:00.0000000Z\",\"updatedUtc\":\"2026-09-08T12:00:00.0000000Z\"}}";
+        string resultJson = $"{{\"operationId\":\"{opId}\",\"success\":true,\"payload\":\"worker result\"}}";
+
+        try
+        {
+            DeleteFileWithRetry(operationFile);
+            DeleteFileWithRetry(resultFile);
+            WriteAtomic(operationFile, operationJson);
+
+            int port = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance).ReadPortFile();
+            using (var tcpClient = new TcpClient())
+            {
+                await tcpClient.ConnectAsync(IPAddress.Loopback, port);
+                using var stream = tcpClient.GetStream();
+                using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                await writer.WriteLineAsync($"POLL_EVAL {opId}");
+                Assert.Equal("RUNNING", await reader.ReadLineAsync());
+            }
+
+            WriteAtomic(resultFile, resultJson);
+            using (var tcpClient = new TcpClient())
+            {
+                await tcpClient.ConnectAsync(IPAddress.Loopback, port);
+                using var stream = tcpClient.GetStream();
+                using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                await writer.WriteLineAsync($"POLL_EVAL {opId}");
+                Assert.Equal("SUCCESS worker result", await reader.ReadLineAsync());
+            }
+        }
+        finally
+        {
+            DeleteFileWithRetry(operationFile);
+            DeleteFileWithRetry(resultFile);
+        }
+    }
+
+    [Fact]
     public async Task TestExecuteMethodException_DoesNotLeaveStoreBusy()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);

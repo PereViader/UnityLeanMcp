@@ -1,11 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Threading;
 using UnityEditor;
 
 namespace UnityLeanMcp
 {
-    [InitializeOnLoad]
     internal static class OperationLifecycleRegistry
     {
         private static readonly ConcurrentDictionary<string, IOperationLifecycleHandler> s_Handlers =
@@ -14,29 +14,35 @@ namespace UnityLeanMcp
         private static bool s_Initialized;
         private static readonly object s_InitLock = new object();
 
-        static OperationLifecycleRegistry()
-        {
-            EnsureInitialized();
-        }
-
         public static void EnsureInitialized()
         {
-            if (s_Initialized) return;
+            if (Volatile.Read(ref s_Initialized)) return;
             lock (s_InitLock)
             {
-                if (s_Initialized) return;
-                s_Initialized = true;
+                if (Volatile.Read(ref s_Initialized)) return;
                 InitializeDefaultHandlers();
+                Volatile.Write(ref s_Initialized, true);
             }
         }
 
         private static void InitializeDefaultHandlers()
         {
-            Register(new TestLifecycleHandler());
-            Register(new ExecuteLifecycleHandler());
-            Register(new EvalLifecycleHandler());
-            Register(new RefreshLifecycleHandler());
-            Register(new RecompileLifecycleHandler());
+            RegisterDefault(new TestLifecycleHandler());
+            RegisterDefault(new ExecuteLifecycleHandler());
+            RegisterDefault(new EvalLifecycleHandler());
+            RegisterDefault(new RefreshLifecycleHandler());
+            RegisterDefault(new RecompileLifecycleHandler());
+        }
+
+        private static void RegisterDefault(IOperationLifecycleHandler handler)
+        {
+            if (handler == null || string.IsNullOrEmpty(handler.OperationKind))
+            {
+                return;
+            }
+
+            // Preserve an extension registered before the explicit bootstrap.
+            s_Handlers.TryAdd(handler.OperationKind, handler);
         }
 
         public static void Register(IOperationLifecycleHandler handler)
@@ -57,22 +63,47 @@ namespace UnityLeanMcp
                 return false;
             }
 
-            EnsureInitialized();
             return s_Handlers.TryGetValue(kind, out handler);
+        }
+
+        public static OperationCancelResult Cancel(UnityLeanMcpOperationState operation)
+        {
+            if (operation != null && TryGetHandler(operation.kind, out var handler))
+            {
+                return handler.TryCancel(operation.operationId);
+            }
+
+            return OperationCancelResult.NotCancelable;
         }
 
         public static void Cancel(UnityLeanMcpOperationState operation, StreamWriter writer)
         {
-            if (operation != null && TryGetHandler(operation.kind, out var handler))
+            var result = Cancel(operation);
+            switch (result)
             {
-                handler.TryCancel(operation.operationId, writer);
-            }
-            else
-            {
-                writer?.WriteLine("NOT_CANCELABLE");
+                case OperationCancelResult.Cancelled:
+                    writer?.WriteLine("CANCELLED");
+                    break;
+                case OperationCancelResult.NotFound:
+                    writer?.WriteLine("NO_OPERATION");
+                    break;
+                case OperationCancelResult.NotCancelable:
+                default:
+                    writer?.WriteLine("NOT_CANCELABLE");
+                    break;
             }
 
             writer?.Flush();
+        }
+
+        internal static bool TryRequestCancelFromWorker(string operationKind, string operationId)
+        {
+            if (!TryGetHandler(operationKind, out var handler))
+            {
+                return false;
+            }
+
+            return handler.TryRequestCancelFromWorker(operationId);
         }
 
         public static void RecoverOnDomainLoad(UnityLeanMcpOperationState operation, bool isRestart)
@@ -124,10 +155,14 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Test;
 
-        public bool TryCancel(string operationId, StreamWriter writer)
+        public bool TryRequestCancelFromWorker(string operationId)
         {
-            RunTestsHandler.CancelActiveTestRun(operationId, writer);
-            return true;
+            return RunTestsHandler.RequestCancelFromWorker(operationId);
+        }
+
+        public OperationCancelResult TryCancel(string operationId)
+        {
+            return RunTestsHandler.CancelActiveTestRun(operationId);
         }
 
         public void OnEditorRestarted(string operationId, string message)
@@ -150,18 +185,15 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Execute;
 
-        public bool TryCancel(string operationId, StreamWriter writer)
+        public bool TryRequestCancelFromWorker(string operationId)
+        {
+            return ExecuteMethodHandler.CancelActiveExecute(operationId);
+        }
+
+        public OperationCancelResult TryCancel(string operationId)
         {
             bool cancelled = ExecuteMethodHandler.CancelActiveExecute(operationId);
-            if (cancelled)
-            {
-                writer?.WriteLine("CANCELLED");
-            }
-            else
-            {
-                writer?.WriteLine("NOT_CANCELABLE");
-            }
-            return cancelled;
+            return cancelled ? OperationCancelResult.Cancelled : OperationCancelResult.NotCancelable;
         }
 
         public void OnEditorRestarted(string operationId, string message)
@@ -184,18 +216,15 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Eval;
 
-        public bool TryCancel(string operationId, StreamWriter writer)
+        public bool TryRequestCancelFromWorker(string operationId)
+        {
+            return EvalHandler.CancelActiveEval(operationId);
+        }
+
+        public OperationCancelResult TryCancel(string operationId)
         {
             bool cancelled = EvalHandler.CancelActiveEval(operationId);
-            if (cancelled)
-            {
-                writer?.WriteLine("CANCELLED");
-            }
-            else
-            {
-                writer?.WriteLine("NOT_CANCELABLE");
-            }
-            return cancelled;
+            return cancelled ? OperationCancelResult.Cancelled : OperationCancelResult.NotCancelable;
         }
 
         public void OnEditorRestarted(string operationId, string message)
@@ -218,10 +247,14 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Refresh;
 
-        public bool TryCancel(string operationId, StreamWriter writer)
+        public bool TryRequestCancelFromWorker(string operationId)
         {
-            writer?.WriteLine("NOT_CANCELABLE");
             return false;
+        }
+
+        public OperationCancelResult TryCancel(string operationId)
+        {
+            return OperationCancelResult.NotCancelable;
         }
 
         public void OnEditorRestarted(string operationId, string message)
@@ -243,10 +276,14 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Recompile;
 
-        public bool TryCancel(string operationId, StreamWriter writer)
+        public bool TryRequestCancelFromWorker(string operationId)
         {
-            writer?.WriteLine("NOT_CANCELABLE");
             return false;
+        }
+
+        public OperationCancelResult TryCancel(string operationId)
+        {
+            return OperationCancelResult.NotCancelable;
         }
 
         public void OnEditorRestarted(string operationId, string message)

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -10,7 +9,8 @@ namespace UnityLeanMcp.Mcp;
 /// <summary>
 /// A collection of strings that can be deserialized from either a single JSON string
 /// or a JSON array of strings, and implicitly converts to and from string and string[].
-/// Encapsulates items as a read-only list protecting the non-empty, non-whitespace invariant.
+/// Encapsulates valid items as a read-only list while retaining blank-entry metadata
+/// so callers can reject invalid filters instead of accidentally broadening them.
 /// </summary>
 [JsonConverter(typeof(SingleOrArrayJsonConverter))]
 [CollectionBuilder(typeof(SingleOrArray), nameof(Create))]
@@ -18,17 +18,22 @@ public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrAr
 {
     private readonly List<string> _items;
 
+    /// <summary>
+    /// Gets the number of null-free entries that were empty or whitespace-only.
+    /// Null entries remain omitted for backwards-compatible null handling.
+    /// </summary>
+    public int BlankItemCount { get; private set; }
+
+    public bool HasBlankItems => BlankItemCount > 0;
+
     public static SingleOrArray Create(ReadOnlySpan<string?> items)
     {
-        var list = new List<string>(items.Length);
+        var result = new SingleOrArray();
         foreach (var item in items)
         {
-            if (!string.IsNullOrWhiteSpace(item))
-            {
-                list.Add(item);
-            }
+            result.Add(item);
         }
-        return new SingleOrArray(list);
+        return result;
     }
 
     public SingleOrArray()
@@ -39,10 +44,7 @@ public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrAr
     public SingleOrArray(string? single)
     {
         _items = new List<string>(1);
-        if (!string.IsNullOrWhiteSpace(single))
-        {
-            _items.Add(single);
-        }
+        Add(single);
     }
 
     public SingleOrArray(params string?[]? items)
@@ -52,17 +54,30 @@ public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrAr
 
     public SingleOrArray(IEnumerable<string?>? collection)
     {
-        if (collection == null)
+        _items = new List<string>();
+        if (collection != null)
         {
-            _items = new List<string>();
+            foreach (var item in collection)
+            {
+                Add(item);
+            }
         }
-        else
+    }
+
+    private void Add(string? item)
+    {
+        if (item == null)
         {
-            _items = collection
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s!)
-                .ToList();
+            return;
         }
+
+        if (string.IsNullOrWhiteSpace(item))
+        {
+            BlankItemCount++;
+            return;
+        }
+
+        _items.Add(item);
     }
 
     public int Count => _items.Count;
@@ -76,7 +91,7 @@ public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrAr
     public string[] ToArray() => _items.ToArray();
 
     public static implicit operator SingleOrArray?(string? single) =>
-        string.IsNullOrWhiteSpace(single) ? null : new SingleOrArray(single);
+        single == null ? null : new SingleOrArray(single);
 
     public static implicit operator SingleOrArray?(string[]? array) =>
         array == null ? null : new SingleOrArray(array);
@@ -98,6 +113,7 @@ public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrAr
     {
         if (ReferenceEquals(this, other)) return true;
         if (other is null) return false;
+        if (BlankItemCount != other.BlankItemCount) return false;
         if (_items.Count != other._items.Count) return false;
         for (int i = 0; i < _items.Count; i++)
         {
@@ -112,6 +128,7 @@ public sealed class SingleOrArray : IReadOnlyList<string>, IEquatable<SingleOrAr
     public override int GetHashCode()
     {
         var hash = new HashCode();
+        hash.Add(BlankItemCount);
         foreach (var item in _items)
         {
             hash.Add(item);
@@ -138,21 +155,18 @@ public class SingleOrArrayJsonConverter : JsonConverter<SingleOrArray>
         if (reader.TokenType == JsonTokenType.String)
         {
             string? s = reader.GetString();
-            return !string.IsNullOrWhiteSpace(s) ? new SingleOrArray(s) : null;
+            return s == null ? null : new SingleOrArray(s);
         }
 
         if (reader.TokenType == JsonTokenType.StartArray)
         {
-            var items = new List<string>();
+            var items = new List<string?>();
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 if (reader.TokenType == JsonTokenType.String)
                 {
                     string? s = reader.GetString();
-                    if (!string.IsNullOrWhiteSpace(s))
-                    {
-                        items.Add(s);
-                    }
+                    items.Add(s);
                 }
                 else if (reader.TokenType == JsonTokenType.Null)
                 {

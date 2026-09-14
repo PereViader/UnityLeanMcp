@@ -1,9 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,12 +15,27 @@ namespace UnityLeanMcp.Mcp.Tests;
 [Trait("Category", "Unit")]
 public class UnityProcessManagerTests
 {
+    private static string GetDummyExecutablePath()
+    {
+        string executableName = "UnityLeanMcp.Mcp.Tests" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty);
+        return Path.Combine(AppContext.BaseDirectory, executableName);
+    }
+
     private static Process StartDummyProcess()
     {
-        var psi = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? new ProcessStartInfo("ping.exe", "127.0.0.1 -n 15") { CreateNoWindow = true, UseShellExecute = false }
-            : new ProcessStartInfo("sleep", "15") { CreateNoWindow = true, UseShellExecute = false };
-        return Process.Start(psi)!;
+        string executablePath = GetDummyExecutablePath();
+        var psi = new ProcessStartInfo(executablePath)
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false
+        };
+
+        // Launch the test project's own apphost so the fixture does not
+        // depend on an OS utility, shell, or machine-specific PATH entry.
+        psi.ArgumentList.Add("--unity-lean-mcp-dummy-process");
+
+        return Process.Start(psi)
+            ?? throw new InvalidOperationException("The test child process could not be started.");
     }
 
     [Fact]
@@ -270,7 +285,12 @@ public class UnityProcessManagerTests
             string historicalErrorLog = "Assets/Scripts/Broken.cs(10,5): error CS0103: The name 'foo' does not exist in the current context\n";
             await File.WriteAllTextAsync(Path.Combine(tempDir, "unity_background_log.txt"), historicalErrorLog);
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                // The test uses the host test process as a stand-in for Unity.
+                // Inject it explicitly now that production PID files require ownership metadata.
+                ProcessProvider = () => new[] { Process.GetCurrentProcess() }
+            };
 
             // Should succeed without throwing UnityCompilationException from historical log
             var ensureTask = procManager.EnsureUnityRunningAsync(cts.Token);
@@ -357,7 +377,12 @@ public class UnityProcessManagerTests
             string historicalErrorLog = "Assets/Scripts/Broken.cs(10,5): error CS0103: The name 'foo' does not exist in the current context\n";
             await File.WriteAllTextAsync(Path.Combine(tempDir, "unity_background_log.txt"), historicalErrorLog);
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                // The test uses the host test process as a stand-in for Unity.
+                // Inject it explicitly now that production PID files require ownership metadata.
+                ProcessProvider = () => new[] { Process.GetCurrentProcess() }
+            };
 
             // Should wait for socket readiness without aborting on historical errors in WaitForSocketReadinessAsync
             await procManager.EnsureUnityRunningAsync(cts.Token);
@@ -523,6 +548,169 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureUnityRunningAsync_ConcurrentCallsShareProjectStartupAndDisposeLaunchedProcess()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_concurrent_start_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+
+        var firstReadinessEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReadiness = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var manager = new CoordinatedStartupProcessManager(
+            tempDir,
+            firstReadinessEntered,
+            releaseReadiness,
+            NullLogger<UnityProcessManager>.Instance);
+
+        try
+        {
+            Task first = manager.EnsureUnityRunningAsync();
+            await firstReadinessEntered.Task;
+
+            Task second = manager.EnsureUnityRunningAsync();
+            releaseReadiness.SetResult(true);
+
+            await Task.WhenAll(first, second);
+
+            Assert.Equal(1, manager.StartCount);
+            Assert.NotNull(manager.StartedProcess);
+            Assert.Throws<InvalidOperationException>(() => manager.StartedProcess!.HasExited);
+        }
+        finally
+        {
+            releaseReadiness.TrySetResult(true);
+            try
+            {
+                if (manager.StartedPid is int pid)
+                {
+                    using var process = Process.GetProcessById(pid);
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true);
+                    }
+                }
+            }
+            catch { }
+
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void IsUnityRunning_LiveUnrelatedPidInPidFileIsRejected()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_unrelated_pid_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var unrelatedProcess = StartDummyProcess();
+
+        try
+        {
+            var manager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            File.WriteAllText(manager.PathResolver.PidFile, unrelatedProcess.Id.ToString());
+
+            Assert.False(manager.IsUnityRunning(out int? processId));
+            Assert.Null(processId);
+            Assert.False(File.Exists(manager.PathResolver.PidFile));
+        }
+        finally
+        {
+            try { if (!unrelatedProcess.HasExited) unrelatedProcess.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void IsUnityRunning_ReusedPidWithMismatchedIdentityIsRejected()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_reused_pid_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var process = StartDummyProcess();
+
+        try
+        {
+            var manager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            File.WriteAllText(manager.PathResolver.PidFile, process.Id.ToString());
+            File.WriteAllText(
+                manager.PathResolver.PidFile + ".identity.json",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    ProcessId = process.Id,
+                    StartTimeUtcTicks = DateTime.UtcNow.AddHours(-1).Ticks,
+                    ExecutablePath = GetDummyExecutablePath(),
+                    ProjectRoot = manager.PathResolver.ProjectRoot
+                }));
+
+            Assert.False(manager.IsUnityRunning(out int? processId));
+            Assert.Null(processId);
+            Assert.False(File.Exists(manager.PathResolver.PidFile + ".identity.json"));
+        }
+        finally
+        {
+            try { if (!process.HasExited) process.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void IsUnityRunning_MatchingPidIdentityIsAccepted()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_owned_pid_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var process = StartDummyProcess();
+
+        try
+        {
+            var manager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            File.WriteAllText(manager.PathResolver.PidFile, process.Id.ToString());
+            File.WriteAllText(
+                manager.PathResolver.PidFile + ".identity.json",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    ProcessId = process.Id,
+                    StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                    ExecutablePath = GetDummyExecutablePath(),
+                    ProjectRoot = manager.PathResolver.ProjectRoot
+                }));
+
+            Assert.True(manager.IsUnityRunning(out int? processId));
+            Assert.Equal(process.Id, processId);
+        }
+        finally
+        {
+            try { if (!process.HasExited) process.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void IsUnityRunning_MatchingIdentityRecoversWhenPidPointerIsMissing()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_identity_recovery_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var process = Process.GetCurrentProcess();
+
+        try
+        {
+            var manager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            File.WriteAllText(
+                manager.PathResolver.PidFile + ".identity.json",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    ProcessId = process.Id,
+                    StartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks,
+                    ExecutablePath = process.MainModule!.FileName,
+                    ProjectRoot = manager.PathResolver.ProjectRoot
+                }));
+
+            Assert.True(manager.IsUnityRunning(out int? processId));
+            Assert.Equal(process.Id, processId);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void FindProjectUnityPid_WhenMultipleDummyProcessesExist_DoesNotArbitrarilyReturnFirstProcess()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_multi_pid_" + Guid.NewGuid().ToString("N"));
@@ -545,18 +733,125 @@ public class UnityProcessManagerTests
             int? detectedPidWithPort = procManager.FindProjectUnityPid(new[] { proc1, proc2 });
             Assert.Null(detectedPidWithPort);
 
-            // 3. Single process candidate correctly resolves
+            // 3. A single candidate without project proof is still not owned.
             int? singlePid = procManager.FindProjectUnityPid(new[] { proc1 });
-            Assert.Equal(proc1.Id, singlePid);
+            Assert.Null(singlePid);
 
             // 4. ProcessProvider delegate with multiple processes also resolves to null
-            procManager.ProcessProvider = () => new[] { proc1, proc2 };
-            Assert.Null(procManager.FindProjectUnityPid());
+            var procManagerWithMultiple = new UnityProcessManager(
+                procManager.PathResolver,
+                NullLogger<UnityProcessManager>.Instance,
+                executableLocator: procManager.ExecutableLocator,
+                processProvider: () => new[] { proc1, proc2 });
+            Assert.Null(procManagerWithMultiple.FindProjectUnityPid());
         }
         finally
         {
             try { if (!proc1.HasExited) proc1.Kill(true); } catch { }
             try { if (!proc2.HasExited) proc2.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("/Users/example/Unity.app/Contents/MacOS/Unity -projectPath \"{project}\"")]
+    [InlineData("C:\\Program Files\\Unity\\Editor\\Unity.exe -projectPath=\"{project}\"")]
+    public void FindProjectUnityPid_AcceptsExplicitProjectCommandLineEvidenceAcrossPlatforms(string commandLineTemplate)
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_command_line_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var candidate = StartDummyProcess();
+
+        try
+        {
+            string platformProjectPath = commandLineTemplate.StartsWith("C:", StringComparison.Ordinal)
+                ? tempDir.Replace(Path.DirectorySeparatorChar, '\\').Replace(Path.AltDirectorySeparatorChar, '\\')
+                : tempDir.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => new[] { candidate },
+                ProcessCommandLineProvider = _ => commandLineTemplate.Replace("{project}", platformProjectPath, StringComparison.Ordinal)
+            };
+
+            Assert.Equal(candidate.Id, procManager.FindProjectUnityPid());
+            Assert.True(procManager.IsUnityRunning(out int? processId));
+            Assert.Equal(candidate.Id, processId);
+        }
+        finally
+        {
+            try { if (!candidate.HasExited) candidate.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void FindProjectUnityPid_DoesNotTreatUnrelatedCommandLineAsProjectOwnership()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_unrelated_command_line_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var candidate = StartDummyProcess();
+
+        try
+        {
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => new[] { candidate },
+                ProcessCommandLineProvider = _ => "Unity -projectPath /tmp/a-different-project"
+            };
+
+            Assert.Null(procManager.FindProjectUnityPid());
+            Assert.False(procManager.IsUnityRunning(out int? processId));
+            Assert.Null(processId);
+        }
+        finally
+        {
+            try { if (!candidate.HasExited) candidate.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void MacOsCommandLineReader_DoesNotConsumeEnvironmentAfterArgv()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            "/Applications/Unity.app/Contents/MacOS/Unity\0-projectPath\0/Users/example/Project\0SHOULD_NOT_BE_USED\0");
+
+        Assert.True(
+            UnityProcessCommandLineReader.TryBuildMacOsCommandLine(
+                bytes,
+                argc: 3,
+                out string commandLine));
+        Assert.Equal(
+            "/Applications/Unity.app/Contents/MacOS/Unity\0-projectPath\0/Users/example/Project",
+            commandLine);
+        Assert.DoesNotContain("SHOULD_NOT_BE_USED", commandLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IsUnityRunning_LockedUnityLockfileWithOnlyUnprovenCandidateIsRejected()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_unproven_lock_" + Guid.NewGuid().ToString("N"));
+        string tempSubDir = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(tempSubDir);
+
+        using var candidate = StartDummyProcess();
+        string lockFilePath = Path.Combine(tempSubDir, "UnityLockfile");
+        using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+
+        try
+        {
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => new[] { candidate }
+            };
+
+            Assert.False(procManager.IsUnityRunning(out int? processId));
+            Assert.Null(processId);
+            Assert.True(File.Exists(lockFilePath), "An actively held Unity lockfile must not be deleted while probing ownership.");
+        }
+        finally
+        {
+            try { if (!candidate.HasExited) candidate.Kill(true); } catch { }
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }
@@ -575,6 +870,13 @@ public class UnityProcessManagerTests
         string lockFilePath = Path.Combine(tempSubDir, "UnityLockfile");
         using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
 
+        string operationFile = Path.Combine(tempSubDir, "unity_lean_mcp_operation.json");
+        string testRunningFile = Path.Combine(tempSubDir, "unity_test_running.txt");
+        string refreshResultFile = Path.Combine(tempSubDir, "unity_refresh_result.json");
+        File.WriteAllText(operationFile, "operation");
+        File.WriteAllText(testRunningFile, "running");
+        File.WriteAllText(refreshResultFile, "refresh history");
+
         try
         {
             var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
@@ -582,20 +884,128 @@ public class UnityProcessManagerTests
                 ProcessProvider = () => new[] { proc1, proc2 }
             };
 
-            Assert.True(procManager.IsUnityRunning(out int? runningPid));
+            Assert.False(procManager.IsUnityRunning(out int? runningPid));
             Assert.Null(runningPid);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            bool stopped = await procManager.StopUnityAsync(cts.Token);
+            bool stopped = await procManager.StopUnityAsync(force: true);
 
-            Assert.False(stopped);
+            Assert.True(stopped);
             Assert.False(proc1.HasExited, "proc1 should NOT have been killed by StopUnityAsync.");
             Assert.False(proc2.HasExited, "proc2 should NOT have been killed by StopUnityAsync.");
+            Assert.False(File.Exists(operationFile), "Unproven Unity candidates must not block stale-state recovery.");
+            Assert.False(File.Exists(testRunningFile), "Unproven Unity candidates must not block stale-state recovery.");
+            Assert.True(File.Exists(refreshResultFile), "Shared refresh history must be preserved.");
         }
         finally
         {
             try { if (!proc1.HasExited) proc1.Kill(true); } catch { }
             try { if (!proc2.HasExited) proc2.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_ConcurrentManagersShareInterProcessStartupClaim()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_interprocess_start_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+
+        var state = new SharedStartupState();
+        var first = new SharedStartupProcessManager(tempDir, state, NullLogger<UnityProcessManager>.Instance);
+        var second = new SharedStartupProcessManager(tempDir, state, NullLogger<UnityProcessManager>.Instance);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            Task firstStartup = first.EnsureUnityRunningAsync(cancellation.Token);
+            await state.FirstReadinessEntered.Task.WaitAsync(cancellation.Token);
+
+            Task secondStartup = second.EnsureUnityRunningAsync(cancellation.Token);
+            state.ReleaseReadiness.TrySetResult(true);
+
+            await Task.WhenAll(firstStartup, secondStartup);
+
+            Assert.Equal(1, Volatile.Read(ref state.StartCount));
+            Assert.True(File.Exists(first.PathResolver.StartupLockFile));
+        }
+        finally
+        {
+            state.ReleaseReadiness.TrySetResult(true);
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task StopUnityAsync_WhenExitIsAcknowledged_WaitsUntilUnityExits()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_wait_for_stop_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        var manager = new ControlledStopProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+
+        try
+        {
+            Task<bool> stopTask = manager.StopUnityAsync(force: true);
+            await manager.ExitRequested.Task;
+
+            Assert.False(stopTask.IsCompleted);
+            manager.MarkExited();
+
+            Assert.True(await stopTask);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task StopUnityAsync_WhenProcessRemainsRunning_StopsOnlyWhenCancelled()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_cancel_stop_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        var manager = new ControlledStopProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+        using var cancellation = new CancellationTokenSource();
+
+        try
+        {
+            Task<bool> stopTask = manager.StopUnityAsync(force: true, cancellation.Token);
+            await manager.ExitRequested.Task;
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await stopTask);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task StopUnityAsync_WhenFallbackIdentityDoesNotMatch_DoesNotKillPidReuse()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_stop_pid_reuse_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+        using var currentProcess = Process.GetCurrentProcess();
+        var manager = new ReusedPidStopProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance, currentProcess.Id);
+
+        try
+        {
+            File.WriteAllText(manager.PathResolver.PidFile, currentProcess.Id.ToString());
+            File.WriteAllText(
+                manager.PathResolver.PidFile + ".identity.json",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    ProcessId = currentProcess.Id,
+                    StartTimeUtcTicks = currentProcess.StartTime.ToUniversalTime().Ticks - 1,
+                    ExecutablePath = currentProcess.MainModule!.FileName,
+                    ProjectRoot = manager.PathResolver.ProjectRoot
+                }));
+
+            Assert.False(await manager.StopUnityAsync(force: true));
+            Assert.False(currentProcess.HasExited);
+        }
+        finally
+        {
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }
@@ -611,20 +1021,44 @@ public class UnityProcessManagerTests
         string lockFilePath = Path.Combine(tempSubDir, "UnityLockfile");
         using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
 
+        string operationFile = Path.Combine(tempSubDir, "unity_lean_mcp_operation.json");
+        string testRunningFile = Path.Combine(tempSubDir, "unity_test_running.txt");
+        string refreshResultFile = Path.Combine(tempSubDir, "unity_refresh_result.json");
+        File.WriteAllText(operationFile, "operation");
+        File.WriteAllText(testRunningFile, "running");
+        File.WriteAllText(refreshResultFile, "refresh history");
+
         try
         {
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-            {
-                ProcessProvider = () => new[] { proc }
-            };
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
 
-            // When running without PID file, it is detected as GUI mode
+            // The sidecar is the explicit ownership proof for this fixture.
+            // Keep the PID pointer absent so the proven process still follows
+            // the GUI-mode path exercised by this test.
+            File.WriteAllText(
+                procManager.PathResolver.PidFile + ".identity.json",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    ProcessId = proc.Id,
+                    StartTimeUtcTicks = proc.StartTime.ToUniversalTime().Ticks,
+                    ExecutablePath = proc.MainModule!.FileName,
+                    ProjectRoot = procManager.PathResolver.ProjectRoot
+                }));
+
+            // When running without the PID pointer, the explicitly proven
+            // process is still detected as GUI mode.
             Assert.Equal("GUI", procManager.GetUnityMode());
+
+            procManager.PurgeOperationState();
+            Assert.True(File.Exists(operationFile), "PurgeOperationState must preserve state while Unity is running.");
 
             bool stopped = await procManager.StopUnityAsync(force: false);
 
             Assert.False(stopped);
             Assert.False(proc.HasExited, "proc should NOT have been killed when force is false.");
+            Assert.True(File.Exists(operationFile), "Operation state must be preserved after GUI-stop refusal.");
+            Assert.True(File.Exists(testRunningFile), "Running marker must be preserved after GUI-stop refusal.");
+            Assert.True(File.Exists(refreshResultFile), "Shared refresh history must be preserved.");
         }
         finally
         {
@@ -646,6 +1080,7 @@ public class UnityProcessManagerTests
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_port.txt"), resolver.PortFile);
         Assert.Equal(Path.Combine(resolver.ProjectRoot, "unity_background_log.txt"), resolver.LogFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_process.pid"), resolver.PidFile);
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_startup.lock"), resolver.StartupLockFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_result.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_result.json"), resolver.GetResultFilePath(UnityOperationKind.Eval));
@@ -680,6 +1115,7 @@ public class UnityProcessManagerTests
         Assert.Equal(resolver.OperationFile, pm.PathResolver.OperationFile);
         Assert.Equal(resolver.TempDir, pm.PathResolver.TempDir);
         Assert.Equal(resolver.PortFile, pm.PathResolver.PortFile);
+        Assert.Equal(resolver.StartupLockFile, pm.PathResolver.StartupLockFile);
         Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Eval, "op1"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Eval, "op1"));
         Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Execute, "op2"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Execute, "op2"));
         Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Test, "op3"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Test, "op3"));
@@ -699,11 +1135,15 @@ public class UnityProcessManagerTests
             string file1 = Path.Combine(unityTemp, "unity_eval_123.json");
             string file2 = Path.Combine(unityTemp, "unity_execute_456.json");
             string file3 = Path.Combine(unityTemp, "unity_test_789.json");
+            string refreshResult = Path.Combine(unityTemp, "unity_refresh_result.json");
+            string testResults = Path.Combine(unityTemp, "unity_test_results.json");
             string keepFile = Path.Combine(unityTemp, "other_file.txt");
 
             File.WriteAllText(file1, "{}");
             File.WriteAllText(file2, "{}");
             File.WriteAllText(file3, "{}");
+            File.WriteAllText(refreshResult, "refresh history");
+            File.WriteAllText(testResults, "test history");
             File.WriteAllText(keepFile, "keep");
 
             pm.PurgeOperationState();
@@ -711,6 +1151,8 @@ public class UnityProcessManagerTests
             Assert.False(File.Exists(file1));
             Assert.False(File.Exists(file2));
             Assert.False(File.Exists(file3));
+            Assert.True(File.Exists(refreshResult));
+            Assert.True(File.Exists(testResults));
             Assert.True(File.Exists(keepFile));
         }
         finally
@@ -954,5 +1396,173 @@ public class UnityProcessManagerTests
             return new[] { _processToReturn };
         }
     }
-}
 
+    private sealed class FixedExecutableLocator : IUnityExecutableLocator
+    {
+        public UnityLocatorResult FindUnityExecutable() => UnityLocatorResult.Found("/test/unity-editor");
+    }
+
+    private sealed class SharedStartupState
+    {
+        public int StartCount;
+        public bool Running;
+        public TaskCompletionSource<bool> FirstReadinessEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> ReleaseReadiness { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class SharedStartupProcessManager : UnityProcessManager
+    {
+        private readonly SharedStartupState _state;
+
+        public SharedStartupProcessManager(
+            string projectRoot,
+            SharedStartupState state,
+            Microsoft.Extensions.Logging.ILogger<UnityProcessManager> logger)
+            : base(
+                new UnityPathResolver(projectRoot),
+                logger,
+                executableLocator: new FixedExecutableLocator())
+        {
+            _state = state;
+            ProcessStarter = _ =>
+            {
+                Interlocked.Increment(ref _state.StartCount);
+                return Process.GetCurrentProcess();
+            };
+        }
+
+        public override bool IsUnityRunning(out int? processId)
+        {
+            bool running = Volatile.Read(ref _state.Running);
+            processId = running ? Environment.ProcessId : null;
+            return running;
+        }
+
+        public override Task<bool> IsSocketReadyAsync(
+            int timeoutSeconds = 2,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        internal override async Task WaitForSocketReadinessAsync(
+            Process? startedProcess,
+            CancellationToken cancellationToken,
+            long initialLogOffset = 0)
+        {
+            _state.FirstReadinessEntered.TrySetResult(true);
+            await _state.ReleaseReadiness.Task.WaitAsync(cancellationToken);
+            Volatile.Write(ref _state.Running, true);
+        }
+    }
+
+    private sealed class CoordinatedStartupProcessManager : UnityProcessManager
+    {
+        private readonly TaskCompletionSource<bool> _firstReadinessEntered;
+        private readonly TaskCompletionSource<bool> _releaseReadiness;
+        private bool _running;
+        private int? _startedPid;
+
+        public int StartCount { get; private set; }
+        public int? StartedPid => _startedPid;
+        public Process? StartedProcess { get; private set; }
+
+        public CoordinatedStartupProcessManager(
+            string projectRoot,
+            TaskCompletionSource<bool> firstReadinessEntered,
+            TaskCompletionSource<bool> releaseReadiness,
+            Microsoft.Extensions.Logging.ILogger<UnityProcessManager> logger)
+            : base(
+                new UnityPathResolver(projectRoot),
+                logger,
+                executableLocator: new FixedExecutableLocator())
+        {
+            _firstReadinessEntered = firstReadinessEntered;
+            _releaseReadiness = releaseReadiness;
+            ProcessStarter = _ =>
+            {
+                StartCount++;
+                StartedProcess = StartDummyProcess();
+                _startedPid = StartedProcess.Id;
+                return StartedProcess;
+            };
+        }
+
+        public override bool IsUnityRunning(out int? processId)
+        {
+            processId = _running ? _startedPid : null;
+            return _running;
+        }
+
+        public override Task<bool> IsSocketReadyAsync(int timeoutSeconds = 2, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        internal override async Task WaitForSocketReadinessAsync(Process? startedProcess, CancellationToken cancellationToken, long initialLogOffset = 0)
+        {
+            _firstReadinessEntered.TrySetResult(true);
+            await _releaseReadiness.Task.WaitAsync(cancellationToken);
+            _running = true;
+        }
+    }
+
+    private class ControlledStopProcessManager : UnityProcessManager
+    {
+        private int _running = 1;
+
+        public TaskCompletionSource<bool> ExitRequested { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ControlledStopProcessManager(string projectRoot, Microsoft.Extensions.Logging.ILogger<UnityProcessManager> logger)
+            : base(projectRoot, logger)
+        {
+        }
+
+        public override bool IsUnityRunning(out int? processId)
+        {
+            bool running = Volatile.Read(ref _running) != 0;
+            processId = running ? 12345 : null;
+            return running;
+        }
+
+        public override string GetUnityMode(int? pid = null) => "Batchmode";
+
+        public override Task<string?> ProbeSocketCommandAsync(
+            string command,
+            int timeoutSeconds = 2,
+            CancellationToken cancellationToken = default)
+        {
+            ExitRequested.TrySetResult(true);
+            return Task.FromResult<string?>("EXITING");
+        }
+
+        public void MarkExited() => Volatile.Write(ref _running, 0);
+    }
+
+    private sealed class ReusedPidStopProcessManager : UnityProcessManager
+    {
+        private readonly int _pid;
+
+        public ReusedPidStopProcessManager(
+            string projectRoot,
+            Microsoft.Extensions.Logging.ILogger<UnityProcessManager> logger,
+            int pid)
+            : base(projectRoot, logger)
+        {
+            _pid = pid;
+        }
+
+        public override bool IsUnityRunning(out int? processId)
+        {
+            processId = _pid;
+            return true;
+        }
+
+        public override string GetUnityMode(int? pid = null) => "Batchmode";
+
+        public override Task<string?> ProbeSocketCommandAsync(
+            string command,
+            int timeoutSeconds = 2,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<string?>(null);
+    }
+}

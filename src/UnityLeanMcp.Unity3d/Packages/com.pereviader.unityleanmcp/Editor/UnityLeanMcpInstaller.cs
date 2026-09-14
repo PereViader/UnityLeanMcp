@@ -31,6 +31,7 @@ namespace UnityLeanMcp
 
                 string assetsPath = Application.dataPath;
                 string rootFolder = FindRepositoryRoot(assetsPath);
+                string projectRoot = Path.GetFullPath(Path.Combine(assetsPath, ".."));
                 string packagePath = packageInfo.resolvedPath;
                 string mcpDir = Path.GetFullPath(Path.Combine(packagePath, "MCP~")).Replace('\\', '/');
                 if (!mcpDir.EndsWith("/"))
@@ -60,7 +61,7 @@ namespace UnityLeanMcp
 
                 foreach (string configPath in targetConfigs)
                 {
-                    UpdateOrWriteMcpConfig(configPath, mcpDir);
+                    UpdateOrWriteMcpConfig(configPath, mcpDir, "mcpServers", rootFolder, projectRoot);
                     sb.AppendLine($"• {MakeRelativePath(rootFolder, configPath).Replace('\\', '/')}");
                 }
 
@@ -103,7 +104,12 @@ namespace UnityLeanMcp
             return Path.GetFullPath(Path.Combine(assetsPath, ".."));
         }
 
-        public static void UpdateOrWriteMcpConfig(string configPath, string mcpDir, string rootKey = "mcpServers")
+        public static void UpdateOrWriteMcpConfig(
+            string configPath,
+            string mcpDir,
+            string rootKey = "mcpServers",
+            string repositoryRoot = null,
+            string projectRoot = null)
         {
             string dir = Path.GetDirectoryName(configPath);
             if (!Directory.Exists(dir))
@@ -111,20 +117,7 @@ namespace UnityLeanMcp
                 Directory.CreateDirectory(dir);
             }
 
-            string formattedMcpDir = mcpDir.Replace('\\', '/');
-            if (!formattedMcpDir.EndsWith("/"))
-            {
-                formattedMcpDir += "/";
-            }
-
-            string serverJsonSnippet =
-                "    \"unity-lean-mcp\": {\n" +
-                "      \"command\": \"dotnet\",\n" +
-                "      \"args\": [\n" +
-                "        \"UnityLeanMcp.Mcp.dll\"\n" +
-                "      ],\n" +
-                $"      \"cwd\": \"{formattedMcpDir}\"\n" +
-                "    }";
+            string serverJsonSnippet = BuildMcpServerJsonSnippet(mcpDir, repositoryRoot, projectRoot);
 
             string normalizedPath = configPath.Replace('\\', '/');
             string effectiveRootKey = rootKey;
@@ -226,6 +219,49 @@ namespace UnityLeanMcp
                 "  }\n" +
                 "}\n";
             File.WriteAllText(configPath, fallbackContent, Encoding.UTF8);
+        }
+
+        private static string BuildMcpServerJsonSnippet(string mcpDir, string repositoryRoot, string projectRoot)
+        {
+            if (McpConfigurationPaths.TryGetPortablePaths(
+                    repositoryRoot,
+                    mcpDir,
+                    projectRoot,
+                    out string relativeMcpDll,
+                    out string relativeProjectRoot))
+            {
+                return
+                    "    \"unity-lean-mcp\": {\n" +
+                    "      \"command\": \"dotnet\",\n" +
+                    "      \"args\": [\n" +
+                    $"        \"{EscapeJsonString(relativeMcpDll)}\",\n" +
+                    "        \"--project\",\n" +
+                    $"        \"{EscapeJsonString(relativeProjectRoot)}\"\n" +
+                    "      ]\n" +
+                    "    }";
+            }
+
+            // A package resolved outside the checkout cannot be addressed portably. The
+            // installer is the correct place to materialize that machine-specific path.
+            string formattedMcpDir = mcpDir.Replace('\\', '/');
+            if (!formattedMcpDir.EndsWith("/"))
+            {
+                formattedMcpDir += "/";
+            }
+
+            return
+                "    \"unity-lean-mcp\": {\n" +
+                "      \"command\": \"dotnet\",\n" +
+                "      \"args\": [\n" +
+                "        \"UnityLeanMcp.Mcp.dll\"\n" +
+                "      ],\n" +
+                $"      \"cwd\": \"{EscapeJsonString(formattedMcpDir)}\"\n" +
+                "    }";
+        }
+
+        private static string EscapeJsonString(string value)
+        {
+            return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
         public static void AppendCodexMcpConfig(string configPath, string mcpDir)

@@ -10,6 +10,50 @@ using UnityEngine;
 
 namespace UnityLeanMcp
 {
+    public readonly struct RoslynSupportStatus : IEquatable<RoslynSupportStatus>
+    {
+        public bool IsSupported { get; }
+        public string UnsupportedReason { get; }
+
+        public RoslynSupportStatus(bool isSupported, string unsupportedReason)
+        {
+            IsSupported = isSupported;
+            UnsupportedReason = unsupportedReason;
+        }
+
+        public bool Equals(RoslynSupportStatus other)
+        {
+            return IsSupported == other.IsSupported
+                && string.Equals(UnsupportedReason, other.UnsupportedReason, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is RoslynSupportStatus other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = (hash * 31) + IsSupported.GetHashCode();
+                hash = (hash * 31) + (UnsupportedReason != null ? StringComparer.Ordinal.GetHashCode(UnsupportedReason) : 0);
+                return hash;
+            }
+        }
+
+        public static bool operator ==(RoslynSupportStatus left, RoslynSupportStatus right)
+        {
+            return left.Equals(right);
+        }
+
+        public static bool operator !=(RoslynSupportStatus left, RoslynSupportStatus right)
+        {
+            return !left.Equals(right);
+        }
+    }
+
     internal static class RoslynCompilerHelper
     {
         private static bool s_Initialized;
@@ -33,207 +77,247 @@ namespace UnityLeanMcp
         private static List<object> s_CachedMetadataReferences;
         private static readonly object s_Lock = new object();
 
-        public static bool IsSupported
+        private sealed class InitializationState
         {
-            get
+            public bool IsSupported;
+            public string UnsupportedReason = "";
+
+            public Assembly CodeAnalysisAssembly;
+            public Assembly CSharpAssembly;
+
+            public MethodInfo ParseTextMethod;
+            public MethodInfo CreateFromFileMethod;
+            public MethodInfo CreateCompilationMethod;
+            public MethodInfo EmitMethod;
+
+            public Type CompilationType;
+            public Type CompilationOptionsType;
+            public Type SyntaxTreeType;
+            public Type MetadataReferenceType;
+            public object CompilationOptions;
+
+            public List<object> CachedMetadataReferences;
+        }
+
+        public static RoslynSupportStatus GetSupportStatus()
+        {
+            EnsureInitialized();
+            lock (s_Lock)
             {
-                EnsureInitialized();
-                return s_IsSupported;
+                return new RoslynSupportStatus(s_IsSupported, s_UnsupportedReason);
             }
         }
 
-        public static string UnsupportedReason
-        {
-            get
-            {
-                EnsureInitialized();
-                return s_UnsupportedReason;
-            }
-        }
+        public static bool IsSupported => GetSupportStatus().IsSupported;
+
+        public static string UnsupportedReason => GetSupportStatus().UnsupportedReason ?? "";
 
         internal static void EnsureInitialized()
         {
-            if (s_Initialized) return;
+            if (Volatile.Read(ref s_Initialized)) return;
 
             lock (s_Lock)
             {
-                if (s_Initialized) return;
-                s_Initialized = true;
+                if (Volatile.Read(ref s_Initialized)) return;
 
-                try
-                {
-                    string dataPath = EditorApplication.applicationContentsPath;
-                    if (string.IsNullOrEmpty(dataPath) || !Directory.Exists(dataPath))
-                    {
-                        s_IsSupported = false;
-                        s_UnsupportedReason = "EditorApplication.applicationContentsPath is invalid or does not exist.";
-                        return;
-                    }
-
-                    string[] candidateDirs = new[]
-                    {
-                        Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"),
-                        Path.Combine(dataPath, "DotNetSdkRoslyn"),
-                        Path.Combine(dataPath, "Tools", "Roslyn"),
-                        Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "4.5"),
-                        Path.Combine(dataPath, "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn")
-                    };
-
-                    string roslynDir = null;
-                    foreach (var dir in candidateDirs)
-                    {
-                        if (Directory.Exists(dir) && File.Exists(Path.Combine(dir, "Microsoft.CodeAnalysis.CSharp.dll")))
-                        {
-                            // Test if it can be loaded
-                            try
-                            {
-                                var testAsm = Assembly.LoadFrom(Path.Combine(dir, "Microsoft.CodeAnalysis.CSharp.dll"));
-                                if (testAsm != null)
-                                {
-                                    roslynDir = dir;
-                                    break;
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-
-                    if (roslynDir == null)
-                    {
-                        s_IsSupported = false;
-                        s_UnsupportedReason = "Roslyn compiler assemblies (Microsoft.CodeAnalysis.CSharp.dll) could not be found or loaded in the Unity Editor installation.";
-                        return;
-                    }
-
-                    // Load required dependencies if present in roslynDir
-                    string immutablePath = Path.Combine(roslynDir, "System.Collections.Immutable.dll");
-                    if (File.Exists(immutablePath))
-                    {
-                        try { Assembly.LoadFrom(immutablePath); } catch { }
-                    }
-
-                    string metadataPath = Path.Combine(roslynDir, "System.Reflection.Metadata.dll");
-                    if (File.Exists(metadataPath))
-                    {
-                        try { Assembly.LoadFrom(metadataPath); } catch { }
-                    }
-
-                    s_CodeAnalysisAsm = Assembly.LoadFrom(Path.Combine(roslynDir, "Microsoft.CodeAnalysis.dll"));
-                    s_CSharpAsm = Assembly.LoadFrom(Path.Combine(roslynDir, "Microsoft.CodeAnalysis.CSharp.dll"));
-
-                    if (s_CodeAnalysisAsm == null || s_CSharpAsm == null)
-                    {
-                        s_IsSupported = false;
-                        s_UnsupportedReason = "Failed to load Microsoft.CodeAnalysis or Microsoft.CodeAnalysis.CSharp assemblies.";
-                        return;
-                    }
-
-                    s_SyntaxTreeType = s_CSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
-                    s_CompilationType = s_CSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilation");
-                    s_CompilationOptionsType = s_CSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions");
-                    s_MetadataRefType = s_CodeAnalysisAsm.GetType("Microsoft.CodeAnalysis.MetadataReference");
-                    var outputKindEnum = s_CodeAnalysisAsm.GetType("Microsoft.CodeAnalysis.OutputKind");
-
-                    if (s_SyntaxTreeType == null || s_CompilationType == null || s_CompilationOptionsType == null || s_MetadataRefType == null || outputKindEnum == null)
-                    {
-                        s_IsSupported = false;
-                        s_UnsupportedReason = "Failed to resolve required Roslyn reflection types.";
-                        return;
-                    }
-
-                    // ParseText method
-                    foreach (var m in s_SyntaxTreeType.GetMethods(BindingFlags.Public | BindingFlags.Static))
-                    {
-                        if (m.Name == "ParseText" && m.GetParameters().Length >= 1 && m.GetParameters()[0].ParameterType == typeof(string))
-                        {
-                            s_ParseTextMethod = m;
-                            break;
-                        }
-                    }
-
-                    // CreateFromFile method
-                    foreach (var m in s_MetadataRefType.GetMethods(BindingFlags.Public | BindingFlags.Static))
-                    {
-                        if (m.Name == "CreateFromFile" && m.GetParameters().Length >= 1 && m.GetParameters()[0].ParameterType == typeof(string))
-                        {
-                            if (s_CreateFromFileMethod == null || m.GetParameters().Length < s_CreateFromFileMethod.GetParameters().Length)
-                            {
-                                s_CreateFromFileMethod = m;
-                            }
-                        }
-                    }
-
-                    // CSharpCompilationOptions instance
-                    object outputKindDynamicallyLinkedLibrary = Enum.Parse(outputKindEnum, "DynamicallyLinkedLibrary");
-                    var ctors = s_CompilationOptionsType.GetConstructors();
-                    foreach (var ctor in ctors)
-                    {
-                        var pars = ctor.GetParameters();
-                        if (pars.Length >= 1 && pars[0].ParameterType == outputKindEnum)
-                        {
-                            var args = new object[pars.Length];
-                            args[0] = outputKindDynamicallyLinkedLibrary;
-                            for (int i = 1; i < pars.Length; i++)
-                            {
-                                args[i] = pars[i].DefaultValue != DBNull.Value ? pars[i].DefaultValue : null;
-                            }
-                            try
-                            {
-                                s_CompilationOptions = ctor.Invoke(args);
-                                break;
-                            }
-                            catch { }
-                        }
-                    }
-
-                    // CSharpCompilation.Create method
-                    foreach (var m in s_CompilationType.GetMethods(BindingFlags.Public | BindingFlags.Static))
-                    {
-                        if (m.Name == "Create" && m.GetParameters().Length == 4)
-                        {
-                            var p = m.GetParameters();
-                            if (p[0].ParameterType == typeof(string) && p[3].ParameterType == s_CompilationOptionsType)
-                            {
-                                s_CreateCompMethod = m;
-                                break;
-                            }
-                        }
-                    }
-
-                    // Emit method
-                    foreach (var m in s_CompilationType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-                    {
-                        if (m.Name == "Emit" && m.GetParameters().Length >= 1 && m.GetParameters()[0].ParameterType == typeof(Stream))
-                        {
-                            if (s_EmitMethod == null || m.GetParameters().Length == 1)
-                            {
-                                s_EmitMethod = m;
-                                if (m.GetParameters().Length == 1) break;
-                            }
-                        }
-                    }
-
-                    if (s_ParseTextMethod == null || s_CreateFromFileMethod == null || s_CompilationOptions == null || s_CreateCompMethod == null || s_EmitMethod == null)
-                    {
-                        s_IsSupported = false;
-                        s_UnsupportedReason = "Could not bind all required Roslyn methods.";
-                        return;
-                    }
-
-                    // Build initial metadata references
-                    BuildMetadataReferences();
-
-                    s_IsSupported = true;
-                }
-                catch (Exception ex)
+                // Build the complete reflection graph in private state. Publishing any of
+                // these fields before the graph is complete allows another thread to observe
+                // a partially initialized compiler, while setting s_Initialized first makes a
+                // transient failure permanent for the lifetime of the domain.
+                InitializationState state = TryInitialize();
+                if (!state.IsSupported)
                 {
                     s_IsSupported = false;
-                    s_UnsupportedReason = "Exception initializing Roslyn compiler: " + ex.Message;
+                    s_UnsupportedReason = state.UnsupportedReason;
+                    // Deliberately leave s_Initialized false so a later access can retry
+                    // after Unity finishes installing or loading its Roslyn assemblies.
+                    return;
                 }
+
+                s_CodeAnalysisAsm = state.CodeAnalysisAssembly;
+                s_CSharpAsm = state.CSharpAssembly;
+                s_ParseTextMethod = state.ParseTextMethod;
+                s_CreateFromFileMethod = state.CreateFromFileMethod;
+                s_CreateCompMethod = state.CreateCompilationMethod;
+                s_EmitMethod = state.EmitMethod;
+                s_CompilationType = state.CompilationType;
+                s_CompilationOptionsType = state.CompilationOptionsType;
+                s_SyntaxTreeType = state.SyntaxTreeType;
+                s_MetadataRefType = state.MetadataReferenceType;
+                s_CompilationOptions = state.CompilationOptions;
+                s_CachedMetadataReferences = state.CachedMetadataReferences;
+                s_IsSupported = true;
+                s_UnsupportedReason = "";
+
+                // This is the release publication point for every field above.
+                Volatile.Write(ref s_Initialized, true);
             }
         }
 
-        private static void BuildMetadataReferences()
+        private static InitializationState TryInitialize()
+        {
+            var state = new InitializationState();
+
+            try
+            {
+                string dataPath = EditorApplication.applicationContentsPath;
+                if (string.IsNullOrEmpty(dataPath) || !Directory.Exists(dataPath))
+                {
+                    state.UnsupportedReason = "EditorApplication.applicationContentsPath is invalid or does not exist.";
+                    return state;
+                }
+
+                string[] candidateDirs = new[]
+                {
+                    Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"),
+                    Path.Combine(dataPath, "DotNetSdkRoslyn"),
+                    Path.Combine(dataPath, "Tools", "Roslyn"),
+                    Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "4.5"),
+                    Path.Combine(dataPath, "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn")
+                };
+
+                string roslynDir = null;
+                foreach (var dir in candidateDirs)
+                {
+                    if (Directory.Exists(dir) && File.Exists(Path.Combine(dir, "Microsoft.CodeAnalysis.CSharp.dll")))
+                    {
+                        try
+                        {
+                            var testAsm = Assembly.LoadFrom(Path.Combine(dir, "Microsoft.CodeAnalysis.CSharp.dll"));
+                            if (testAsm != null)
+                            {
+                                roslynDir = dir;
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                if (roslynDir == null)
+                {
+                    state.UnsupportedReason = "Roslyn compiler assemblies (Microsoft.CodeAnalysis.CSharp.dll) could not be found or loaded in the Unity Editor installation.";
+                    return state;
+                }
+
+                string immutablePath = Path.Combine(roslynDir, "System.Collections.Immutable.dll");
+                if (File.Exists(immutablePath))
+                {
+                    try { Assembly.LoadFrom(immutablePath); } catch { }
+                }
+
+                string metadataPath = Path.Combine(roslynDir, "System.Reflection.Metadata.dll");
+                if (File.Exists(metadataPath))
+                {
+                    try { Assembly.LoadFrom(metadataPath); } catch { }
+                }
+
+                state.CodeAnalysisAssembly = Assembly.LoadFrom(Path.Combine(roslynDir, "Microsoft.CodeAnalysis.dll"));
+                state.CSharpAssembly = Assembly.LoadFrom(Path.Combine(roslynDir, "Microsoft.CodeAnalysis.CSharp.dll"));
+
+                if (state.CodeAnalysisAssembly == null || state.CSharpAssembly == null)
+                {
+                    state.UnsupportedReason = "Failed to load Microsoft.CodeAnalysis or Microsoft.CodeAnalysis.CSharp assemblies.";
+                    return state;
+                }
+
+                state.SyntaxTreeType = state.CSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
+                state.CompilationType = state.CSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilation");
+                state.CompilationOptionsType = state.CSharpAssembly.GetType("Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions");
+                state.MetadataReferenceType = state.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.MetadataReference");
+                var outputKindEnum = state.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.OutputKind");
+
+                if (state.SyntaxTreeType == null || state.CompilationType == null || state.CompilationOptionsType == null || state.MetadataReferenceType == null || outputKindEnum == null)
+                {
+                    state.UnsupportedReason = "Failed to resolve required Roslyn reflection types.";
+                    return state;
+                }
+
+                foreach (var m in state.SyntaxTreeType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (m.Name == "ParseText" && m.GetParameters().Length >= 1 && m.GetParameters()[0].ParameterType == typeof(string))
+                    {
+                        state.ParseTextMethod = m;
+                        break;
+                    }
+                }
+
+                foreach (var m in state.MetadataReferenceType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (m.Name == "CreateFromFile" && m.GetParameters().Length >= 1 && m.GetParameters()[0].ParameterType == typeof(string))
+                    {
+                        if (state.CreateFromFileMethod == null || m.GetParameters().Length < state.CreateFromFileMethod.GetParameters().Length)
+                        {
+                            state.CreateFromFileMethod = m;
+                        }
+                    }
+                }
+
+                object outputKindDynamicallyLinkedLibrary = Enum.Parse(outputKindEnum, "DynamicallyLinkedLibrary");
+                var ctors = state.CompilationOptionsType.GetConstructors();
+                foreach (var ctor in ctors)
+                {
+                    var pars = ctor.GetParameters();
+                    if (pars.Length >= 1 && pars[0].ParameterType == outputKindEnum)
+                    {
+                        var args = new object[pars.Length];
+                        args[0] = outputKindDynamicallyLinkedLibrary;
+                        for (int i = 1; i < pars.Length; i++)
+                        {
+                            args[i] = pars[i].DefaultValue != DBNull.Value ? pars[i].DefaultValue : null;
+                        }
+                        try
+                        {
+                            state.CompilationOptions = ctor.Invoke(args);
+                            break;
+                        }
+                        catch { }
+                    }
+                }
+
+                foreach (var m in state.CompilationType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (m.Name == "Create" && m.GetParameters().Length == 4)
+                    {
+                        var p = m.GetParameters();
+                        if (p[0].ParameterType == typeof(string) && p[3].ParameterType == state.CompilationOptionsType)
+                        {
+                            state.CreateCompilationMethod = m;
+                            break;
+                        }
+                    }
+                }
+
+                foreach (var m in state.CompilationType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (m.Name == "Emit" && m.GetParameters().Length >= 1 && m.GetParameters()[0].ParameterType == typeof(Stream))
+                    {
+                        if (state.EmitMethod == null || m.GetParameters().Length == 1)
+                        {
+                            state.EmitMethod = m;
+                            if (m.GetParameters().Length == 1) break;
+                        }
+                    }
+                }
+
+                if (state.ParseTextMethod == null || state.CreateFromFileMethod == null || state.CompilationOptions == null || state.CreateCompilationMethod == null || state.EmitMethod == null)
+                {
+                    state.UnsupportedReason = "Could not bind all required Roslyn methods.";
+                    return state;
+                }
+
+                state.CachedMetadataReferences = BuildMetadataReferences(state.CreateFromFileMethod);
+                state.IsSupported = true;
+                return state;
+            }
+            catch (Exception ex)
+            {
+                state.UnsupportedReason = "Exception initializing Roslyn compiler: " + ex.Message;
+                return state;
+            }
+        }
+
+        private static List<object> BuildMetadataReferences(MethodInfo createFromFileMethod)
         {
             var refList = new List<object>();
             var addedLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -252,10 +336,10 @@ namespace UnityLeanMcp
                 try
                 {
                     object r;
-                    var pars = s_CreateFromFileMethod.GetParameters();
+                    var pars = createFromFileMethod.GetParameters();
                     if (pars.Length == 1)
                     {
-                        r = s_CreateFromFileMethod.Invoke(null, new object[] { path });
+                        r = createFromFileMethod.Invoke(null, new object[] { path });
                     }
                     else
                     {
@@ -265,7 +349,7 @@ namespace UnityLeanMcp
                         {
                             args[i] = pars[i].DefaultValue != DBNull.Value ? pars[i].DefaultValue : null;
                         }
-                        r = s_CreateFromFileMethod.Invoke(null, args);
+                        r = createFromFileMethod.Invoke(null, args);
                     }
 
                     if (r != null)
@@ -303,7 +387,7 @@ namespace UnityLeanMcp
             try { AddAssembly(typeof(UnityEngine.GameObject).Assembly); } catch { }
             try { AddAssembly(typeof(UnityEditor.Editor).Assembly); } catch { }
 
-            s_CachedMetadataReferences = refList;
+            return refList;
         }
 
         public static bool CompileAndEmit(string sourceCode, out byte[] assemblyBytes, out List<string> errors)

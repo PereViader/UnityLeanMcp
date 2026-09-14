@@ -183,14 +183,12 @@ namespace UnityLeanMcp
 
                 string json = JsonUtility.ToJson(runResult, true);
                 RunTestsHandler.WriteAtomic(resultsPath, json, runResult.runId);
-                try
-                {
-                    RunTestsHandler.WriteAtomic(RunTestsHandler.ResultsFilePath, json, runResult.runId);
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"UnityLeanMcp: Failed to update persistent test results file: {ex.Message}");
-                }
+                RunTestsHandler.TryWriteStaticHistory(
+                    RunTestsHandler.ResultsFilePath,
+                    json,
+                    runResult.runId);
+                RunTestsHandler.ClearCancellationRequest(runResult.runId);
+                RunTestsHandler.StopCancellationMonitoring(runResult.runId);
                 RunTestsHandler.DeleteRunningStateIfOwned(runResult.runId);
                 RunTestsHandler.ClearCachedRunState();
                 UnityLeanMcpOperationStore.Complete(runResult.runId);

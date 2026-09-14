@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using UnityEngine;
 
 namespace UnityLeanMcp
 {
@@ -11,37 +10,36 @@ namespace UnityLeanMcp
             return ProtocolCodec.EscapeLine(text);
         }
 
-        public static void WriteOperationResultResponse(UnityOperationResult res, StreamWriter writer)
+        public static void WriteOperationResultResponse(WorkerOperationResultSnapshot res, StreamWriter writer)
         {
-            if (res.success)
+            if (res.Success)
             {
-                if (!string.IsNullOrEmpty(res.payload))
+                if (!string.IsNullOrEmpty(res.Payload))
                 {
-                    writer.WriteLine($"SUCCESS {EscapeLine(res.payload)}");
+                    writer.WriteLine($"SUCCESS {EscapeLine(res.Payload)}");
                 }
                 else
                 {
                     writer.WriteLine("SUCCESS");
                 }
             }
-            else if (res.interrupted)
+            else if (res.Interrupted)
             {
-                writer.WriteLine($"INTERRUPTION {EscapeLine(res.message)}");
+                writer.WriteLine($"INTERRUPTION {EscapeLine(res.Message)}");
             }
             else
             {
-                writer.WriteLine($"FAILURE {EscapeLine(res.message)}");
+                writer.WriteLine($"FAILURE {EscapeLine(res.Message)}");
             }
         }
 
-        public static void PollOperationResult<TResult>(
+        public static void PollOperationResult(
             string operationId,
             string resultFilePath,
             string runningFilePath,
             StreamWriter writer,
-            Func<TResult, string> getResultOperationId,
-            Action<TResult, StreamWriter> writeResultResponse,
-            Func<string, string, bool> isRunningMatch = null) where TResult : class
+            Action<WorkerOperationResultSnapshot, StreamWriter> writeResultResponse,
+            Func<string, string, bool> isRunningMatch = null)
         {
             bool TryWriteTerminalResult()
             {
@@ -49,24 +47,14 @@ namespace UnityLeanMcp
                 {
                     try
                     {
-                        string content = CommandHelper.ReadFileWithRetry(resultFilePath, maxRetries: 3, delayMs: 10);
-                        if (!string.IsNullOrEmpty(content))
+                        if (WorkerThreadSnapshots.TryReadOperationResult(resultFilePath, out var res))
                         {
-                            var res = JsonUtility.FromJson<TResult>(content);
-                            if (res != null)
+                            if (string.IsNullOrEmpty(operationId) || res.OperationId == operationId)
                             {
-                                string resultOpId = getResultOperationId != null ? getResultOperationId(res) : null;
-                                if (string.IsNullOrEmpty(operationId) || resultOpId == operationId)
-                                {
-                                    writeResultResponse(res, writer);
-                                    return true;
-                                }
+                                writeResultResponse(res, writer);
+                                return true;
                             }
                         }
-                    }
-                    catch (IOException)
-                    {
-                        // File is temporarily being written or replaced; fall through to running check
                     }
                     catch (Exception)
                     {
@@ -96,7 +84,7 @@ namespace UnityLeanMcp
                 bool matches = false;
                 try
                 {
-                    string runningOperationId = CommandHelper.ReadFileWithRetry(runningFilePath, maxRetries: 3, delayMs: 10).Trim();
+                    string runningOperationId = WorkerThreadSnapshots.ReadFileWithRetry(runningFilePath)?.Trim();
                     matches = string.IsNullOrEmpty(operationId) || runningOperationId == operationId;
                 }
                 catch (IOException)
@@ -119,11 +107,11 @@ namespace UnityLeanMcp
             var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
             if (operation != null)
             {
-                if (!string.IsNullOrEmpty(operationId) && operation.operationId != operationId)
+                if (!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
                 {
-                    writer.WriteLine($"BUSY {operation.kind} {operation.operationId}");
+                    writer.WriteLine($"BUSY {operation.Kind} {operation.OperationId}");
                 }
-                else if (operation.status == OperationStatus.Interrupted)
+                else if (operation.Status == OperationStatus.Interrupted)
                 {
                     writer.WriteLine("INTERRUPTION Unity editor restarted before the operation completed.");
                 }

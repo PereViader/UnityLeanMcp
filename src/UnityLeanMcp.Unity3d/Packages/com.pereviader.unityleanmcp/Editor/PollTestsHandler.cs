@@ -11,36 +11,35 @@ namespace UnityLeanMcp
         public void Handle(string payload, StreamWriter writer)
         {
             string operationId = payload?.Trim();
-            PollHelper.PollOperationResult<UnityTestRunResult>(
+            PollHelper.PollOperationResult(
                 operationId,
-                UnityLeanMcpPaths.GetTestResultsFile(operationId),
-                UnityLeanMcpPaths.TestRunningFile,
+                UnityLeanMcpPaths.GetWorkerTestResultsFile(operationId),
+                UnityLeanMcpPaths.WorkerTestRunningFile,
                 writer,
-                res => res.runId,
                 (res, w) =>
                 {
-                    string skipStr = res.skipCount > 0 ? $", {res.skipCount} skipped" : "";
-                    if (res.success)
+                    string skipStr = res.SkipCount > 0 ? $", {res.SkipCount} skipped" : "";
+                    if (res.Success)
                     {
-                        w.WriteLine($"SUCCESS {res.passCount} passed{skipStr}");
+                        w.WriteLine($"SUCCESS {res.PassCount} passed{skipStr}");
                     }
-                    else if (res.resultState == "Interrupted")
+                    else if (res.Interrupted)
                     {
-                        w.WriteLine($"INTERRUPTION {PollHelper.EscapeLine(res.message)}");
+                        w.WriteLine($"INTERRUPTION {PollHelper.EscapeLine(res.Message)}");
                     }
-                    else if (!string.IsNullOrEmpty(res.message))
+                    else if (!string.IsNullOrEmpty(res.Message))
                     {
-                        w.WriteLine($"FAILURE {PollHelper.EscapeLine(res.message)}");
+                        w.WriteLine($"FAILURE {PollHelper.EscapeLine(res.Message)}");
                     }
                     else
                     {
-                        w.WriteLine($"FAILURE {res.failCount} failed, {res.passCount} passed{skipStr}");
+                        w.WriteLine($"FAILURE {res.FailCount} failed, {res.PassCount} passed{skipStr}");
                     }
                 },
                 (runningPath, opId) =>
                 {
-                    var running = RunTestsHandler.ReadRunningState();
-                    return running != null && (string.IsNullOrEmpty(opId) || running.runId == opId);
+                    var running = RunTestsHandler.ReadThreadSafeSnapshot();
+                    return running != null && (string.IsNullOrEmpty(opId) || running.RunId == opId);
                 });
         }
     }

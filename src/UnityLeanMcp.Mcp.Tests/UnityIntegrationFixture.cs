@@ -47,12 +47,9 @@ public class UnityIntegrationFixture : IAsyncLifetime
             File.Copy(_dummyTestMetaPath, _backupDummyTestMetaPath, true);
         }
 
-        // Build / publish MCP server if needed
-        string publishedDll = Path.Combine(_unityRoot, "Packages", "com.pereviader.unityleanmcp", "MCP~", "UnityLeanMcp.Mcp.dll");
-        if (!File.Exists(publishedDll))
-        {
-            await PublishMcpServerAsync();
-        }
+        // Always publish the Release server used by the Unity package. Reusing
+        // an existing artifact can run integration tests against stale code.
+        await PublishMcpServerAsync();
 
         // Ensure Unity is started and ready using shared client
         _sharedClient = new McpTestClient(_unityRoot);
@@ -66,6 +63,12 @@ public class UnityIntegrationFixture : IAsyncLifetime
 
     private static async Task PublishMcpServerAsync()
     {
+        string publishedDll = Path.Combine(
+            McpTestClient.GetUnityProjectRoot(),
+            "Packages",
+            "com.pereviader.unityleanmcp",
+            "MCP~",
+            "UnityLeanMcp.Mcp.dll");
         var psi = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
@@ -77,6 +80,19 @@ public class UnityIntegrationFixture : IAsyncLifetime
 
         using var proc = System.Diagnostics.Process.Start(psi)!;
         await proc.WaitForExitAsync();
+
+        if (proc.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"dotnet publish failed with exit code {proc.ExitCode}. The integration tests cannot use an unverified MCP server artifact.");
+        }
+
+        if (!File.Exists(publishedDll))
+        {
+            throw new FileNotFoundException(
+                "dotnet publish completed successfully but did not produce the package MCP server DLL.",
+                publishedDll);
+        }
     }
 
     public async Task<IAsyncDisposable> UseFixtureAsync(string testCaseName)
@@ -92,7 +108,14 @@ public class UnityIntegrationFixture : IAsyncLifetime
             Directory.CreateDirectory(Path.GetDirectoryName(_dummyTestPath)!);
             File.Copy(fixtureSource, _dummyTestPath, true);
             File.SetLastWriteTimeUtc(_dummyTestPath, DateTime.UtcNow);
-            await Task.Delay(100);
+
+            // An external file copy may not be observed by Unity's asynchronous
+            // projectChanged watcher before the next tool request. Explicitly
+            // refresh so the fixture always tests the source just copied rather
+            // than whichever assembly Unity compiled previously. A compilation
+            // error is expected for some fixtures, so the result is deliberately
+            // allowed to be an MCP error.
+            await SharedClient.CallToolAsync("unity_refresh");
         }
 
         return new DummyTestScope(this);

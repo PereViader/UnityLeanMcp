@@ -10,9 +10,11 @@ namespace UnityLeanMcp
         private static string s_DiagnosticsFile;
         private static string s_RefreshResultFile;
         private static string s_TestRunningFile;
+        private static string s_TestCancellationFile;
         private static string s_TestResultsFile;
         private static string s_ExecuteResultFile;
         private static string s_EvalResultFile;
+        private static string s_WorkerLogFile;
 
         public static string TempDir
         {
@@ -54,12 +56,23 @@ namespace UnityLeanMcp
                 return s_RefreshResultFile;
             }
         }
+
+        public static string GetRefreshResultFile(string operationId) =>
+            string.IsNullOrEmpty(operationId) ? RefreshResultFile : Path.Combine(TempDir, $"unity_refresh_{operationId}.json");
         public static string TestRunningFile
         {
             get
             {
                 if (string.IsNullOrEmpty(s_TestRunningFile)) EnsureInitialized();
                 return s_TestRunningFile;
+            }
+        }
+        public static string TestCancellationFile
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(s_TestCancellationFile)) EnsureInitialized();
+                return s_TestCancellationFile;
             }
         }
         public static string TestResultsFile
@@ -96,6 +109,29 @@ namespace UnityLeanMcp
         public static string GetTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
 
+        // Worker-thread readers may only use paths captured during explicit
+        // main-thread initialization. These accessors never initialize paths
+        // and therefore cannot reach Application.dataPath indirectly.
+        internal static string WorkerOperationFile => s_OperationFile;
+        internal static string WorkerDiagnosticsFile => s_DiagnosticsFile;
+        internal static string WorkerRefreshResultFile => s_RefreshResultFile;
+        internal static string WorkerPortFile => s_PortFile;
+        internal static string WorkerLogFile => s_WorkerLogFile;
+
+        internal static string GetWorkerRefreshResultFile(string operationId) =>
+            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_RefreshResultFile : Path.Combine(s_TempDir, $"unity_refresh_{operationId}.json"));
+        internal static string WorkerTestRunningFile => s_TestRunningFile;
+        internal static string WorkerTestCancellationFile => s_TestCancellationFile;
+
+        internal static string GetWorkerEvalResultFile(string operationId) =>
+            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_EvalResultFile : Path.Combine(s_TempDir, $"unity_eval_{operationId}.json"));
+
+        internal static string GetWorkerExecuteResultFile(string operationId) =>
+            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_ExecuteResultFile : Path.Combine(s_TempDir, $"unity_execute_{operationId}.json"));
+
+        internal static string GetWorkerTestResultsFile(string operationId) =>
+            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_TestResultsFile : Path.Combine(s_TempDir, $"unity_test_{operationId}.json"));
+
         public static void EnsureInitialized()
         {
             CommandHelper.EnsureInitialized();
@@ -106,9 +142,11 @@ namespace UnityLeanMcp
             s_DiagnosticsFile = Path.Combine(s_TempDir, "unity_compilation_errors.txt");
             s_RefreshResultFile = Path.Combine(s_TempDir, "unity_refresh_result.json");
             s_TestRunningFile = Path.Combine(s_TempDir, "unity_test_running.txt");
+            s_TestCancellationFile = Path.Combine(s_TempDir, "unity_test_cancellation.txt");
             s_TestResultsFile = Path.Combine(s_TempDir, "unity_test_results.json");
             s_ExecuteResultFile = Path.Combine(s_TempDir, "unity_execute_result.json");
             s_EvalResultFile = Path.Combine(s_TempDir, "unity_eval_result.json");
+            s_WorkerLogFile = Path.Combine(s_TempDir, "unity_lean_mcp_worker.log");
         }
     }
 }

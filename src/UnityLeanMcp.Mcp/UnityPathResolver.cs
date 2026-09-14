@@ -12,6 +12,7 @@ public class UnityPathResolver : IUnityPathResolver
     public string PortFile => Path.Combine(TempDir, "unity_lean_mcp_port.txt");
     public string LogFile => Path.Combine(ProjectRoot, "unity_background_log.txt");
     public string PidFile => Path.Combine(TempDir, "unity_lean_mcp_process.pid");
+    public string StartupLockFile => Path.Combine(TempDir, "unity_lean_mcp_startup.lock");
     public string TestRunningFile => Path.Combine(TempDir, "unity_test_running.txt");
     public string GetResultFilePath(UnityOperationKind kind, string? operationId = null) => kind switch
     {

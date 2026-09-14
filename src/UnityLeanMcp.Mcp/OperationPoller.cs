@@ -19,6 +19,12 @@ public sealed class OperationPollingSpec<TResult> where TResult : class, IOperat
     public int PollIntervalMs { get; init; } = 500;
     public bool CheckOperationStoreForInterruption { get; init; } = true;
     public bool ShouldCancelOnAborted { get; init; } = true;
+    /// <summary>
+    /// Requires a matching durable result before accepting a protocol success.
+    /// Explicit negative terminal responses remain authoritative because they
+    /// cannot turn an uncorrelated operation into a false success.
+    /// </summary>
+    public bool RequireDurableResult { get; init; }
 
     /// <summary>
     /// Whether to delete the result file upon terminal completion.
@@ -302,6 +308,11 @@ public class OperationPoller : IOperationPoller
                             return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
                         }
 
+                        if (spec.RequireDurableResult)
+                        {
+                            continue;
+                        }
+
                         string payload = pollResp.Length > 7 ? pollResp[7..].Trim() : "";
                         var successRes = new TResult
                         {
@@ -357,6 +368,7 @@ public class OperationPoller : IOperationPoller
             PollCommand = pollCommand,
             PollTimeoutSeconds = 5,
             PollIntervalMs = pollIntervalMs,
+            RequireDurableResult = true,
             OnResultFound = onResultFound
         };
 

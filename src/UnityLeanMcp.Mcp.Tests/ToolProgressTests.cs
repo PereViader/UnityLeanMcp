@@ -37,9 +37,10 @@ public class ToolProgressTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance);
 
             var receivedProgress = new List<ProgressNotificationValue>();
@@ -53,6 +54,7 @@ public class ToolProgressTests
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             int pollCount = 0;
+            bool refreshTriggered = false;
 
             var serverTask = Task.Run(async () =>
             {
@@ -82,6 +84,7 @@ public class ToolProgressTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
+                            refreshTriggered = true;
                             await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("POLL_REFRESH"))
@@ -99,6 +102,11 @@ public class ToolProgressTests
                             }
                             else
                             {
+                                if (refreshTriggered && TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                                {
+                                    TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                                }
+
                                 await writer.WriteLineAsync("READY");
                             }
                         }
@@ -163,9 +171,10 @@ public class ToolProgressTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance);
 
             var receivedProgress = new List<ProgressNotificationValue>();
@@ -179,6 +188,7 @@ public class ToolProgressTests
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             int pollCount = 0;
+            bool refreshTriggered = false;
 
             var serverTask = Task.Run(async () =>
             {
@@ -208,6 +218,7 @@ public class ToolProgressTests
                         }
                         else if (line.StartsWith("RECOMPILE"))
                         {
+                            refreshTriggered = true;
                             await writer.WriteLineAsync("RECOMPILING");
                         }
                         else if (line.StartsWith("POLL_REFRESH"))
@@ -223,6 +234,11 @@ public class ToolProgressTests
                             }
                             else
                             {
+                                if (refreshTriggered && TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                                {
+                                    TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                                }
+
                                 await writer.WriteLineAsync("READY");
                             }
                         }
@@ -287,9 +303,10 @@ public class ToolProgressTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance);
 
             var receivedProgress = new List<ProgressNotificationValue>();
@@ -302,6 +319,7 @@ public class ToolProgressTests
             });
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            bool refreshTriggered = false;
 
             var serverTask = Task.Run(async () =>
             {
@@ -331,10 +349,16 @@ public class ToolProgressTests
                         }
                         else if (line.StartsWith("POLL_REFRESH"))
                         {
+                            if (refreshTriggered && TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                            {
+                                TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            }
+
                             await writer.WriteLineAsync("READY");
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
+                            refreshTriggered = true;
                             await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("EXECUTE_METHOD"))
@@ -343,6 +367,20 @@ public class ToolProgressTests
                         }
                         else if (line.StartsWith("POLL_EXECUTE"))
                         {
+                            string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                            if (parts.Length > 1)
+                            {
+                                var result = new UnityExecuteResult
+                                {
+                                    OperationId = parts[1],
+                                    Success = true,
+                                    Message = "Method executed successfully"
+                                };
+                                File.WriteAllText(
+                                    procManager.PathResolver.GetResultFilePath(UnityOperationKind.Execute, parts[1]),
+                                    JsonSerializer.Serialize(result));
+                            }
+
                             await writer.WriteLineAsync("SUCCESS Method executed successfully");
                         }
                     }
@@ -398,12 +436,14 @@ public class ToolProgressTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
 
             Directory.CreateDirectory(Path.Combine(tempDir, "Assets"));
             Directory.CreateDirectory(Path.Combine(tempDir, "ProjectSettings"));
+            var pathResolver = new UnityPathResolver(tempDir);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            bool refreshTriggered = false;
 
             var serverTask = Task.Run(async () =>
             {
@@ -433,10 +473,16 @@ public class ToolProgressTests
                         }
                         else if (line.StartsWith("POLL_REFRESH"))
                         {
+                            if (refreshTriggered && TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                            {
+                                TestProcessProvider.WriteRefreshResult(pathResolver, operationId);
+                            }
+
                             await writer.WriteLineAsync("READY");
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
+                            refreshTriggered = true;
                             await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("RECOMPILE"))
@@ -449,6 +495,21 @@ public class ToolProgressTests
                         }
                         else if (line.StartsWith("POLL_EVAL"))
                         {
+                            string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                            if (parts.Length > 1)
+                            {
+                                var result = new UnityEvalResult
+                                {
+                                    OperationId = parts[1],
+                                    Success = true,
+                                    Message = "Evaluation completed",
+                                    Payload = "Hello from eval"
+                                };
+                                File.WriteAllText(
+                                    pathResolver.GetResultFilePath(UnityOperationKind.Eval, parts[1]),
+                                    JsonSerializer.Serialize(result));
+                            }
+
                             await writer.WriteLineAsync("SUCCESS Hello from eval");
                         }
                     }

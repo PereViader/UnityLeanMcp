@@ -31,10 +31,11 @@ public class TestRunProgressTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
 
             var logger = NullLogger<UnityProcessManager>.Instance;
-            var procManager = new UnityProcessManager(tempDir, logger);
+            var procManager = new UnityProcessManager(tempDir, logger)
+                .WithTrustedTestProcessProvider();
             var clientLogger = NullLogger<UnityClient>.Instance;
             var client = new UnityClient(procManager, clientLogger)
             {
@@ -187,7 +188,7 @@ public class TestRunProgressTests
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
 
             // Fake Unity project indicators
             Directory.CreateDirectory(Path.Combine(tempDir, "Assets"));

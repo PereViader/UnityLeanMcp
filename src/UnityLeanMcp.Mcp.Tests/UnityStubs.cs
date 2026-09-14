@@ -13,6 +13,6 @@ namespace UnityEditor
     public class Editor { }
     public static class EditorApplication
     {
-        public static string applicationContentsPath => string.Empty;
+        public static string applicationContentsPath { get; set; } = string.Empty;
     }
 }

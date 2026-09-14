@@ -22,9 +22,13 @@ namespace UnityLeanMcp
         internal static string s_CurrentTestJobGuid;
         private static readonly object s_RunStateLock = new object();
         private static UnityTestRunState s_CachedRunState;
+        private static string s_CancellationSignalRunId;
+        private static string s_CancellationMonitorRunId;
+        private static bool s_CancellationMonitorRegistered;
 
         internal static string TempDirectory => UnityLeanMcpPaths.TempDir;
         internal static string RunningFilePath => UnityLeanMcpPaths.TestRunningFile;
+        internal static string CancellationFilePath => UnityLeanMcpPaths.TestCancellationFile;
         internal static string ResultsFilePath => UnityLeanMcpPaths.TestResultsFile;
         internal static string GetResultsFilePath(string runId) => UnityLeanMcpPaths.GetTestResultsFile(runId);
 
@@ -84,16 +88,39 @@ namespace UnityLeanMcp
             var runningState = ReadRunningState();
             if (runningState != null)
             {
+                s_CurrentTestJobGuid = runningState.jobGuid;
                 s_Callbacks.BindRun(runningState.runId);
+                if (IsCancellationRequested(runningState.runId) || runningState.status == OperationStatus.Cancelling)
+                {
+                    CancelActiveTestRunOnMainThread(runningState.runId);
+                }
             }
         }
 
         public static bool IsTestRunActive()
         {
+            return TryGetTestRunnerActiveState(out bool isActive) && isActive;
+        }
+
+        private static bool TryGetTestRunnerActiveState(out bool isActive)
+        {
+            isActive = false;
             try
             {
                 s_IsRunActiveMethod ??= typeof(TestRunnerApi).GetMethod("IsRunActive", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                return s_IsRunActiveMethod != null && (bool)s_IsRunActiveMethod.Invoke(null, null);
+                if (s_IsRunActiveMethod == null)
+                {
+                    return false;
+                }
+
+                object value = s_IsRunActiveMethod.Invoke(null, null);
+                if (!(value is bool))
+                {
+                    return false;
+                }
+
+                isActive = (bool)value;
+                return true;
             }
             catch (Exception ex)
             {
@@ -110,7 +137,9 @@ namespace UnityLeanMcp
                 return;
             }
 
-            if (UnityLeanMcpCompilationTracker.IsCompiling || UnityLeanMcpCompilationTracker.RefreshPending)
+            if (UnityLeanMcpCompilationTracker.IsCompiling ||
+                UnityLeanMcpCompilationTracker.RefreshPending ||
+                UnityLeanMcpCompilationTracker.RefreshRequired)
             {
                 writer.WriteLine("BUSY compile");
                 return;
@@ -140,13 +169,7 @@ namespace UnityLeanMcp
             {
                 string unescapedJson = ProtocolCodec.UnescapeLine(remainder);
                 testArgs = JsonUtility.FromJson<RunTestsArgs>(unescapedJson) ?? new RunTestsArgs();
-                mode = (testArgs.mode ?? "all").ToLowerInvariant() switch
-                {
-                    "playmode" => TestMode.PlayMode,
-                    "editmode" => TestMode.EditMode,
-                    "all" => TestMode.EditMode | TestMode.PlayMode,
-                    _ => (TestMode)(-1)
-                };
+                mode = ParseTestMode(testArgs.mode);
             }
             else
             {
@@ -157,26 +180,36 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                mode = args[1].ToLowerInvariant() switch
-                {
-                    "playmode" => TestMode.PlayMode,
-                    "editmode" => TestMode.EditMode,
-                    "all" => TestMode.EditMode | TestMode.PlayMode,
-                    _ => (TestMode)(-1)
-                };
+                mode = ParseTestMode(args[1]);
 
-                string filter = "";
-                string category = "";
+                string filter = null;
+                string category = null;
+                bool filterSpecified = false;
+                bool categorySpecified = false;
                 bool failedOnly = false;
 
                 for (int i = 2; i < args.Length; i++)
                 {
-                    if (args[i] == "--filter" && i + 1 < args.Length)
+                    if (args[i] == "--filter")
                     {
+                        if (i + 1 >= args.Length)
+                        {
+                            writer.WriteLine("ERROR: Missing value for --filter");
+                            return;
+                        }
+
+                        filterSpecified = true;
                         filter = args[++i];
                     }
-                    else if (args[i] == "--category" && i + 1 < args.Length)
+                    else if (args[i] == "--category")
                     {
+                        if (i + 1 >= args.Length)
+                        {
+                            writer.WriteLine("ERROR: Missing value for --category");
+                            return;
+                        }
+
+                        categorySpecified = true;
                         category = args[++i];
                     }
                     else if (args[i] == "--failed-only")
@@ -188,8 +221,8 @@ namespace UnityLeanMcp
                 testArgs = new RunTestsArgs
                 {
                     mode = args[1],
-                    groupNames = !string.IsNullOrEmpty(filter) ? new[] { filter } : null,
-                    categoryNames = !string.IsNullOrEmpty(category) ? new[] { category } : null,
+                    groupNames = filterSpecified ? new[] { filter } : null,
+                    categoryNames = categorySpecified ? new[] { category } : null,
                     failedOnly = failedOnly
                 };
             }
@@ -197,6 +230,12 @@ namespace UnityLeanMcp
             if ((int)mode == -1)
             {
                 writer.WriteLine("ERROR: Invalid test mode. Must be all, playmode, or editmode");
+                return;
+            }
+
+            if (!TryValidateFilterValues(testArgs, out string filterError))
+            {
+                writer.WriteLine($"ERROR: {filterError}");
                 return;
             }
 
@@ -221,6 +260,7 @@ namespace UnityLeanMcp
 
             try
             {
+                PrepareCancellationRequest(operationId);
                 List<string> failedTests = null;
                 if (testArgs.failedOnly)
                 {
@@ -268,6 +308,50 @@ namespace UnityLeanMcp
                 Debug.LogError($"UnityLeanMcp: Unhandled exception during RunTests: {ex}");
                 WriteInterruptedResult("Failed to start test run: " + ex.Message, operationId);
             }
+        }
+
+        private static TestMode ParseTestMode(string mode)
+        {
+            switch ((mode ?? "").Trim().ToLowerInvariant())
+            {
+                case "playmode":
+                    return TestMode.PlayMode;
+                case "editmode":
+                    return TestMode.EditMode;
+                case "all":
+                    return TestMode.EditMode | TestMode.PlayMode;
+                default:
+                    return (TestMode)(-1);
+            }
+        }
+
+        private static bool TryValidateFilterValues(RunTestsArgs args, out string error)
+        {
+            return TryValidateFilterValues("testNames", args.testNames, out error) &&
+                TryValidateFilterValues("groupNames", args.groupNames, out error) &&
+                TryValidateFilterValues("categoryNames", args.categoryNames, out error) &&
+                TryValidateFilterValues("assemblyNames", args.assemblyNames, out error);
+        }
+
+        private static bool TryValidateFilterValues(string parameterName, string[] values, out string error)
+        {
+            if (values != null)
+            {
+                for (int i = 0; i < values.Length; i++)
+                {
+                    // Null entries remain omitted for compatibility. Empty and
+                    // whitespace-only entries must never be silently broadened
+                    // into an unfiltered test run.
+                    if (values[i] != null && string.IsNullOrWhiteSpace(values[i]))
+                    {
+                        error = $"Invalid test filter '{parameterName}[{i}]': value must not be empty or whitespace-only.";
+                        return false;
+                    }
+                }
+            }
+
+            error = null;
+            return true;
         }
 
         private static List<string> GetPreviouslyFailedTestNames()
@@ -393,6 +477,15 @@ namespace UnityLeanMcp
                 var settings = new ExecutionSettings(filter);
                 Debug.Log($"UnityLeanMcp: Executing {mode} tests with testNames count '{(filter.testNames?.Length ?? 0)}', groupNames count '{(filter.groupNames?.Length ?? 0)}', categoryNames count '{(filter.categoryNames?.Length ?? 0)}', assemblyNames count '{(filter.assemblyNames?.Length ?? 0)}'...");
                 s_CurrentTestJobGuid = s_RunnerApi.Execute(settings);
+                UpdateTestRunJobGuid(runId, s_CurrentTestJobGuid);
+
+                // A cancellation request may have been durably recorded while
+                // this command was waiting to reach the main thread. Apply it
+                // after Execute returns, when the job identity is available.
+                if (IsCancellationRequested(runId))
+                {
+                    CancelActiveTestRunOnMainThread(runId);
+                }
             }
             catch (Exception ex)
             {
@@ -442,6 +535,26 @@ namespace UnityLeanMcp
                 Debug.LogError($"UnityLeanMcp: Failed to read test run state: {ex.Message}");
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Worker-thread-only view of the running test state. Cache misses are
+        /// decoded with the managed worker codec; they must not call
+        /// JsonUtility or Unity logging while the main thread is busy.
+        /// </summary>
+        internal static WorkerTestRunStateSnapshot ReadThreadSafeSnapshot()
+        {
+            lock (s_RunStateLock)
+            {
+                if (s_CachedRunState != null)
+                {
+                    return new WorkerTestRunStateSnapshot(s_CachedRunState.runId);
+                }
+            }
+
+            return WorkerThreadSnapshots.TryReadTestRunState(UnityLeanMcpPaths.WorkerTestRunningFile, out var snapshot)
+                ? snapshot
+                : null;
         }
 
         internal static void UpdateTestRunStatus(string runId, string status)
@@ -535,6 +648,8 @@ namespace UnityLeanMcp
             try
             {
                 WriteAtomic(GetResultsFilePath(runId), JsonUtility.ToJson(result, true), runId);
+                ClearCancellationRequest(runId);
+                StopCancellationMonitoring(runId);
                 DeleteRunningStateIfOwned(runId);
                 ClearCachedRunState();
                 UnityLeanMcpOperationStore.Complete(runId);
@@ -545,7 +660,96 @@ namespace UnityLeanMcp
             }
         }
 
-        public static void CancelActiveTestRun(string operationId, StreamWriter writer)
+        internal static bool RequestCancelFromWorker(string operationId)
+        {
+            if (!string.IsNullOrEmpty(operationId))
+            {
+                var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+                if (operation == null || operation.OperationId != operationId || operation.Kind != OperationKinds.Test)
+                {
+                    return false;
+                }
+            }
+
+            var runningState = ReadThreadSafeSnapshot();
+            if (runningState == null
+                && string.IsNullOrEmpty(operationId))
+            {
+                return false;
+            }
+
+            string requestedRunId = operationId;
+            if (string.IsNullOrEmpty(requestedRunId))
+            {
+                var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+                requestedRunId = runningState?.RunId ?? operation?.OperationId;
+            }
+
+            if (string.IsNullOrEmpty(requestedRunId))
+            {
+                return false;
+            }
+
+            if (runningState != null && runningState.RunId != requestedRunId)
+            {
+                return false;
+            }
+
+            // Persist the intent before acknowledging the request. The marker
+            // survives a domain reload if the queued main-thread action is
+            // discarded with the old managed domain.
+            if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.WorkerTestCancellationFile, requestedRunId))
+            {
+                return false;
+            }
+
+            // The action performs all Unity API and state-transition work on
+            // the main thread. The worker acknowledges acceptance without
+            // waiting for the dispatcher, so cancellation cannot deadlock
+            // behind a synchronous operation or a domain reload.
+            string runId = requestedRunId;
+            UnityLeanMcpDispatcher.Enqueue(() => CancelActiveTestRunOnMainThread(runId));
+            return true;
+        }
+
+        private static void CancelActiveTestRunOnMainThread(string operationId)
+        {
+            var state = ReadRunningState();
+            if (state == null || state.runId != operationId ||
+                !UnityLeanMcpOperationStore.IsOwnedBy(operationId, OperationKinds.Test))
+            {
+                return;
+            }
+
+            if (state.status != OperationStatus.Cancelling)
+            {
+                UpdateTestRunStatus(operationId, OperationStatus.Cancelling);
+                UnityLeanMcpOperationStore.Update(operationId, OperationStatus.Cancelling);
+            }
+
+            BeginCancellationMonitoring(operationId);
+
+            string jobGuid = s_CurrentTestJobGuid ?? state.jobGuid;
+            if (!string.IsNullOrEmpty(jobGuid) && s_CancellationSignalRunId != operationId)
+            {
+                try
+                {
+                    TestRunnerApi.CancelTestRun(jobGuid);
+                    s_CancellationSignalRunId = operationId;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"UnityLeanMcp: Exception while calling TestRunnerApi.CancelTestRun: {ex.Message}");
+                }
+            }
+
+            // CancelTestRun is only a request. A terminal result may be
+            // published by RunFinished, or by the update monitor once the
+            // Test Runner reports that no run is active.
+            TryCompleteCancellationIfRunnerTerminal(operationId);
+        }
+
+        internal static OperationCancelResult CancelActiveTestRun(string operationId)
         {
             var operation = UnityLeanMcpOperationStore.Read();
             var runningState = ReadRunningState();
@@ -561,28 +765,24 @@ namespace UnityLeanMcp
                         var existing = JsonUtility.FromJson<UnityTestRunResult>(CommandHelper.ReadFileWithRetry(resPath, maxRetries: 3, delayMs: 10));
                         if (existing != null && existing.runId == operationId)
                         {
-                            writer.WriteLine("CANCELLED");
-                            return;
+                            return OperationCancelResult.Cancelled;
                         }
                     }
                     catch { }
                 }
 
-                writer.WriteLine("IDLE");
-                return;
+                return OperationCancelResult.NotFound;
             }
 
             // 2. If the operation belongs to another operation ID
             if (operation != null && !string.IsNullOrEmpty(operationId) && operation.operationId != operationId)
             {
-                writer.WriteLine($"BUSY {operation.kind} {operation.operationId}");
-                return;
+                return OperationCancelResult.NotCancelable;
             }
 
             if (runningState != null && !string.IsNullOrEmpty(operationId) && runningState.runId != operationId)
             {
-                writer.WriteLine($"BUSY test {runningState.runId}");
-                return;
+                return OperationCancelResult.NotCancelable;
             }
 
             string activeRunId = operationId;
@@ -591,24 +791,13 @@ namespace UnityLeanMcp
                 activeRunId = runningState?.runId ?? operation?.operationId;
             }
 
-            string jobGuid = s_CurrentTestJobGuid;
-            if (!string.IsNullOrEmpty(jobGuid))
+            if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(CancellationFilePath, activeRunId))
             {
-                UnityLeanMcpDispatcher.Enqueue(() =>
-                {
-                    try
-                    {
-                        TestRunnerApi.CancelTestRun(jobGuid);
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"UnityLeanMcp: Exception while calling TestRunnerApi.CancelTestRun: {ex.Message}");
-                    }
-                });
+                return OperationCancelResult.NotCancelable;
             }
 
-            WriteCancelledResult(activeRunId);
-            writer.WriteLine("CANCELLED");
+            CancelActiveTestRunOnMainThread(activeRunId);
+            return OperationCancelResult.Cancelled;
         }
 
         internal static void WriteCancelledResult(string targetRunId = null)
@@ -616,6 +805,11 @@ namespace UnityLeanMcp
             var state = ReadRunningState();
             string runId = targetRunId ?? state?.runId;
             if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            {
+                return;
+            }
+
+            if (!IsCancellationRequested(runId))
             {
                 return;
             }
@@ -632,6 +826,8 @@ namespace UnityLeanMcp
             try
             {
                 WriteAtomic(GetResultsFilePath(runId), JsonUtility.ToJson(result, true), runId);
+                ClearCancellationRequest(runId);
+                StopCancellationMonitoring(runId);
                 DeleteRunningStateIfOwned(runId);
                 ClearCachedRunState();
                 UnityLeanMcpOperationStore.Complete(runId);
@@ -644,6 +840,133 @@ namespace UnityLeanMcp
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Failed to persist cancelled test result. Type={ex.GetType().FullName}, StackTrace={ex.StackTrace}");
+            }
+        }
+
+        private static void PrepareCancellationRequest(string runId)
+        {
+            string path = CancellationFilePath;
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            string requestedRunId = WorkerThreadSnapshots.ReadFileWithRetry(path)?.Trim();
+            if (!string.IsNullOrEmpty(requestedRunId) && requestedRunId != runId)
+            {
+                try { File.Delete(path); } catch { }
+            }
+        }
+
+        private static bool IsCancellationRequested(string runId)
+        {
+            if (string.IsNullOrEmpty(runId))
+            {
+                return false;
+            }
+
+            var state = ReadRunningState();
+            return (state != null && state.runId == runId && state.status == OperationStatus.Cancelling) ||
+                WorkerThreadSnapshots.TryReadTestCancellationRequest(CancellationFilePath, runId);
+        }
+
+        private static void UpdateTestRunJobGuid(string runId, string jobGuid)
+        {
+            var state = ReadRunningState();
+            if (state == null || state.runId != runId ||
+                !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            {
+                return;
+            }
+
+            state.jobGuid = jobGuid;
+            lock (s_RunStateLock)
+            {
+                s_CachedRunState = state;
+            }
+
+            try
+            {
+                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"UnityLeanMcp: Failed to persist test job identity: {ex.Message}");
+            }
+        }
+
+        private static void BeginCancellationMonitoring(string runId)
+        {
+            s_CancellationMonitorRunId = runId;
+            if (s_CancellationMonitorRegistered)
+            {
+                return;
+            }
+
+            EditorApplication.update -= ObserveCancellationState;
+            EditorApplication.update += ObserveCancellationState;
+            s_CancellationMonitorRegistered = true;
+        }
+
+        private static void ObserveCancellationState()
+        {
+            string runId = s_CancellationMonitorRunId;
+            if (string.IsNullOrEmpty(runId))
+            {
+                StopCancellationMonitoring(null);
+                return;
+            }
+
+            var state = ReadRunningState();
+            if (state == null || state.runId != runId ||
+                !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            {
+                StopCancellationMonitoring(runId);
+                return;
+            }
+
+            TryCompleteCancellationIfRunnerTerminal(runId);
+        }
+
+        private static void TryCompleteCancellationIfRunnerTerminal(string runId)
+        {
+            if (!IsCancellationRequested(runId) ||
+                !TryGetTestRunnerActiveState(out bool isActive) || isActive)
+            {
+                return;
+            }
+
+            WriteCancelledResult(runId);
+        }
+
+        internal static void ClearCancellationRequest(string runId)
+        {
+            if (string.IsNullOrEmpty(runId) ||
+                !WorkerThreadSnapshots.TryReadTestCancellationRequest(CancellationFilePath, runId))
+            {
+                return;
+            }
+
+            try { File.Delete(CancellationFilePath); } catch { }
+        }
+
+        internal static void StopCancellationMonitoring(string runId)
+        {
+            if (!string.IsNullOrEmpty(runId) && s_CancellationMonitorRunId != runId)
+            {
+                return;
+            }
+
+            if (s_CancellationMonitorRegistered)
+            {
+                EditorApplication.update -= ObserveCancellationState;
+                s_CancellationMonitorRegistered = false;
+            }
+
+            s_CancellationMonitorRunId = null;
+            if (string.IsNullOrEmpty(runId) || s_CancellationSignalRunId == runId)
+            {
+                s_CancellationSignalRunId = null;
             }
         }
 
@@ -703,6 +1026,11 @@ namespace UnityLeanMcp
         internal static void WriteAtomic(string path, string content, string runId)
         {
             UnityLeanMcpOperationStore.WriteAtomic(path, content, runId);
+        }
+
+        internal static bool TryWriteStaticHistory(string path, string content, string runId)
+        {
+            return UnityLeanMcpOperationStore.TryWriteStaticHistory(path, content, runId);
         }
     }
 }

@@ -120,6 +120,71 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public async Task UnitySocketTransport_SendCommandAsync_RethrowsCallerCancellation()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cancellation = new CancellationTokenSource();
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseServer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var serverTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            accepted.SetResult();
+            await releaseServer.Task;
+        });
+
+        try
+        {
+            var transport = new UnitySocketTransport(NullLogger.Instance);
+            Task<string?> commandTask = transport.SendCommandAsync(port, "WAIT", timeoutSeconds: 30, cancellation.Token);
+
+            await accepted.Task;
+            cancellation.Cancel();
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() => commandTask);
+        }
+        finally
+        {
+            releaseServer.TrySetResult();
+            listener.Stop();
+            await serverTask;
+        }
+    }
+
+    [Fact]
+    public async Task UnitySocketTransport_SendCommandAsync_ReturnsNullForInternalTimeout()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        var releaseServer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var serverTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            await releaseServer.Task;
+        });
+
+        try
+        {
+            var transport = new UnitySocketTransport(NullLogger.Instance);
+
+            string? response = await transport.SendCommandAsync(port, "WAIT", timeoutSeconds: 1);
+
+            Assert.Null(response);
+        }
+        finally
+        {
+            releaseServer.TrySetResult();
+            listener.Stop();
+            await serverTask;
+        }
+    }
+
+    [Fact]
     public async Task OperationPoller_PollOperationUntilTerminalAsync_ReadsResultFile()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_poller_test_" + Guid.NewGuid().ToString("N"));
@@ -750,6 +815,78 @@ public class DecomposedComponentsTests
         Assert.Equal(source ?? "", methodBody);
     }
 
+    [Fact]
+    public async Task RoslynCompilerHelper_EnsureInitialized_RetriesAfterFailureAndSerializesConcurrentCallers()
+    {
+        string originalContentsPath = UnityEditor.EditorApplication.applicationContentsPath;
+        string missingContentsPath = Path.Combine(Path.GetTempPath(), "unity_roslyn_missing_" + Guid.NewGuid().ToString("N"));
+        string existingContentsPath = Path.Combine(Path.GetTempPath(), "unity_roslyn_existing_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(existingContentsPath);
+
+        try
+        {
+            UnityEditor.EditorApplication.applicationContentsPath = missingContentsPath;
+            UnityLeanMcp.RoslynCompilerHelper.EnsureInitialized();
+            Assert.Contains("invalid or does not exist", UnityLeanMcp.RoslynCompilerHelper.UnsupportedReason);
+
+            UnityEditor.EditorApplication.applicationContentsPath = existingContentsPath;
+            var callers = new Task[8];
+            for (int i = 0; i < callers.Length; i++)
+            {
+                callers[i] = Task.Run(() => UnityLeanMcp.RoslynCompilerHelper.EnsureInitialized());
+            }
+
+            await Task.WhenAll(callers);
+
+            Assert.False(UnityLeanMcp.RoslynCompilerHelper.IsSupported);
+            Assert.Contains("could not be found or loaded", UnityLeanMcp.RoslynCompilerHelper.UnsupportedReason);
+        }
+        finally
+        {
+            UnityEditor.EditorApplication.applicationContentsPath = originalContentsPath;
+            try { Directory.Delete(existingContentsPath, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void RoslynCompilerHelper_GetSupportStatus_EvaluatesAtomically()
+    {
+        var status = UnityLeanMcp.RoslynCompilerHelper.GetSupportStatus();
+        Assert.Equal(UnityLeanMcp.RoslynCompilerHelper.IsSupported, status.IsSupported);
+        Assert.Equal(UnityLeanMcp.RoslynCompilerHelper.UnsupportedReason, status.UnsupportedReason ?? "");
+    }
+
+    [Fact]
+    public void UnityClient_WithCustomOptions_SetsPropertiesProperly()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_opts_" + Guid.NewGuid().ToString("N"));
+        var resolver = new UnityPathResolver(projectRoot);
+        var pm = new StubProcessManager(resolver);
+        var options = new UnityClientOptions(PollIntervalMs: 123, BusyGracePeriod: TimeSpan.FromSeconds(7));
+        IUnityClient client = new UnityClient(pm, NullLogger<UnityClient>.Instance, options: options);
+
+        Assert.Equal(123, client.PollIntervalMs);
+        Assert.Equal(TimeSpan.FromSeconds(7), client.BusyGracePeriod);
+    }
+
+    [Fact]
+    public void UnityProcessManager_ConstructorInjection_InitializesDelegates()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_inject_" + Guid.NewGuid().ToString("N"));
+        var resolver = new UnityPathResolver(projectRoot);
+        using var dummyProc = System.Diagnostics.Process.GetCurrentProcess();
+        var pm = new UnityProcessManager(
+            resolver,
+            NullLogger<UnityProcessManager>.Instance,
+            processProvider: () => new[] { dummyProc },
+            processStarter: _ => dummyProc);
+
+        Assert.NotNull(pm.ProcessProvider);
+        Assert.NotNull(pm.ProcessStarter);
+        Assert.Same(dummyProc, pm.ProcessProvider()[0]);
+        Assert.Same(dummyProc, pm.ProcessStarter(new System.Diagnostics.ProcessStartInfo()));
+    }
+
     private sealed class StubSocketTransport : IUnitySocketTransport
     {
         private readonly string? _response;
@@ -765,10 +902,7 @@ public class DecomposedComponentsTests
         public StubProcessManager(IUnityPathResolver pathResolver) => PathResolver = pathResolver;
         public bool IsUnityRunning(out int? processId) { processId = 1234; return true; }
         public string GetUnityMode(int? pid = null) => "Batchmode";
-        public string? GetProjectEditorVersion() => "6000.0.0f1";
         public int ReadPortFile() => 12345;
-        public Task<bool> StartUnityAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
-        public Task<bool> WaitForHealthyAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
         public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
         public void PurgeOperationState() { }

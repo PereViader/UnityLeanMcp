@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -21,14 +21,18 @@ namespace UnityLeanMcp
         private static volatile bool s_RefreshPending;
         private static volatile bool s_ScriptCompilationFailed;
         private static volatile bool s_CompilationRequested;
+        // Conservative latch for changes reported by Unity's project-change
+        // notification. It starts set after a domain load because the client
+        // cannot safely assume that an earlier process refreshed this domain.
+        private static volatile bool s_RefreshRequired = true;
         private static int s_CompilationRequestIdleFrames;
         private static string s_ObservedOperationId;
         private static int s_SettledUpdateCount;
-        private static volatile UnityRefreshResult s_LastRefreshResult;
 
         public static bool IsCompiling => s_IsCompiling;
         public static bool IsUpdating => s_IsUpdating;
         public static bool ScriptCompilationFailed => s_ScriptCompilationFailed;
+        public static bool RefreshRequired => s_RefreshRequired;
 
         public static bool RefreshPending
         {
@@ -67,7 +71,6 @@ namespace UnityLeanMcp
             UnityLeanMcpOperationStore.EnsureInitialized();
             UpdateCompilationState();
             var operation = UnityLeanMcpOperationStore.Read();
-            LoadRefreshResultCache();
             bool resumingCompilation = operation != null &&
                 (operation.kind == OperationKinds.Refresh || operation.kind == OperationKinds.Recompile) &&
                 operation.editorSessionId == UnityLeanMcpOperationStore.EditorSessionId;
@@ -77,6 +80,8 @@ namespace UnityLeanMcp
             }
             EditorApplication.update -= UpdateCompilationState;
             EditorApplication.update += UpdateCompilationState;
+            EditorApplication.projectChanged -= OnProjectChanged;
+            EditorApplication.projectChanged += OnProjectChanged;
             EditorApplication.quitting -= DeleteDiagnosticsFile;
             EditorApplication.quitting += DeleteDiagnosticsFile;
             UnityEditor.Compilation.CompilationPipeline.compilationStarted -= OnCompilationStarted;
@@ -99,6 +104,14 @@ namespace UnityLeanMcp
             s_IsCompiling = false;
             s_ScriptCompilationFailed = EditorUtility.scriptCompilationFailed;
             WriteActiveErrorsToFile();
+        }
+
+        private static void OnProjectChanged()
+        {
+            // This event is also raised for external edits that Unity has not
+            // necessarily imported yet. Keep the latch set until the
+            // correlated refresh operation reaches a durable terminal result.
+            s_RefreshRequired = true;
         }
 
         private static void OnAssemblyCompilationFinished(string assemblyPath, UnityEditor.Compilation.CompilerMessage[] messages)
@@ -286,11 +299,16 @@ namespace UnityLeanMcp
                 interrupted = false,
                 message = EditorUtility.scriptCompilationFailed ? "Compilation failed" : ""
             };
+            string json = JsonUtility.ToJson(result, true);
             UnityLeanMcpOperationStore.WriteAtomic(
-                UnityLeanMcpPaths.RefreshResultFile,
-                JsonUtility.ToJson(result, true),
+                UnityLeanMcpPaths.GetRefreshResultFile(operation.operationId),
+                json,
                 operation.operationId);
-            s_LastRefreshResult = result;
+            UnityLeanMcpOperationStore.TryWriteStaticHistory(
+                UnityLeanMcpPaths.RefreshResultFile,
+                json,
+                operation.operationId);
+            s_RefreshRequired = false;
             UnityLeanMcpOperationStore.Complete(operation.operationId);
             s_ObservedOperationId = null;
             s_SettledUpdateCount = 0;
@@ -298,13 +316,46 @@ namespace UnityLeanMcp
 
         internal static bool TryReadRefreshResult(string operationId, out UnityRefreshResult result)
         {
-            result = s_LastRefreshResult;
-            return result != null && result.operationId == operationId;
+            result = null;
+            if (string.IsNullOrEmpty(operationId)) return false;
+
+            string path = UnityLeanMcpPaths.GetRefreshResultFile(operationId);
+            if (!File.Exists(path)) return false;
+
+            try
+            {
+                string json = CommandHelper.ReadFileWithRetry(path, maxRetries: 3, delayMs: 10);
+                if (!string.IsNullOrEmpty(json))
+                {
+                    result = JsonUtility.FromJson<UnityRefreshResult>(json);
+                    return result != null && result.operationId == operationId;
+                }
+            }
+            catch
+            {
+                // Ignored - transient read error
+            }
+
+            return false;
         }
 
-        internal static void ResetRefreshResultCache()
+        internal static bool TryReadRefreshResultThreadSafe(string operationId, out WorkerRefreshResultSnapshot result)
         {
-            s_LastRefreshResult = null;
+            if (string.IsNullOrEmpty(operationId))
+            {
+                result = null;
+                return false;
+            }
+
+            string path = UnityLeanMcpPaths.GetWorkerRefreshResultFile(operationId);
+            if (WorkerThreadSnapshots.TryReadRefreshResult(path, out var persisted) && persisted.OperationId == operationId)
+            {
+                result = persisted;
+                return true;
+            }
+
+            result = null;
+            return false;
         }
 
         internal static void WriteInterruptedRefreshResult(string operationId, string message)
@@ -316,28 +367,16 @@ namespace UnityLeanMcp
                 interrupted = true,
                 message = message
             };
+            string json = JsonUtility.ToJson(result, true);
             UnityLeanMcpOperationStore.WriteAtomic(
-                UnityLeanMcpPaths.RefreshResultFile,
-                JsonUtility.ToJson(result, true),
+                UnityLeanMcpPaths.GetRefreshResultFile(operationId),
+                json,
                 operationId);
-            s_LastRefreshResult = result;
+            UnityLeanMcpOperationStore.TryWriteStaticHistory(
+                UnityLeanMcpPaths.RefreshResultFile,
+                json,
+                operationId);
             UnityLeanMcpOperationStore.Complete(operationId);
-        }
-
-        private static void LoadRefreshResultCache()
-        {
-            try
-            {
-                string path = UnityLeanMcpPaths.RefreshResultFile;
-                s_LastRefreshResult = File.Exists(path)
-                    ? JsonUtility.FromJson<UnityRefreshResult>(CommandHelper.ReadFileWithRetry(path, maxRetries: 3, delayMs: 10))
-                    : null;
-            }
-            catch (Exception ex)
-            {
-                s_LastRefreshResult = null;
-                Debug.LogError($"UnityLeanMcp: Failed to load refresh result cache: {ex}");
-            }
         }
 
         public static void ClearActiveEntries()

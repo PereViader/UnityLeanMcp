@@ -13,7 +13,7 @@ namespace UnityLeanMcp
         public void Handle(string payload, StreamWriter writer)
         {
             string operationId = payload?.Trim();
-            if (UnityLeanMcpCompilationTracker.TryReadRefreshResult(operationId, out _))
+            if (!string.IsNullOrEmpty(operationId) && File.Exists(UnityLeanMcpPaths.GetRefreshResultFile(operationId)))
             {
                 writer.WriteLine("REFRESHING");
                 return;
@@ -40,7 +40,6 @@ namespace UnityLeanMcp
                 return;
             }
 
-            UnityLeanMcpCompilationTracker.ResetRefreshResultCache();
             UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
 
             UnityLeanMcpCompilationTracker.RefreshPending = true;

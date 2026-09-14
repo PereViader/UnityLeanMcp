@@ -13,6 +13,78 @@ namespace UnityLeanMcp.Mcp.Tests;
 [Trait("Category", "Subsystem")]
 public class TestRunErrorAndIdleTests
 {
+    [Theory]
+    [InlineData("smoketest")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task UnityClient_RunTestsAsync_WhenModeIsInvalid_ReturnsBeforeUnityExecution(string? mode)
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_test_invalid_mode_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+
+        try
+        {
+            var processManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
+            var client = new UnityClient(processManager, NullLogger<UnityClient>.Instance);
+
+            var result = await client.RunTestsAsync(
+                testNames: null,
+                groupNames: null,
+                categoryNames: null,
+                assemblyNames: null,
+                mode: mode,
+                failedOnly: false,
+                progress: null,
+                cancellationToken: CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal("InvalidInput", result.ResultState);
+            Assert.Equal("Invalid test mode. Expected one of: all, editmode, or playmode. The mode must not be blank.", result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("testNames")]
+    [InlineData("groupNames")]
+    [InlineData("categoryNames")]
+    [InlineData("assemblyNames")]
+    public async Task UnityClient_RunTestsAsync_WhenFilterContainsBlankValue_ReturnsBeforeUnityExecution(string filterName)
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_test_invalid_filter_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+
+        try
+        {
+            var processManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
+            var client = new UnityClient(processManager, NullLogger<UnityClient>.Instance);
+
+            var result = await client.RunTestsAsync(
+                testNames: filterName == "testNames" ? ["Valid", " "] : null,
+                groupNames: filterName == "groupNames" ? ["Valid.*", " "] : null,
+                categoryNames: filterName == "categoryNames" ? ["Valid", " "] : null,
+                assemblyNames: filterName == "assemblyNames" ? ["Valid", " "] : null,
+                mode: "all",
+                failedOnly: false,
+                progress: null,
+                cancellationToken: CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal("InvalidInput", result.ResultState);
+            Assert.Contains($"Invalid test filter '{filterName}[1]'", result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
     private static (UnityClient client, UnityProcessManager procManager, TcpListener listener, string tempDir, Task serverTask) StartMockServer(
         Func<string, string?> handleCommand,
         CancellationToken cancellationToken)
@@ -28,8 +100,10 @@ public class TestRunErrorAndIdleTests
         File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
         File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
 
-        var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+        var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            .WithTrustedTestProcessProvider();
         var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance);
+        bool refreshTriggered = false;
 
         var serverTask = Task.Run(async () =>
         {
@@ -58,10 +132,16 @@ public class TestRunErrorAndIdleTests
                     }
                     else if (line.StartsWith("POLL_REFRESH"))
                     {
+                        if (refreshTriggered && TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                        {
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                        }
+
                         await writer.WriteLineAsync("READY");
                     }
                     else if (line.StartsWith("REFRESH"))
                     {
+                        refreshTriggered = true;
                         await writer.WriteLineAsync("REFRESHING");
                     }
                 }
@@ -257,31 +337,47 @@ public class TestRunErrorAndIdleTests
     }
 
     [Fact]
-    public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsSuccessWithoutFile_StripsPrefixAndUnescapes()
+    public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsSuccessWithDurableFile_UsesDurableResult()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        UnityProcessManager procManager = null!;
+        var server = StartMockServer(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
+                string[] parts = cmd.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                string operationId = parts[1];
+                var durableResult = new UnityTestRunResult
+                {
+                    RunId = operationId,
+                    Success = true,
+                    ResultState = "Passed",
+                    PassCount = 10,
+                    Message = "Durable result"
+                };
+                File.WriteAllText(
+                    procManager.PathResolver.GetResultFilePath(UnityOperationKind.Test, operationId),
+                    System.Text.Json.JsonSerializer.Serialize(durableResult));
+
                 return "SUCCESS All tests passed\\nTotal: 10";
             }
             return null;
         }, cts.Token);
+        procManager = server.procManager;
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await server.client.RunTestsAsync(null, null, "editmode", null, cts.Token);
 
             Assert.True(result.Success);
-            Assert.DoesNotContain("SUCCESS", result.Message);
-            Assert.Equal("All tests passed\nTotal: 10", result.Message);
+            Assert.Equal(10, result.PassCount);
+            Assert.Equal("Durable result", result.Message);
         }
         finally
         {
-            listener.Stop();
+            server.listener.Stop();
             cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
+            try { Directory.Delete(server.tempDir, true); } catch { }
         }
     }
 
@@ -443,7 +539,7 @@ public class TestRunErrorAndIdleTests
         {
             if (cmd.StartsWith("POLL_REFRESH"))
             {
-                return "COMPILATION_ERROR";
+                return "FAILURE Script compilation failed";
             }
             if (cmd.StartsWith("EVAL"))
             {

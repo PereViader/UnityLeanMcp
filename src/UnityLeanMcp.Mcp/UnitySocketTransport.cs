@@ -49,6 +49,10 @@ public class UnitySocketTransport : IUnitySocketTransport
             string? line = await reader.ReadLineAsync(cts.Token);
             return line?.Trim();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger?.LogTrace(ex, "Socket command failed on port {Port}: {Command}", port, command);

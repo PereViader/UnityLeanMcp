@@ -28,7 +28,9 @@ namespace UnityLeanMcp
                 return;
             }
 
-            if (UnityLeanMcpCompilationTracker.IsCompiling || UnityLeanMcpCompilationTracker.RefreshPending)
+            if (UnityLeanMcpCompilationTracker.IsCompiling ||
+                UnityLeanMcpCompilationTracker.RefreshPending ||
+                UnityLeanMcpCompilationTracker.RefreshRequired)
             {
                 writer.WriteLine("BUSY compile");
                 return;
@@ -72,9 +74,10 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                if (!RoslynCompilerHelper.IsSupported)
+                var status = RoslynCompilerHelper.GetSupportStatus();
+                if (!status.IsSupported)
                 {
-                    string msg = "The 'eval' command is not supported on this Unity version (" + RoslynCompilerHelper.UnsupportedReason + ")";
+                    string msg = "The 'eval' command is not supported on this Unity version (" + status.UnsupportedReason + ")";
                     OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, msg, 0, null, null);
                     writer.WriteLine($"FAILURE {msg}");
                     return;

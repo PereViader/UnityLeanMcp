@@ -57,6 +57,8 @@ This automatically creates or updates the configuration files for:
 - **Claude Code**: `.mcp.json`
 - **Codex**: `.codex/config.toml`
 
+For this checkout, the supported project configuration paths are `.vscode/mcp.json` for VS Code, `.cursor/mcp.json` for Cursor, and `.codex/config.toml` for Codex. The tracked VS Code, Cursor, and Claude Code files use paths relative to the repository root, so they can be used after cloning on Windows, macOS, or Linux. The Unity installer regenerates the JSON project files from the resolved package location; it uses the same relative form when the package is inside the repository and falls back to an absolute path when a package cache is outside the repository. Codex configuration is generated locally under `.codex/` and remains machine-specific because that directory is ignored.
+
 ### Manual MCP Server Configuration
 
 If configuring manually, add the following to your MCP client configuration:
@@ -67,13 +69,22 @@ If configuring manually, add the following to your MCP client configuration:
     "unity-lean-mcp": {
       "command": "dotnet",
       "args": [
-        "UnityLeanMcp.Mcp.dll"
-      ],
-      "cwd": "<path-to-project>/Packages/com.pereviader.unityleanmcp/MCP~/"
+        "src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll",
+        "--project",
+        "src/UnityLeanMcp.Unity3d"
+      ]
     }
   }
 }
 ```
+
+Run the host from the checkout root so the relative DLL and project paths resolve correctly. For a Unity project installed as a package outside this repository, use **Tools > UnityLeanMcp > Install MCP Configurations** so the installer can write the resolved package path.
+
+### Release Versioning
+
+`.env.shared` is the single source of truth for the Unity package release version. To prepare a release, update only its `VERSION` value using the existing scheme: `major.minor.patch` for releases or `major.minor.patch-preview.N` for previews. Do not edit the `version` field in the package manifest separately.
+
+Run `bash ./build.sh` from the repository root. At build time, the version from `.env.shared` is placed on `package.json`.
 
 ---
 
@@ -82,7 +93,7 @@ If configuring manually, add the following to your MCP client configuration:
 The MCP server communicates over standard input/output using JSON-RPC. To inspect, test, and interact with the tools interactively, you can use the official MCP Inspector:
 
 ```bash
-npx @modelcontextprotocol/inspector dotnet Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll --project <path-to-unity-project>
+npx @modelcontextprotocol/inspector dotnet src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll --project src/UnityLeanMcp.Unity3d
 ```
 
 ---

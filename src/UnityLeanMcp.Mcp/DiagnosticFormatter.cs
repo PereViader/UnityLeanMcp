@@ -66,10 +66,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             return string.Empty;
 
         if (rawFile.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-        {
-            string uriAnchor = lineNumber.HasValue && !rawFile.Contains("#L") ? $"#L{lineNumber.Value}" : "";
-            return $"{rawFile}{uriAnchor}";
-        }
+            return BuildExistingFileUri(rawFile, lineNumber);
 
         string resolvedPath = rawFile;
         if (!IsPathRootedCrossPlatform(resolvedPath) && !string.IsNullOrWhiteSpace(projectRoot))
@@ -85,10 +82,139 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
         string normalizedPath = resolvedPath.Replace('\\', '/');
         string anchor = lineNumber.HasValue ? $"#L{lineNumber.Value}" : "";
+
+        // A Windows UNC path is represented by the URI authority (the server),
+        // not by an extra pair of leading slashes in the URI path.
+        if (normalizedPath.StartsWith("//", StringComparison.Ordinal))
+        {
+            string uncPath = normalizedPath[2..];
+            int separatorIndex = uncPath.IndexOf('/');
+            if (separatorIndex > 0)
+            {
+                string authority = EncodeUriAuthority(uncPath[..separatorIndex], preserveEscapes: false);
+                string path = EncodeUriPath(uncPath[separatorIndex..], preserveEscapes: false);
+                return $"file://{authority}{path}{anchor}";
+            }
+        }
+
+        string encodedPath = EncodeUriPath(normalizedPath, preserveEscapes: false);
         return normalizedPath.StartsWith('/')
-            ? $"file://{normalizedPath}{anchor}"
-            : $"file:///{normalizedPath}{anchor}";
+            ? $"file://{encodedPath}{anchor}"
+            : $"file:///{encodedPath}{anchor}";
     }
+
+    private static string BuildExistingFileUri(string rawUri, int? lineNumber)
+    {
+        int uriStart = "file://".Length;
+        string remainder = rawUri[uriStart..];
+
+        int fragmentIndex = remainder.IndexOf('#');
+        string fragment = fragmentIndex >= 0 ? remainder[fragmentIndex..] : string.Empty;
+        string withoutFragment = fragmentIndex >= 0 ? remainder[..fragmentIndex] : remainder;
+
+        int queryIndex = withoutFragment.IndexOf('?');
+        string query = queryIndex >= 0 ? withoutFragment[queryIndex..] : string.Empty;
+        string withoutQuery = queryIndex >= 0 ? withoutFragment[..queryIndex] : withoutFragment;
+
+        string authority;
+        string path;
+        if (withoutQuery.StartsWith("/", StringComparison.Ordinal))
+        {
+            authority = string.Empty;
+            path = withoutQuery;
+        }
+        else
+        {
+            int separatorIndex = withoutQuery.IndexOf('/');
+            if (separatorIndex < 0)
+            {
+                authority = withoutQuery;
+                path = string.Empty;
+            }
+            else
+            {
+                authority = withoutQuery[..separatorIndex];
+                path = withoutQuery[separatorIndex..];
+            }
+        }
+
+        string encodedAuthority = EncodeUriAuthority(authority, preserveEscapes: true);
+        string encodedPath = EncodeUriPath(path.Replace('\\', '/'), preserveEscapes: true);
+        string lineAnchor = fragment.Length == 0 && lineNumber.HasValue ? $"#L{lineNumber.Value}" : string.Empty;
+        return $"file://{encodedAuthority}{encodedPath}{query}{fragment}{lineAnchor}";
+    }
+
+    private static string EncodeUriAuthority(string authority, bool preserveEscapes)
+    {
+        return PercentEncode(authority, IsUriAuthorityCharacter, preserveEscapes, preservePathSeparators: false);
+    }
+
+    private static string EncodeUriPath(string path, bool preserveEscapes)
+    {
+        return PercentEncode(path, IsUriPathCharacter, preserveEscapes, preservePathSeparators: true);
+    }
+
+    private static string PercentEncode(
+        string value,
+        Func<char, bool> isAllowed,
+        bool preserveEscapes,
+        bool preservePathSeparators)
+    {
+        var builder = new StringBuilder(value.Length);
+        for (int i = 0; i < value.Length; i++)
+        {
+            char character = value[i];
+            if (preservePathSeparators && character == '/')
+            {
+                builder.Append('/');
+                continue;
+            }
+
+            if (isAllowed(character))
+            {
+                builder.Append(character);
+                continue;
+            }
+
+            if (preserveEscapes && character == '%' && i + 2 < value.Length &&
+                IsHexDigit(value[i + 1]) && IsHexDigit(value[i + 2]))
+            {
+                builder.Append('%');
+                builder.Append(char.ToUpperInvariant(value[i + 1]));
+                builder.Append(char.ToUpperInvariant(value[i + 2]));
+                i += 2;
+                continue;
+            }
+
+            int characterLength = char.IsHighSurrogate(character) && i + 1 < value.Length &&
+                                  char.IsLowSurrogate(value[i + 1]) ? 2 : 1;
+            byte[] utf8Bytes = Encoding.UTF8.GetBytes(value.Substring(i, characterLength));
+            foreach (byte utf8Byte in utf8Bytes)
+            {
+                builder.Append('%');
+                builder.Append(GetHexDigit(utf8Byte >> 4));
+                builder.Append(GetHexDigit(utf8Byte & 0x0F));
+            }
+            i += characterLength - 1;
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsUriAuthorityCharacter(char character) =>
+        IsUnreserved(character) || "!$&'()*+,;=".Contains(character, StringComparison.Ordinal);
+
+    private static bool IsUriPathCharacter(char character) =>
+        IsUnreserved(character) || "!$&'()*+,;=:@".Contains(character, StringComparison.Ordinal);
+
+    private static bool IsUnreserved(char character) =>
+        char.IsAsciiLetterOrDigit(character) || character is '-' or '.' or '_' or '~';
+
+    private static bool IsHexDigit(char character) =>
+        char.IsAsciiDigit(character) || character is >= 'A' and <= 'F' or >= 'a' and <= 'f';
+
+    private static char GetHexDigit(int value) =>
+        (char)(value < 10 ? '0' + value : 'A' + value - 10);
 
     public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
     {
@@ -123,7 +249,14 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         if (string.IsNullOrWhiteSpace(stackTrace))
             return string.Empty;
 
-        var lines = stackTrace.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+        // Bound the input before splitting so a pathological Unity trace cannot create
+        // an unnecessarily large temporary line array. Source location extraction is
+        // deliberately performed by the caller on the original trace first.
+        string boundedStackTrace = McpOutputLimits.Truncate(
+            stackTrace,
+            McpOutputLimits.MaxFailureStackTraceCharacters,
+            McpOutputLimits.FailureStackTraceTruncationMarker);
+        var lines = boundedStackTrace.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
 
         // 1. Locate the first line matching the initial shared framework runner marker
         int markerIndex = -1;
@@ -139,7 +272,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
         if (markerIndex == -1)
         {
-            return stackTrace.TrimEnd();
+            return boundedStackTrace.TrimEnd();
         }
 
         // 2. Scan backwards from the marker past any intermediate invocation plumbing (reflection, native wrappers)
@@ -151,13 +284,16 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
         if (testEntryPointIndex < 0)
         {
-            return stackTrace.TrimEnd();
+            return boundedStackTrace.TrimEnd();
         }
 
         // 3. Keep all lines from 0 to testEntryPointIndex inclusive
         var keptLines = new string[testEntryPointIndex + 1];
         Array.Copy(lines, 0, keptLines, 0, testEntryPointIndex + 1);
-        return string.Join(Environment.NewLine, keptLines).TrimEnd();
+        return McpOutputLimits.Truncate(
+            string.Join(Environment.NewLine, keptLines).TrimEnd(),
+            McpOutputLimits.MaxFailureStackTraceCharacters,
+            McpOutputLimits.FailureStackTraceTruncationMarker);
     }
 
     internal static bool IsFrameworkRunnerMarker(string line) =>
@@ -256,31 +392,48 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         int maxWarnings = DefaultMaxWarnings,
         bool isEval = false)
     {
-        var diagnostics = ParseCompilerDiagnostics(diagnosticText);
+        // Limit the parser's input as well as the final response. Unity can return a
+        // pathological amount of raw text or a very large number of diagnostics, and
+        // parsing the complete value would otherwise allocate an unbounded list of
+        // structured diagnostics before the response limit is applied.
+        string boundedDiagnosticText = McpOutputLimits.Truncate(
+            diagnosticText,
+            McpOutputLimits.MaxFormattedOutputCharacters,
+            McpOutputLimits.AggregateOutputTruncationMarker);
+        var diagnostics = ParseCompilerDiagnostics(boundedDiagnosticText);
         if (diagnostics.Count == 0)
         {
             if (isSuccess)
             {
-                if (string.IsNullOrWhiteSpace(diagnosticText) || diagnosticText.Trim() == "AssetDatabase refresh completed successfully.")
+                if (string.IsNullOrWhiteSpace(diagnosticText) || IsTrimmedText(
+                        diagnosticText,
+                        "AssetDatabase refresh completed successfully."))
                 {
-                    return successTrailer ?? "";
+                    return BoundOutput(builder => builder.Append(successTrailer));
                 }
-                return string.IsNullOrWhiteSpace(successTrailer)
-                    ? diagnosticText.TrimEnd()
-                    : $"{diagnosticText.TrimEnd()}{Environment.NewLine}{successTrailer}";
+
+                return BoundOutput(
+                    builder => builder.AppendTrimmedBounded(
+                        diagnosticText,
+                        McpOutputLimits.MaxFormattedOutputCharacters,
+                        McpOutputLimits.AggregateOutputTruncationMarker),
+                    successTrailer,
+                    appendTrailer: !string.IsNullOrWhiteSpace(successTrailer));
             }
-            else
+
+            if (string.IsNullOrWhiteSpace(diagnosticText))
             {
-                if (string.IsNullOrWhiteSpace(diagnosticText))
-                {
-                    return failureTrailer ?? "";
-                }
-                if (failureTrailer != null && !diagnosticText.Contains(failureTrailer))
-                {
-                    return $"{diagnosticText.TrimEnd()}{Environment.NewLine}{failureTrailer}";
-                }
-                return diagnosticText.TrimEnd();
+                return BoundOutput(builder => builder.Append(failureTrailer));
             }
+
+            bool appendFailureTrailer = failureTrailer != null && !diagnosticText.Contains(failureTrailer);
+            return BoundOutput(
+                builder => builder.AppendTrimmedBounded(
+                    diagnosticText,
+                    McpOutputLimits.MaxFormattedOutputCharacters,
+                    McpOutputLimits.AggregateOutputTruncationMarker),
+                appendFailureTrailer ? failureTrailer : null,
+                appendTrailer: appendFailureTrailer);
         }
 
         var errors = new List<StructuredCompilerDiagnostic>();
@@ -298,79 +451,129 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             }
         }
 
-        bool showHeaders = warnings.Count > 0 && errors.Count > 0;
-        var sb = new StringBuilder();
-
-        if (warnings.Count > 0)
-        {
-            if (showHeaders)
-            {
-                sb.AppendLine("Warnings:");
-            }
-
-            int warningsToReport = Math.Min(warnings.Count, maxWarnings);
-            for (int i = 0; i < warningsToReport; i++)
-            {
-                sb.AppendLine(FormatDiagnostic(warnings[i], projectRoot, isEval));
-            }
-
-            if (warnings.Count > maxWarnings)
-            {
-                int omitted = warnings.Count - maxWarnings;
-                sb.AppendLine($"... and {omitted} more warning(s) omitted to preserve context window.");
-            }
-        }
-
-        if (errors.Count > 0)
-        {
-            if (warnings.Count > 0)
-            {
-                sb.AppendLine();
-            }
-
-            if (showHeaders)
-            {
-                sb.AppendLine("Errors:");
-            }
-
-            foreach (var error in errors)
-            {
-                sb.AppendLine(FormatDiagnostic(error, projectRoot, isEval));
-            }
-        }
-
         bool failed = errors.Count > 0 || !isSuccess;
+        string? trailer = null;
         if (failed)
         {
             if (!string.IsNullOrWhiteSpace(failureTrailer))
             {
-                sb.AppendLine();
-                sb.Append(failureTrailer);
+                trailer = failureTrailer;
             }
         }
         else
         {
             if (!string.IsNullOrWhiteSpace(successTrailer))
             {
-                string trailer = successTrailer;
+                string computedTrailer = successTrailer;
                 if (warnings.Count > 0)
                 {
                     string warningPart = warnings.Count == 1 ? "1 warning" : $"{warnings.Count} warnings";
-                    if (trailer.EndsWith('.'))
+                    if (computedTrailer.EndsWith('.'))
                     {
-                        trailer = trailer[..^1] + $" ({warningPart}).";
+                        computedTrailer = computedTrailer[..^1] + $" ({warningPart}).";
                     }
                     else
                     {
-                        trailer = $"{trailer} ({warningPart})";
+                        computedTrailer = $"{computedTrailer} ({warningPart})";
                     }
                 }
 
-                sb.AppendLine();
-                sb.Append(trailer);
+                trailer = computedTrailer;
             }
         }
 
-        return sb.ToString().TrimEnd();
+        return BoundOutput(
+            builder =>
+            {
+                bool showHeaders = warnings.Count > 0 && errors.Count > 0;
+
+                if (warnings.Count > 0)
+                {
+                    if (showHeaders)
+                    {
+                        builder.AppendLine("Warnings:");
+                    }
+
+                    int warningsToReport = Math.Min(warnings.Count, maxWarnings);
+                    for (int i = 0; i < warningsToReport; i++)
+                    {
+                        builder.AppendLine(FormatDiagnostic(warnings[i], projectRoot, isEval));
+                    }
+
+                    if (warnings.Count > maxWarnings)
+                    {
+                        int omitted = warnings.Count - maxWarnings;
+                        builder.AppendLine($"... and {omitted} more warning(s) omitted to preserve context window.");
+                    }
+                }
+
+                if (errors.Count > 0)
+                {
+                    if (warnings.Count > 0)
+                    {
+                        builder.AppendLine();
+                    }
+
+                    if (showHeaders)
+                    {
+                        builder.AppendLine("Errors:");
+                    }
+
+                    foreach (var error in errors)
+                    {
+                        builder.AppendLine(FormatDiagnostic(error, projectRoot, isEval));
+                    }
+                }
+            },
+            trailer,
+            appendTrailer: !string.IsNullOrWhiteSpace(trailer));
+    }
+
+    private static bool IsTrimmedText(string value, string expected)
+    {
+        int start = 0;
+        int end = value.Length;
+        while (start < end && char.IsWhiteSpace(value[start]))
+        {
+            start++;
+        }
+
+        while (end > start && char.IsWhiteSpace(value[end - 1]))
+        {
+            end--;
+        }
+
+        return end - start == expected.Length && value.AsSpan(start, end - start).SequenceEqual(expected.AsSpan());
+    }
+
+    private static string BoundOutput(
+        Action<BoundedTextBuilder> appendBody,
+        string? trailer = null,
+        bool appendTrailer = false)
+    {
+        string suffix = appendTrailer ? Environment.NewLine + (trailer ?? string.Empty) : string.Empty;
+        int bodyLimit = (int)Math.Max(
+            0,
+            (long)McpOutputLimits.MaxFormattedOutputCharacters - suffix.Length);
+        int bodyByteLimit = Math.Max(
+            0,
+            McpOutputLimits.MaxFormattedOutputBytes - Encoding.UTF8.GetByteCount(suffix));
+
+        var body = new BoundedTextBuilder(
+            bodyLimit,
+            bodyByteLimit,
+            McpOutputLimits.AggregateOutputTruncationMarker);
+        appendBody(body);
+
+        var output = new BoundedTextBuilder(
+            McpOutputLimits.MaxFormattedOutputCharacters,
+            McpOutputLimits.AggregateOutputTruncationMarker);
+        output.Append(body.ToString());
+        if (appendTrailer)
+        {
+            output.Append(suffix);
+        }
+
+        return output.ToString().TrimEnd();
     }
 }

@@ -55,9 +55,11 @@ namespace UnityLeanMcp
                     ctsToCancel.Cancel();
                     return true;
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    Debug.LogWarning($"UnityLeanMcp: Failed to cancel active operation: {ex.Message}");
+                    // Cancellation is requested from a socket worker thread.
+                    // Do not call Unity logging here; the main-thread
+                    // operation will publish its terminal state if needed.
                 }
             }
             return false;
@@ -65,24 +67,6 @@ namespace UnityLeanMcp
 
         public static void MarkInterrupted(string operationKind, string resultFilePath, string message, string targetOperationId = null)
         {
-            CancellationTokenSource ctsToDispose = null;
-            ConsoleLogCapture captureToDispose = null;
-            lock (s_CtsLock)
-            {
-                if (string.IsNullOrEmpty(targetOperationId) || s_ActiveOperationId == targetOperationId)
-                {
-                    ctsToDispose = s_ActiveCts;
-                    s_ActiveCts = null;
-                    s_ActiveOperationId = null;
-                    s_ActiveIsCancelable = false;
-                    captureToDispose = s_ActiveLogCapture;
-                    s_ActiveLogCapture = null;
-                }
-            }
-
-            ctsToDispose?.Dispose();
-            DisposeCapture(captureToDispose);
-
             var operation = UnityLeanMcpOperationStore.Read();
             string opId = targetOperationId ?? operation?.operationId;
             if (string.IsNullOrEmpty(opId))
@@ -108,6 +92,7 @@ namespace UnityLeanMcp
                 };
                 UnityLeanMcpOperationStore.WriteAtomic(resultFilePath, JsonUtility.ToJson(result, true), opId);
                 UnityLeanMcpOperationStore.Complete(opId);
+                ReleaseActiveOperation(opId);
             }
             catch (Exception ex)
             {
@@ -426,24 +411,6 @@ namespace UnityLeanMcp
             List<ConsoleLogEntry> logs = null,
             bool interrupted = false)
         {
-            CancellationTokenSource ctsToDispose = null;
-            ConsoleLogCapture captureToDispose = null;
-            lock (s_CtsLock)
-            {
-                if (s_ActiveOperationId == operationId)
-                {
-                    ctsToDispose = s_ActiveCts;
-                    s_ActiveCts = null;
-                    s_ActiveOperationId = null;
-                    s_ActiveIsCancelable = false;
-                    captureToDispose = s_ActiveLogCapture;
-                    s_ActiveLogCapture = null;
-                }
-            }
-
-            ctsToDispose?.Dispose();
-            DisposeCapture(captureToDispose);
-
             if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
             {
                 return;
@@ -469,11 +436,35 @@ namespace UnityLeanMcp
                 string json = JsonUtility.ToJson(runResult, true);
                 UnityLeanMcpOperationStore.WriteAtomic(resultFilePath, json, operationId);
                 UnityLeanMcpOperationStore.Complete(operationId);
+                ReleaseActiveOperation(operationId);
             }
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Failed to write {operationKind} result: {ex}");
             }
+        }
+
+        private static void ReleaseActiveOperation(string operationId)
+        {
+            CancellationTokenSource ctsToDispose = null;
+            ConsoleLogCapture captureToDispose = null;
+            lock (s_CtsLock)
+            {
+                if (s_ActiveOperationId != operationId)
+                {
+                    return;
+                }
+
+                ctsToDispose = s_ActiveCts;
+                s_ActiveCts = null;
+                s_ActiveOperationId = null;
+                s_ActiveIsCancelable = false;
+                captureToDispose = s_ActiveLogCapture;
+                s_ActiveLogCapture = null;
+            }
+
+            ctsToDispose?.Dispose();
+            DisposeCapture(captureToDispose);
         }
 
         private static void DisposeCapture(ConsoleLogCapture logCapture)

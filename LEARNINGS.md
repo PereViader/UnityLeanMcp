@@ -19,6 +19,8 @@ Unity's managed domain reload is asynchronous and can be triggered externally at
 ### `AssemblyReloadEvents.beforeAssemblyReload` Lifecycle Restrictions
 `AssemblyReloadEvents.beforeAssemblyReload` executes just before the old managed domain unloads, but very little managed execution lifetime remains. It can only be relied upon for small, idempotent durable state flushes and transport shutdowns; never depend on a later callback executing in the unloading domain.
 
+Listener shutdown must synchronize publication with teardown. If the server thread can assign its listener after a reload hook observes `null`, it may recreate the endpoint or rewrite the port file after shutdown cleanup. Capture the listener under a lifecycle lock, close it, wait for the server thread to exit, and only then remove endpoint metadata. Client workers should be signaled and socket-closed without being joined from the Unity main thread.
+
 ### Unity Test Framework Assembly Reload Lock
 Unity locks managed assembly reloads while tests are actively running. Script modifications made during a test run are queued until the Test Framework completes and releases the lock. Consequently, a test modifying a script during execution does not test mid-test domain reload recovery.
 
@@ -36,6 +38,9 @@ Compiler diagnostics must be captured during `CompilationPipeline.assemblyCompil
 - When triggering AssetDatabase refresh or script recompilation, Unity may return an initial `READY` or success status while compilation errors are asynchronously published to the diagnostics file (`unity_compilation_errors.txt`).
 - Client refresh handlers must parse compilation diagnostics upon operation completion and demote `UnityRefreshResult.Success` to `false` if any error-level diagnostics or unparsed compilation errors exist, preventing false-positive success reporting when builds fail.
 
+### Refresh Poll Responses Must Not Stand In For Correlated Results
+`POLL_REFRESH <operationId>` can return a generic `READY` after the operation journal has been cleared. A shared static refresh result or that generic response is not evidence that the requested operation completed: it may belong to an earlier request. Refresh completion therefore requires the operation-scoped durable result; only a wait that began from an explicitly observed pre-existing compilation may derive its outcome from the newly observed current compilation state.
+
 ---
 
 ## 2. CLR, Threading & Roslyn Quirks
@@ -47,18 +52,25 @@ Unity does not guarantee execution ordering for `[InitializeOnLoad]` classes acr
 - This unhandled exception permanently poisons the type with a CLR `TypeInitializationException` for the entire remaining lifetime of that domain.
 - **Rule**: Helper and path classes must eliminate static constructors and static field initializers, defaulting fields to neutral values and relying on explicit main-thread `EnsureInitialized()` invocations during startup.
 
+The server itself must follow the same boundary. A public registry call can be the first reference from an external assembly or a background listener thread, so `UnityLeanMcpServer` cannot use its static constructor as the Unity startup hook. Use `[InitializeOnLoadMethod]` for an explicit main-thread bootstrap, keep pre-bootstrap registration and lookup as a lock-free managed dictionary operation without eagerly constructing the built-in handler graph, and add defaults with non-overwriting inserts on the main thread. Start the socket only after all dependent services and reload/quitting callbacks are registered. A load-time probe must not join a worker from an `[InitializeOnLoad]` callback because CLR type loading can require the Unity main thread; if such coverage is needed, let the worker run asynchronously and join only from a test body. On each domain reload, static bootstrap state is recreated and the ordered initialization sequence must run again.
+
 ### Unity API Main-Thread Affinity
 Virtually all Unity APIs are strictly main-thread-affine unless explicitly documented otherwise. This includes APIs that resemble standalone utility code, such as Unity JSON serialization (`JsonUtility`) and data path retrieval (`Application.dataPath`). Background threads must never invoke Unity engine APIs directly.
 
 ### Worker-Thread Operation Store Snapshot Caching
 - `UnityLeanMcpOperationStore.ReadThreadSafeSnapshot()` is invoked from background TCP listener threads to inspect active operation state during command dispatch and busy checks.
-- If `ReadThreadSafeSnapshot()` falls back to invoking `Read()` while an in-memory cached state is present, background worker threads execute `JsonUtility.FromJson<UnityLeanMcpOperationState>` and incur redundant disk I/O under lock.
-- Returning `Clone(s_CachedState)` immediately under `s_CacheLock` when `s_CachedState != null` avoids both worker-thread `JsonUtility` execution and disk I/O, ensuring thread safety and preventing background thread engine exceptions.
+- `ReadThreadSafeSnapshot()` must not trust a non-null in-memory state without checking the durable operation file: external cleanup, domain reload recovery, or malformed writes can otherwise leave stale ownership visible to later polls.
+- The managed worker reader classifies durable state as valid, missing, invalid, or temporarily unavailable. Valid state refreshes the cache, missing/invalid state clears it, and only temporary unavailability may return a previously valid active record. This preserves a genuinely active operation during filesystem contention without allowing an unreadable-but-removed journal to remain cached forever.
 
 ### Roslyn Reflection Traps
 When calling Roslyn APIs via reflection across Unity Editor versions:
 - **`CSharpSyntaxTree.GetRoot`**: Has an optional parameter (`GetRoot(CancellationToken cancellationToken = default)`). Reflective lookup specifying 0 parameters (`new Type[0]`) returns `null`. The reflection lookup must explicitly match `GetRoot(CancellationToken)` and supply `default(CancellationToken)`.
 - **`SyntaxNode.DescendantNodes`**: Has multiple overloads, including `DescendantNodes(Func<SyntaxNode, bool>, bool)` (2 parameters) and `DescendantNodes(TextSpan, ...)` (3 parameters). Loose reflection matching can latch onto the 3-parameter overload; passing a default `TextSpan` traverses an empty span `[0..0)`, yielding zero nodes. Reflection must strictly match the 2-parameter overload and pass `new object[] { null, false }`.
+
+Roslyn reflection initialization must be serialized and transactional. Build the complete set of loaded assemblies, reflected methods/types, compiler options, and metadata references in local state before publishing shared fields. Set the initialized marker only after every step succeeds; otherwise a transient Unity startup or assembly-load failure becomes a permanent unsupported state. Leaving the marker clear allows a later access to retry without exposing a partially initialized compiler to concurrent callers.
+
+### Dynamic Evaluation Assembly Lifetime
+Unity 2021.3 and later supported Editor runtimes do not provide one unloadable assembly-isolation API that can safely be used across all supported Mono/.NET configurations while preserving access to Unity objects. `Assembly.Load(byte[])` therefore remains the compatible evaluation load path: each generated evaluation assembly remains in the current managed domain until Unity performs a domain reload. No per-evaluation unloading guarantee is made, and no timeout-based cleanup is used; the Roslyn lifecycle fix is limited to reliable initialization and retry.
 
 ### Roslyn `CS1529` Using Directive Hoisting & Whitespace Blanking
 When users or AI agents provide standard C# source code containing `using` directives at the top (e.g. `using System.IO;`):
@@ -80,6 +92,12 @@ When providing static registration APIs (`RegisterFormatter`, `UnregisterFormatt
 - Default built-in formatters must be seeded safely via thread-safe lazy initialization (e.g. `EnsureDefaultFormatters()`) before external registration, unregistration, or formatting occurs, preventing late-executing default initializers from overwriting custom registrations.
 - Formatting occurs frequently during interactive eval loops. Caching sorted formatters in a volatile copy-on-write array snapshot (`s_SortedFormattersSnapshot`) allows evaluations to iterate formatters lock-free without thread contention.
 
+### Result Formatter Graph and Output Limits
+Enumerable results can contain themselves directly or through custom enumerators, and Unity's JSON fallback can produce a large serialized string before the MCP layer sees it. A formatting call must carry one shared context through every child delegate: use reference identity for the active path (not value equality), cap recursive depth and enumerable items, and enforce both character and UTF-8 byte budgets on the returned payload. Returning an explicit truncation marker keeps eval and execute responses deterministic and prevents accidental context flooding; the item cap also bounds normal custom enumerators without relying on arbitrary elapsed-time cutoffs.
+
+### Public MCP UTF-8 Output Boundary
+The final public response builder must enforce both the 65,536 UTF-16-character cap and a conservative 65,536-byte UTF-8 cap. Character-count prefixes are not sufficient for CJK or supplementary-plane output: every bounded entry point, including field truncation helpers and `McpOutputLimits.Truncate`, must back up before a high surrogate and never append a partial surrogate pair. The existing aggregate truncation marker remains the deterministic signal for either limit.
+
 
 ### Operation-Scoped Resource Lifetime & Out-of-Lock Disposal
 When managing static references to active operation resources (such as `ConsoleLogCapture` or `CancellationTokenSource`) across asynchronous, domain-reloaded, or interrupted operations:
@@ -91,6 +109,14 @@ When providing static registration APIs (`RegisterHandler`, `UnregisterHandler`,
 - External packages and editor scripts may register custom command handlers in their own `[InitializeOnLoad]` static constructors before or after `UnityLeanMcpServer` initializes.
 - Default built-in handlers must be seeded safely via thread-safe lazy initialization (e.g. `EnsureDefaultHandlers()`) prior to any external registration, retrieval, or unregistration.
 - This ensures external custom command registrations are neither lost nor overwritten by late-executing default initializers.
+
+### Worker-Thread Polling and Cancellation Boundary
+
+Worker command handlers can run while the Unity main thread is synchronously executing an operation. Calling `JsonUtility`, Unity logging, or cache-miss persistence readers from these handlers can throw thread-affinity exceptions or deadlock during domain reload. Worker paths therefore need managed immutable snapshots and a Unity-independent JSON reader for durable operation, test-running, and terminal-result files. Test cancellation must enqueue the Unity Test Runner call and terminal persistence to the main-thread dispatcher without waiting for completion; the worker response acknowledges request acceptance, while the durable result remains authoritative for the eventual terminal state.
+
+### Worker-Thread Diagnostic Logging
+
+`UnityEngine.Debug` is not a safe diagnostic sink for the socket listener or client worker threads, including exception handlers: Unity may be reloading or may reject the call because it is not on the main thread. Worker diagnostics must use a managed-only sink with a synchronized, bounded file append and must read only path values captured during explicit main-thread initialization. Logging is best effort and must never mask or replace the transport exception being reported.
 
 ---
 
@@ -152,6 +178,12 @@ In file system, concurrency, and inter-process communication (IPC) polling engin
 - Issuing a blanket `File.Delete(resultFilePath)` in polling engines is harmful for static result files: static files like `unity_refresh_result.json` record the last known Editor compilation/refresh state across sessions, and deleting them after a single tool call wipes out the record for subsequent calls or diagnostic fallback readers.
 - Polling engines must distinguish operation-scoped files (bearing the operation ID, e.g. `unity_eval_<opId>.json`, `unity_test_<opId>.json`) from shared static files. Operation-scoped files are single-use and safely unlinked after terminal consumption to prevent disk clutter and stale reads, whereas shared static result files persist Editor status across domain reloads and tool invocations, and must be preserved by default unless single-use deletion is explicitly configured (`DeleteResultFileOnCompletion = true`).
 
+### Shared Static History Publishing Under Windows Read Contention
+
+Shared history files are non-authoritative snapshots, not part of the operation's durable delivery contract. Publishing them with `File.Replace` can fail when a Windows reader holds the existing file without delete sharing. History writers therefore stage content in a unique temporary file and make one move-overwrite attempt; contention returns a failure and preserves the previous snapshot without delaying or failing the already-persisted operation-scoped result. The strict retried `WriteAtomic` path remains appropriate for operation journals and unique result files.
+
+The `File.Move(source, destination, overwrite)` overload is not available in the Unity 2021.3-compatible API surface. For Editor-only shared-history publishing, use the platform-native move-overwrite operations (`MoveFileEx` on Windows and `rename` on Unix-like systems) so the package retains best-effort atomic replacement semantics without depending on a newer .NET API.
+
 ---
 
 ## 4. Unity Test Framework Quirks
@@ -163,6 +195,9 @@ The filter parameters passed to `TestRunnerApi.Execute` have strict, non-obvious
 - **`Filter.assemblyNames`**: Filters test fixtures by assembly name.
 - **`Filter.categoryNames`**: Filters tests decorated with NUnit `[Category("...")]`.
 - Filter arguments must be passed verbatim without lossy heuristic translations (such as naively rewriting `*` to `.*`).
+
+### Test Mode Validation Must Precede Refresh
+The MCP test tool's documented default applies only when the `mode` argument is omitted and the method default supplies `all`. Explicit null, blank, or unsupported modes must be rejected before the client refreshes AssetDatabase or sends a `RUN_TESTS` command; otherwise an invalid request can unexpectedly execute the full suite.
 
 ### Pre-Execution Test Run Failure Masking
 When the Unity Test Framework aborts prior to running tests (e.g. due to an invalid regex in `groupNames`, an assembly compilation error, or a runner initialization exception):
@@ -176,8 +211,13 @@ Unity Test Framework executes tests through a deep NUnit runner pipeline (`TestM
 ### `CancelTestRun` Indefinite `Cancelling` State
 Calling `TestRunnerApi.CancelTestRun` signals cancellation acceptance, but does not guarantee a terminal callback. In some Unity versions, the runner can remain indefinitely in the `Cancelling` state. Cancellation handling requires an explicit fallback path and cannot assume a clean completion callback will fire.
 
+The cancellation intent and Test Runner job identity must therefore be persisted before releasing the socket worker. The operation remains owned and the running marker remains present until `RunFinished` arrives or `IsRunActive` reports the runner is no longer active. A repeated cancellation request must only reaffirm the same intent; it must not create a second terminal result or permit another test run to overlap the cancelling runner. If Unity remains in `Cancelling`, the protocol truthfully remains busy indefinitely rather than using a timeout.
+
 ### Leaking Host Processes into Unit Tests
 `Process.GetProcessesByName("Unity")` returns all Unity instances running on the host machine. If unit tests test process discovery without mocking, an unrelated live Editor instance will cause `IsUnityRunning` to return `true` for a temporary test directory, entering unexpected readiness loops. Unit tests must inject a stubbed process provider.
+
+### PATH-Dependent Child Processes in Cross-Platform Tests
+Long-lived process fixtures cannot assume that utilities such as `sleep` or `ping` are discoverable by the test runner's `PATH`; sandboxed runners and hosted environments may omit or restrict them. A deterministic fixture should launch the test project's own apphost by its output-directory path and wait on an explicit test-only mode, with the owning test retaining disposal and termination responsibility.
 
 ### Multi-Line Test Failure Messages & Stack Trace Sanitization Overhead
 - When NUnit or custom test assertions fail, failure messages frequently contain leading whitespace or multiple lines (`\r\n  Expected: ...\r\n  But was: ...`). Extracting single-line summaries requires finding the first non-empty line after trimming to prevent empty summary lines or inadvertent multi-line tool framing.
@@ -204,10 +244,71 @@ When an operation fails immediately upon dispatch, line-oriented socket servers 
 ### System.Text.Json Parameter Conversion in MCP Tool Methods
 - `System.Text.Json.Serialization.JsonConverterAttribute` targets classes, structs, properties, and fields, but is not valid on method parameters (producing compiler error `CS0592`). When an MCP server registers tools via method reflection (such as `WithTools<T>()` in `ModelContextProtocol.Server`), method parameters cannot be decorated with `[JsonConverter]`. To support flexible parameter deserialization (such as accepting either a JSON string `"value"` or a JSON array `["value"]`), wrap the parameter in a dedicated type (e.g. `SingleOrArray`) decorated with `[JsonConverter(typeof(SingleOrArrayJsonConverter))]`. The MCP argument deserializer automatically invokes the type's converter when binding incoming JSON-RPC tool call arguments.
 - Custom parameter types implementing `IEquatable<T>` must explicitly overload `operator ==` and `operator !=` (CA2231). Without explicit operator overloads, C# `==` falls back to reference equality, causing identical instances to compare as unequal when checked with `==`.
-- Deserializing whitespace or empty strings in custom parameter converters should consistently return `null` if the implicit string operator maps whitespace to `null`, ensuring consistent semantics between direct C# assignment and JSON-RPC dispatch.
+- Deserializing whitespace or empty strings in custom test-filter converters must retain an invalid-entry marker rather than returning `null` or dropping the item. `unity_run_tests` validates that marker before refresh, and the Unity socket handler repeats the same empty/whitespace check for direct protocol callers, preventing a blank filter from becoming an unfiltered suite.
 - When refactoring collection types from `List<T>` to an encapsulated `IReadOnlyList<T>` (preventing CA1002), callers utilizing C# 12 collection expressions (e.g. `testNames: ["TestA", "TestB"]`) will fail compilation with `CS1061: does not contain a definition for 'Add'` unless the type is decorated with `[CollectionBuilder(typeof(TargetType), nameof(Create))]` paired with a static `Create(ReadOnlySpan<T>)` builder method.
 
 ### Interface Segregation & Path Resolution Anti-Pattern
 - Forwarding entire sub-service surfaces through a coordinator interface (e.g. `IUnityProcessManager` re-exposing 15+ path properties and methods from `IUnityPathResolver`) creates tight coupling and forces test doubles or mocks to implement dozens of pass-through members unnecessarily, violating the Interface Segregation Principle (ISP). Callers should directly access the dedicated sub-service (e.g. `processManager.PathResolver`).
 - Using a type-safe enum (`UnityOperationKind`) instead of string identifiers or dedicated per-command properties for result paths provides compile-time checking, enables exhaustive switch expression matching, and prevents path formatting mismatches between command executors and result pollers.
+
+### Unity Process Startup and PID Reuse
+
+An MCP host can issue concurrent requests before Unity has finished starting. A liveness check followed directly by `Process.Start` is therefore insufficient: each caller can observe the same absent state and launch another Editor. Startup must be serialized per normalized project root and must recheck ownership after entering the gate. PID files are also vulnerable to PID reuse; a live numeric PID is not proof of ownership. Auto-started Editors persist a sidecar identity record with PID, process start time, executable path, and project root, and readers reject missing, mismatched, or stale identity records. `Process` instances retained by startup/readiness monitoring must be disposed when that lifecycle path completes.
+
+The startup claim must cross the MCP host process boundary. A persistent lock-file inode held open with `FileShare.None` provides the same exclusion on Windows, Linux, and macOS, and the operating system releases the handle after a host crash. Do not delete or replace that file during release: POSIX permits unlinking an open file, which would allow a waiter to create and lock a different inode while the original owner is still active. Lockfile presence, lockfile PID bytes, and a lone system-process candidate remain supporting evidence only; ownership requires the durable sidecar identity or explicit project-targeting command-line evidence. Publishing the identity atomically before the PID pointer lets a later host recover a live Editor if the first host exits between those writes.
+
+The Unity process manager keeps startup/shutdown orchestration separate from the PID sidecar's file and process-identity mechanics. The file-backed identity store must preserve the existing atomic publication order and validate PID, start time, executable path, and project root before returning a process handle. Keeping that store behind an internal seam allows focused tests without broadening the public process-manager API.
+
+### Unity CLI and Editor Executable Identity
+
+The Unity CLI can be a real native executable named `Unity`, so checking only the filename, extension, executable bit, or Mach-O/PE/ELF format cannot distinguish it from the Editor. Unity Editor installation markers are safer and deterministic: macOS uses the `Unity.app/Contents/MacOS/Unity` bundle layout with `Contents/Managed/UnityEditor.dll`; Windows and Linux use the Editor's sibling `Data/Managed/UnityEditor.dll` (and `UnityEngine.dll`). Note that `<executable>_Data` is used only for standalone player builds, never for the Unity Editor. All discovery sources must run the same validation, and a rejected configured candidate should leave a diagnostic explaining the expected layout so auto-start errors are actionable.
+
+### MCP Configuration Working-Directory Portability
+
+Project-scoped MCP hosts do not share one portable interpolation syntax for `cwd`; VS Code and Cursor support workspace variables in selected fields, while Claude Code uses environment expansion with different semantics. A checkout configuration is therefore more reliable when it omits `cwd`, passes a repository-relative published DLL and `--project` path as separate arguments, and is launched from the project root. Installation-time generation can use a resolved absolute `cwd` only when the package lives outside the repository and cannot be represented by a checkout-relative path.
+
+
+### Integration-Test MCP Artifact Selection
+
+Integration tests must not infer which MCP server binary to launch from build timestamps: a newer Debug DLL can be unrelated to the Release artifact consumed by Unity. Publish the Release server directly into the Unity package's `MCP~` directory for fixture setup, require a successful `dotnet publish` exit code, and have every integration client select that package DLL exclusively.
+
+### Integration Fixture Source Changes Need an Explicit Asset Refresh
+
+Copying a fixture over an existing Unity script and waiting a fixed interval is racy: the Editor may not have delivered its asynchronous external-file/project-change notification before the following `unity_run_tests` readiness probe. The probe can then report `READY` and execute stale compiled code. Fixture setup must issue and await `unity_refresh` after replacing the source; the refresh may legitimately return a compile-error result for a negative fixture.
+
+### Reserving Space for Test Failure Summaries
+
+Failure formatting must reserve a deterministic portion of the aggregate response budget for compact summaries before rendering detailed failures. Otherwise, the first five failures' bounded-but-large stack traces can exhaust the shared builder and hide failures 6 through 25 entirely. When summaries exist, a 16 KiB reservation covers 20 summaries at the existing 512-character identifier and 200-character message limits, including Windows newline overhead, while the detailed section retains the remainder of the 64 KiB cap. Runs with 5 or fewer failures should not reserve unused summary space.
+
+### Cancellation Before the Initial Operation Acknowledgement
+
+An MCP caller can cancel after a mutating command has reached Unity but before the socket response containing `RUNNING` is received. If cancellation is handled only inside the operation poller, this dispatch window leaves the Unity operation journal owned indefinitely because polling never begins. Command dispatch must issue the correlated cancellation request before propagating the caller's cancellation; Unity safely ignores it when the command was not accepted.
+
+### Interactive GUI Editor Lockfile Detection vs. Batchmode Identity Records
+
+`UnityProcessIdentityStore` persists sidecar identity records (`.identity.json`) exclusively for batchmode instances launched by the MCP server (`EnsureUnityRunningAsync`). Interactive GUI Unity Editors launched directly by the user or Unity Hub do not create this identity sidecar. Instead, Unity holds an exclusive lock on `Temp/UnityLockfile` (or `Temp/UnityLockFile`). `IsUnityRunning` must recognize a locked GUI Editor lockfile held open by a live Unity process without requiring `.identity.json`, preventing spurious auto-start attempts that collide with the user's active GUI session.
+
+### MCP Layer Parameter Normalization vs. Low-Level API Contract
+
+In MCP server tools exposed to LLM agents (such as `unity_run_tests`), callers may omit arguments, pass `null`, or supply whitespace-only strings. The tool boundary must normalize omitted or blank arguments to their documented defaults (e.g., `mode = "all"`) before invocation. Meanwhile, lower-level service methods (`UnityClient.RunTestsAsync`) maintain strict parameter validation via `TestModeParser.TryNormalize`, rejecting blank or unrecognized inputs immediately with clear error messages. This preserves robust defense-in-depth while ensuring seamless and token-efficient interactions for AI agents.
+
+### Test-Environment PATH Isolation During Parallel Test Runs
+
+When unit tests modify process-wide environment variables (such as `PATH`) to verify fallback behavior or rejection of unauthorized binaries, completely wiping `PATH` or omitting the `dotnet` host directory causes concurrent test processes (which rely on `dotnet` in PATH to launch child processes such as `McpTestClient`) to fail with `Win32Exception: The system cannot find the file specified`. Furthermore, `Environment.ProcessPath` during `dotnet test` points to the test host runner (`testhost.exe`), which cannot execute `dotnet` CLI verbs like `publish`. Tests isolating `PATH` must preserve the directory containing the genuine `dotnet` CLI binary (discovered from the original `PATH` or `DOTNET_ROOT`) so that concurrent background subprocess execution remains deterministic and unaffected.
+
+### Immutable Result Models vs. Stateful Diagnostic Properties on Services
+
+Exposing diagnostic properties like `LastDiagnostic` on singleton discovery services creates hidden temporal coupling and thread-safety bugs: concurrent calls from separate threads or callers overwrite each other's diagnostic state. Returning a dedicated, immutable Result type (such as `UnityLocatorResult`) bundles the outcome (`ExecutablePath`) with actionable failure details (`Diagnostic`) in a single return value. This keeps locator services completely stateless, eliminates the need for property locking, and makes mocking straightforward without residual diagnostic state.
+
+### Transport Coupling in Lifecycle Handlers
+
+Passing transport primitives (such as `StreamWriter`) into core domain or lifecycle interfaces couples business logic directly to wire protocols, prevents reusing handlers across alternative transports (or in-process tests), and scatters wire framing decisions across multiple classes. Handlers should return structured enum results (`OperationCancelResult`), leaving protocol framing to command dispatchers.
+
+### Temporal In-Memory Result Caches Across Domain Reloads
+
+Caching the last completed operation result in static in-memory fields (`s_LastRefreshResult`) introduces temporal coupling: a client querying state may read an obsolete cached result from a prior operation before new operations run, or lose results entirely if an asynchronous domain reload occurs. Reading durable operation-scoped files (`Temp/unity_refresh_<opId>.json`) eliminates cross-operation pollution and survives asynchronous domain reloads reliably.
+
+### Nullable Context for Linked Unity Package Files in .NET Projects
+
+When linking C# source files from Unity Editor packages (which target Unity 2021.3 / .NET Standard 2.1 without nullable reference types enabled) into a .NET test project with `<Nullable>enable</Nullable>`, MSBuild ignores per-item `<Nullable>disable</Nullable>` on `<Compile>`. Adding `#nullable disable` directives directly into Unity package source files violates coding standards and alters package source code. Instead, place an `.editorconfig` file in the Unity source directory (`src/UnityLeanMcp.Unity3d/.editorconfig`) suppressing CS86xx/CS87xx compiler diagnostic severity (`severity = none`) for files under that tree. This cleanly silences nullable warnings for linked package code when compiled by Roslyn while maintaining strict `<Nullable>enable</Nullable>` enforcement across test and host projects.
 

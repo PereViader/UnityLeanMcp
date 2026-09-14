@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
@@ -11,44 +10,11 @@ namespace UnityLeanMcp.Mcp.Tests;
 [Trait("Category", "UnityIntegration")]
 public class McpProtocolTests
 {
-    private static string GetRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, "src", "UnityLeanMcp.Unity3d")))
-        {
-            dir = dir.Parent;
-        }
-        return dir?.FullName ?? throw new DirectoryNotFoundException("Could not find repository root");
-    }
-
-    private static string GetUnityProjectRoot()
-    {
-        return Path.Combine(GetRepoRoot(), "src", "UnityLeanMcp.Unity3d");
-    }
-
-    private static string GetMcpServerDllPath()
-    {
-        string root = GetRepoRoot();
-        string unityRoot = GetUnityProjectRoot();
-        string publishedDll = Path.Combine(unityRoot, "Packages", "com.pereviader.unityleanmcp", "MCP~", "UnityLeanMcp.Mcp.dll");
-        string debugDll = Path.Combine(root, "src", "UnityLeanMcp.Mcp", "bin", "Debug", "net10.0", "UnityLeanMcp.Mcp.dll");
-
-        if (File.Exists(publishedDll) && File.Exists(debugDll))
-        {
-            return File.GetLastWriteTimeUtc(debugDll) >= File.GetLastWriteTimeUtc(publishedDll) ? debugDll : publishedDll;
-        }
-        if (File.Exists(debugDll)) return debugDll;
-        if (File.Exists(publishedDll)) return publishedDll;
-
-        throw new FileNotFoundException($"Could not find UnityLeanMcp.Mcp.dll at {publishedDll} or {debugDll}");
-
-    }
-
     [Fact]
     public async Task StdioHandshake_And_ToolsList_ReturnsAllExpectedTools()
     {
-        string dllPath = GetMcpServerDllPath();
-        string projectRoot = GetUnityProjectRoot();
+        string dllPath = McpTestClient.GetMcpServerDllPath();
+        string projectRoot = McpTestClient.GetUnityProjectRoot();
 
         var psi = new ProcessStartInfo
         {
@@ -159,8 +125,8 @@ public class McpProtocolTests
     [Fact]
     public async Task StdioCall_UnknownTool_ReturnsJsonRpcError()
     {
-        string dllPath = GetMcpServerDllPath();
-        string projectRoot = GetUnityProjectRoot();
+        string dllPath = McpTestClient.GetMcpServerDllPath();
+        string projectRoot = McpTestClient.GetUnityProjectRoot();
 
         var psi = new ProcessStartInfo
         {

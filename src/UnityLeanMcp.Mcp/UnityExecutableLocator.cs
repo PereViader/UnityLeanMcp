@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -34,15 +35,21 @@ public class UnityExecutableLocator : IUnityExecutableLocator
     /// - Checks standard Unity Hub paths on Windows, macOS, and Linux.
     /// - Checks PATH (unity-editor, Unity, Unity.exe, unity).
     /// </summary>
-    public virtual string? FindUnityExecutable()
+    public virtual UnityLocatorResult FindUnityExecutable()
     {
-        // 1. Environment variables
-        string? configuredPath = Environment.GetEnvironmentVariable("UNITY_PATH")
-            ?? Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        string? firstDiagnostic = null;
 
-        if (!string.IsNullOrWhiteSpace(configuredPath) && File.Exists(configuredPath))
+        // 1. Environment variables
+        foreach (var configured in new[]
         {
-            return Path.GetFullPath(configuredPath);
+            (Name: "UNITY_PATH", Path: Environment.GetEnvironmentVariable("UNITY_PATH")),
+            (Name: "UNITY_EDITOR", Path: Environment.GetEnvironmentVariable("UNITY_EDITOR"))
+        })
+        {
+            if (TryAcceptCandidate(configured.Path, configured.Name, out string? executable, ref firstDiagnostic))
+            {
+                return UnityLocatorResult.Found(executable);
+            }
         }
 
         // 2. Read editor version from ProjectSettings/ProjectVersion.txt
@@ -54,18 +61,24 @@ public class UnityExecutableLocator : IUnityExecutableLocator
             var hubPaths = GetStandardHubCandidatePaths(editorVersion);
             foreach (var candidate in hubPaths)
             {
-                if (File.Exists(candidate))
+                if (TryAcceptCandidate(candidate, "Unity Hub", out string? executable, ref firstDiagnostic))
                 {
-                    return Path.GetFullPath(candidate);
+                    return UnityLocatorResult.Found(executable);
                 }
             }
         }
 
         // 4. Search in PATH
-        return FindInPath();
+        return FindInPathCore(ref firstDiagnostic);
     }
 
-    public virtual string? FindInPath()
+    public virtual UnityLocatorResult FindInPath()
+    {
+        string? firstDiagnostic = null;
+        return FindInPathCore(ref firstDiagnostic);
+    }
+
+    private UnityLocatorResult FindInPathCore(ref string? firstDiagnostic)
     {
         string[] binaryNames = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
             ? new[] { "Unity.exe", "unity-editor.exe", "unity.exe" }
@@ -81,15 +94,142 @@ public class UnityExecutableLocator : IUnityExecutableLocator
                 foreach (var binary in binaryNames)
                 {
                     string candidate = Path.Combine(dir, binary);
-                    if (File.Exists(candidate))
+                    if (TryAcceptCandidate(candidate, "PATH", out string? executable, ref firstDiagnostic))
                     {
-                        return Path.GetFullPath(candidate);
+                        return UnityLocatorResult.Found(executable);
                     }
                 }
             }
         }
 
-        return null;
+        string diagnostic = firstDiagnostic ??
+                            "No candidate matched a Unity Editor installation layout. " +
+                            "Set UNITY_PATH or UNITY_EDITOR to the Editor executable, or install an Editor via Unity Hub.";
+        return UnityLocatorResult.NotFound(diagnostic);
+    }
+
+    private bool TryAcceptCandidate(string? candidate, string source, [NotNullWhen(true)] out string? executable, ref string? firstDiagnostic)
+    {
+        executable = null;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(candidate.Trim());
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException)
+        {
+            RecordRejection(source, candidate, "the path is not valid", ref firstDiagnostic);
+            return false;
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            // A PATH directory is probed with several platform-specific names;
+            // missing names are normal and should not hide a later, meaningful
+            // rejection (such as a same-named Unity CLI binary).
+            if (!string.Equals(source, "PATH", StringComparison.Ordinal))
+            {
+                RecordRejection(source, fullPath, "the file does not exist", ref firstDiagnostic);
+            }
+            return false;
+        }
+
+        if (!IsExecutableFile(fullPath))
+        {
+            RecordRejection(source, fullPath, "the file is not executable", ref firstDiagnostic);
+            return false;
+        }
+
+        string? rejectionReason = GetEditorLayoutRejectionReason(fullPath);
+        if (rejectionReason != null)
+        {
+            RecordRejection(source, fullPath, rejectionReason, ref firstDiagnostic);
+            return false;
+        }
+
+        executable = fullPath;
+        return true;
+    }
+
+    private static bool IsExecutableFile(string path)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return true;
+        }
+
+        try
+        {
+            UnixFileMode mode = File.GetUnixFileMode(path);
+            return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // The check is an additional guard, not a requirement for runtimes
+            // that cannot expose POSIX mode bits.
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static string? GetEditorLayoutRejectionReason(string executablePath)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            var executable = new FileInfo(executablePath);
+            DirectoryInfo? macOsDirectory = executable.Directory;
+            DirectoryInfo? contentsDirectory = macOsDirectory?.Parent;
+            DirectoryInfo? appDirectory = contentsDirectory?.Parent;
+
+            bool isMacEditorBinary = string.Equals(macOsDirectory?.Name, "MacOS", StringComparison.Ordinal) &&
+                                     string.Equals(contentsDirectory?.Name, "Contents", StringComparison.Ordinal) &&
+                                     appDirectory?.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase) == true;
+            if (isMacEditorBinary &&
+                contentsDirectory != null &&
+                File.Exists(Path.Combine(contentsDirectory.FullName, "Managed", "UnityEditor.dll")))
+            {
+                return null;
+            }
+
+            return "it is not inside a Unity Editor app bundle (expected Unity.app/Contents/MacOS/Unity with Contents/Managed/UnityEditor.dll)";
+        }
+
+        string? editorDirectory = Path.GetDirectoryName(executablePath);
+        if (string.IsNullOrWhiteSpace(editorDirectory))
+        {
+            return "it has no containing Unity Editor installation directory";
+        }
+
+        // On Windows and Linux, Unity Editor installations contain Data/Managed/UnityEditor.dll and/or UnityEngine.dll
+        string managedEditorAssembly = Path.Combine(editorDirectory, "Data", "Managed", "UnityEditor.dll");
+        string managedEngineAssembly = Path.Combine(editorDirectory, "Data", "Managed", "UnityEngine.dll");
+        if (File.Exists(managedEditorAssembly) || File.Exists(managedEngineAssembly))
+        {
+            return null;
+        }
+
+        return $"it is not inside a Unity Editor installation (expected Data/Managed/UnityEditor.dll or Data/Managed/UnityEngine.dll relative to '{editorDirectory}')";
+    }
+
+    private void RecordRejection(string source, string candidate, string reason, ref string? firstDiagnostic)
+    {
+        string diagnostic = $"{source} candidate '{candidate}' was rejected: {reason}.";
+        // Preserve the first useful rejection. In particular, a configured
+        // UNITY_PATH pointing at the Unity CLI should not be hidden by a later
+        // missing entry encountered while scanning PATH.
+        if (firstDiagnostic == null)
+        {
+            firstDiagnostic = diagnostic;
+        }
+        _logger?.LogWarning("{Diagnostic}", diagnostic);
     }
 
     public virtual string? GetProjectEditorVersion()

@@ -70,7 +70,8 @@ public class TieredAutowaitingTests
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
             {
                 PollIntervalMs = 50
@@ -125,6 +126,11 @@ public class TieredAutowaitingTests
                                 }
                                 else
                                 {
+                                    if (TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                                    {
+                                        TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                                    }
+
                                     await writer.WriteLineAsync("READY");
                                 }
                             }
@@ -204,7 +210,8 @@ public class TieredAutowaitingTests
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
             {
                 PollIntervalMs = 20,
@@ -309,7 +316,8 @@ public class TieredAutowaitingTests
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
             {
                 PollIntervalMs = 50
@@ -430,7 +438,8 @@ public class TieredAutowaitingTests
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
             {
                 PollIntervalMs = 50
@@ -485,6 +494,11 @@ public class TieredAutowaitingTests
                                 }
                                 else
                                 {
+                                    if (TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
+                                    {
+                                        TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                                    }
+
                                     await writer.WriteLineAsync("READY");
                                 }
                             }
@@ -565,7 +579,8 @@ public class TieredAutowaitingTests
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
             File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
 
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
             var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
             {
                 PollIntervalMs = 20,

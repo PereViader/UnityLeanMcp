@@ -12,13 +12,16 @@ using UnityEngine;
 
 namespace UnityLeanMcp
 {
-    [InitializeOnLoad]
+    // Static type initialization must remain managed-only. Unity invokes the
+    // explicit bootstrap method on the Editor main thread; an external
+    // assembly may otherwise be the first caller of this public API.
     public static class UnityLeanMcpServer
     {
         private const int AnyAvailablePort = 0;
 
         private static TcpListener _tcpListener;
         private static Thread _serverThread;
+        private static readonly object s_ServerLifecycleLock = new object();
         private static volatile bool _isRunning;
         private static volatile bool _shutdownRequested;
         private static volatile bool _isReloading;
@@ -31,6 +34,7 @@ namespace UnityLeanMcp
             new ConcurrentDictionary<string, ICommandHandler>(StringComparer.OrdinalIgnoreCase);
         private static bool s_DefaultHandlersRegistered;
         private static readonly object s_HandlersLock = new object();
+        private static int s_BootstrapState;
 
         public static void RegisterHandler(string command, ICommandHandler handler)
         {
@@ -43,6 +47,10 @@ namespace UnityLeanMcp
                 throw new ArgumentNullException(nameof(handler));
             }
 
+            // External [InitializeOnLoad] code may be the first caller of the
+            // public registry. Seed defaults before retaining the custom
+            // handler so the built-in graph is initialized exactly once and
+            // custom registrations continue to override built-ins.
             EnsureDefaultHandlers();
             s_Handlers[command.Trim()] = handler;
         }
@@ -72,62 +80,87 @@ namespace UnityLeanMcp
 
         private static void EnsureDefaultHandlers()
         {
-            if (s_DefaultHandlersRegistered) return;
+            if (Volatile.Read(ref s_DefaultHandlersRegistered)) return;
             lock (s_HandlersLock)
             {
-                if (s_DefaultHandlersRegistered) return;
+                if (Volatile.Read(ref s_DefaultHandlersRegistered)) return;
                 RegisterDefaultHandlers();
-                s_DefaultHandlersRegistered = true;
+                Volatile.Write(ref s_DefaultHandlersRegistered, true);
             }
         }
 
         private static void RegisterDefaultHandlers()
         {
-            s_Handlers["PING"] = new PingHandler();
-            s_Handlers["EXIT"] = new ExitHandler();
-            s_Handlers["REFRESH"] = new RefreshHandler();
-            s_Handlers["POLL_REFRESH"] = new PollRefreshHandler();
-            s_Handlers["RECOMPILE"] = new RecompileHandler();
-            s_Handlers["RUN_TESTS"] = new RunTestsHandler();
-            s_Handlers["POLL_TESTS"] = new PollTestsHandler();
-            s_Handlers["CANCEL_TESTS"] = new CancelTestsHandler();
-            s_Handlers["CANCEL_OPERATION"] = new CancelOperationHandler();
-            s_Handlers["EXECUTE_METHOD"] = new ExecuteMethodHandler();
-            s_Handlers["POLL_EXECUTE"] = new PollExecuteHandler();
-            s_Handlers["EVAL"] = new EvalHandler();
-            s_Handlers["POLL_EVAL"] = new PollEvalHandler();
+            s_Handlers.TryAdd("PING", new PingHandler());
+            s_Handlers.TryAdd("EXIT", new ExitHandler());
+            s_Handlers.TryAdd("REFRESH", new RefreshHandler());
+            s_Handlers.TryAdd("POLL_REFRESH", new PollRefreshHandler());
+            s_Handlers.TryAdd("RECOMPILE", new RecompileHandler());
+            s_Handlers.TryAdd("RUN_TESTS", new RunTestsHandler());
+            s_Handlers.TryAdd("POLL_TESTS", new PollTestsHandler());
+            s_Handlers.TryAdd("CANCEL_TESTS", new CancelTestsHandler());
+            s_Handlers.TryAdd("CANCEL_OPERATION", new CancelOperationHandler());
+            s_Handlers.TryAdd("EXECUTE_METHOD", new ExecuteMethodHandler());
+            s_Handlers.TryAdd("POLL_EXECUTE", new PollExecuteHandler());
+            s_Handlers.TryAdd("EVAL", new EvalHandler());
+            s_Handlers.TryAdd("POLL_EVAL", new PollEvalHandler());
         }
 
-        static UnityLeanMcpServer()
+        [InitializeOnLoadMethod]
+        private static void BootstrapOnMainThread()
         {
-            if(CommandHelper.IsAssetImportWorkerProcess())
+            // This hook is Unity's main-thread initialization boundary. Do not
+            // move any of the calls below into a static constructor or static
+            // field initializer: background references to the public registry
+            // are valid before this method runs.
+            if (Interlocked.CompareExchange(ref s_BootstrapState, 1, 0) != 0)
             {
                 return;
             }
 
-            CommandHelper.EnsureInitialized();
-            UnityLeanMcpPaths.EnsureInitialized();
-            UnityLeanMcpOperationStore.EnsureInitialized();
-            UnityLeanMcpCompilationTracker.EnsureInitialized();
-            UnityLeanMcpDispatcher.EnsureInitialized();
-            RoslynCompilerHelper.EnsureInitialized();
-            OperationLifecycleRegistry.EnsureInitialized();
-            EnsureDefaultHandlers();
-            UnityResultFormatter.EnsureInitialized();
+            try
+            {
+                if (CommandHelper.IsAssetImportWorkerProcess())
+                {
+                    Volatile.Write(ref s_BootstrapState, 2);
+                    return;
+                }
 
-            RecoverOperationsOnDomainLoad();
+                CommandHelper.EnsureInitialized();
+                UnityLeanMcpPaths.EnsureInitialized();
+                UnityLeanMcpOperationStore.EnsureInitialized();
+                UnityLeanMcpCompilationTracker.EnsureInitialized();
+                UnityLeanMcpDispatcher.EnsureInitialized();
+                RoslynCompilerHelper.EnsureInitialized();
+                OperationLifecycleRegistry.EnsureInitialized();
+                EnsureDefaultHandlers();
+                UnityResultFormatter.EnsureInitialized();
 
-            // Register callbacks for tests
-            RunTestsHandler.RegisterCallbacks();
+                RecoverOperationsOnDomainLoad();
 
-            // Start server
-            StartServer();
+                // Register callbacks for tests
+                RunTestsHandler.RegisterCallbacks();
 
-            // Stop the listener and all in-flight connections before a domain reload.
-            // The callbacks must be registered on every new domain because the old
-            // server thread and its client threads may still be unwinding.
-            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
-            EditorApplication.quitting += OnEditorQuitting;
+                // Register lifecycle callbacks before opening the socket. No
+                // external connection can be accepted until every dependency
+                // and recovery hook is ready.
+                AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+                AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+                EditorApplication.quitting -= OnEditorQuitting;
+                EditorApplication.quitting += OnEditorQuitting;
+
+                // Start server only after all main-thread services and
+                // callbacks have been initialized.
+                StartServer();
+                Volatile.Write(ref s_BootstrapState, 2);
+            }
+            catch
+            {
+                // Allow Unity's next initialization pass or a controlled test
+                // retry to attempt bootstrap again if a dependency fails.
+                Volatile.Write(ref s_BootstrapState, 0);
+                throw;
+            }
         }
 
         private static void RecoverOperationsOnDomainLoad()
@@ -144,19 +177,22 @@ namespace UnityLeanMcp
 
         private static void StartServer()
         {
-            if(_isRunning)
-                return;
-
-            _isRunning = true;
-            _shutdownRequested = false;
-            _isReloading = false;
-            s_ShutdownEvent.Reset();
-            _serverThread = new Thread(ServerLoop)
+            lock (s_ServerLifecycleLock)
             {
-                IsBackground = true,
-                Name = "UnityLeanMcpServerThread"
-            };
-            _serverThread.Start();
+                if (_isRunning)
+                    return;
+
+                _isRunning = true;
+                _shutdownRequested = false;
+                _isReloading = false;
+                s_ShutdownEvent.Reset();
+                _serverThread = new Thread(ServerLoop)
+                {
+                    IsBackground = true,
+                    Name = "UnityLeanMcpServerThread"
+                };
+                _serverThread.Start();
+            }
         }
 
         private static void OnBeforeAssemblyReload()
@@ -181,25 +217,45 @@ namespace UnityLeanMcp
 
         internal static void StopServer()
         {
-            _shutdownRequested = true;
-            _isRunning = false;
-            s_ShutdownEvent.Set();
+            Thread serverThread;
+            TcpListener listener;
+            lock (s_ServerLifecycleLock)
+            {
+                _shutdownRequested = true;
+                _isRunning = false;
+                s_ShutdownEvent.Set();
+                serverThread = _serverThread;
+                listener = _tcpListener;
+            }
+
             try
             {
-                _tcpListener?.Stop();
+                ServerThreadShutdown.StopListenerAndWait(
+                    serverThread,
+                    () => listener?.Stop());
             }
-            catch(Exception) { }
-
-            foreach (var client in s_ActiveClients.Keys)
+            finally
             {
-                try { client.Close(); } catch { }
+                foreach (var client in s_ActiveClients.Keys)
+                {
+                    try { client.Close(); } catch { }
+                }
             }
 
-            if(_serverThread is { IsAlive: true } && !ReferenceEquals(Thread.CurrentThread, _serverThread))
+            lock (s_ServerLifecycleLock)
             {
-                _serverThread.Join(1000);
+                if (ReferenceEquals(_tcpListener, listener))
+                    _tcpListener = null;
+
+                if (ReferenceEquals(_serverThread, serverThread) &&
+                    (serverThread == null || !serverThread.IsAlive))
+                {
+                    _serverThread = null;
+                }
             }
 
+            // This runs only after the server thread has exited, preventing
+            // a racing startup path from recreating the endpoint metadata.
             DeletePortFile();
 
             Debug.Log("UnityLeanMcp: Socket server stopped.");
@@ -207,27 +263,39 @@ namespace UnityLeanMcp
 
         private static void ServerLoop()
         {
+            TcpListener listener = null;
             try
             {
                 int stickyPort = ReadPortFile();
-                _tcpListener = CreateStartedListener(stickyPort);
-                if (!_isRunning)
+                if (IsShuttingDown())
                 {
-                    _tcpListener.Stop();
-                    _tcpListener = null;
                     return;
                 }
-                int port = ((IPEndPoint) _tcpListener.LocalEndpoint).Port;
+
+                listener = CreateStartedListener(stickyPort);
+                lock (s_ServerLifecycleLock)
+                {
+                    if (IsShuttingDown())
+                    {
+                        return;
+                    }
+
+                    _tcpListener = listener;
+                }
+
+                int port = ((IPEndPoint) listener.LocalEndpoint).Port;
 
                 WritePortFile(port);
-                Debug.Log($"UnityLeanMcp: Socket server started on 127.0.0.1:{port}");
+                WorkerDiagnosticsLogger.Info(
+                    UnityLeanMcpPaths.WorkerLogFile,
+                    $"Socket server started on 127.0.0.1:{port}");
 
                 while(_isRunning)
                 {
                     TcpClient client;
                     try
                     {
-                        client = _tcpListener.AcceptTcpClient();
+                        client = listener.AcceptTcpClient();
                     }
                     catch(SocketException)
                     {
@@ -254,6 +322,32 @@ namespace UnityLeanMcp
                     LogUnexpectedException("server loop", e);
                 }
             }
+            finally
+            {
+                try
+                {
+                    listener?.Stop();
+                }
+                catch (Exception e)
+                {
+                    WorkerDiagnosticsLogger.Warning(
+                        UnityLeanMcpPaths.WorkerLogFile,
+                        $"Failed to stop socket listener: {e}");
+                }
+
+                lock (s_ServerLifecycleLock)
+                {
+                    if (ReferenceEquals(_tcpListener, listener))
+                        _tcpListener = null;
+
+                    if (ReferenceEquals(_serverThread, Thread.CurrentThread))
+                        _serverThread = null;
+
+                    _isRunning = false;
+                }
+
+                s_ShutdownEvent.Set();
+            }
         }
 
         private static TcpListener CreateStartedListener(int preferredPort)
@@ -266,7 +360,9 @@ namespace UnityLeanMcp
                 }
                 catch(SocketException e)
                 {
-                    Debug.LogWarning($"UnityLeanMcp: Sticky port {preferredPort} is unavailable ({e.SocketErrorCode}); selecting a new port.");
+                    WorkerDiagnosticsLogger.Warning(
+                        UnityLeanMcpPaths.WorkerLogFile,
+                        $"Sticky port {preferredPort} is unavailable ({e.SocketErrorCode}); selecting a new port.");
                 }
             }
 
@@ -341,16 +437,18 @@ namespace UnityLeanMcp
                         if (activeOp != null)
                         {
                             string requestOpId = ExtractOperationId(payload);
-                            if (string.IsNullOrEmpty(requestOpId) || activeOp.operationId != requestOpId)
+                            if (string.IsNullOrEmpty(requestOpId) || activeOp.OperationId != requestOpId)
                             {
-                                writer.WriteLine($"BUSY {activeOp.kind} {activeOp.operationId}");
+                                writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
                                 return;
                             }
                         }
 
                         if (handler.RequiresCompilationSettled)
                         {
-                            if (UnityLeanMcpCompilationTracker.IsCompiling || UnityLeanMcpCompilationTracker.RefreshPending)
+                            if (UnityLeanMcpCompilationTracker.IsCompiling ||
+                                UnityLeanMcpCompilationTracker.RefreshPending ||
+                                UnityLeanMcpCompilationTracker.RefreshRequired)
                             {
                                 writer.WriteLine("BUSY compile");
                                 return;
@@ -462,25 +560,36 @@ namespace UnityLeanMcp
 
         private static void LogUnexpectedException(string context, Exception exception)
         {
-            Debug.LogError($"UnityLeanMcp: Unexpected {context} exception. " +
-                           $"Type={exception.GetType().FullName}, " +
-                           $"Thread={Thread.CurrentThread.Name ?? "unnamed"}, " +
-                           $"Reloading={_isReloading}, StackTrace={exception.StackTrace}");
+            WorkerDiagnosticsLogger.Error(
+                UnityLeanMcpPaths.WorkerLogFile,
+                $"Unexpected {context} exception. " +
+                $"Type={exception.GetType().FullName}, " +
+                $"Thread={Thread.CurrentThread.Name ?? "unnamed"}, " +
+                $"Reloading={_isReloading}, Exception={exception}");
         }
 
         private static void WritePortFile(int port)
         {
             try
             {
-                if(!Directory.Exists(UnityLeanMcpPaths.TempDir))
+                string path = UnityLeanMcpPaths.WorkerPortFile;
+                if (string.IsNullOrEmpty(path))
                 {
-                    Directory.CreateDirectory(UnityLeanMcpPaths.TempDir);
+                    return;
                 }
-                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.PortFile, port.ToString(), "port");
+
+                string directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                UnityLeanMcpOperationStore.WriteAtomic(path, port.ToString(), "port");
             }
             catch(Exception e)
             {
-                Debug.LogError($"UnityLeanMcp: Failed to write port file: {e}");
+                WorkerDiagnosticsLogger.Error(
+                    UnityLeanMcpPaths.WorkerLogFile,
+                    $"Failed to write port file: {e}");
             }
         }
 
@@ -503,19 +612,22 @@ namespace UnityLeanMcp
         {
             try
             {
-                if(!File.Exists(UnityLeanMcpPaths.PortFile))
+                string path = UnityLeanMcpPaths.WorkerPortFile;
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
                     return AnyAvailablePort;
                 }
 
-                string portText = File.ReadAllText(UnityLeanMcpPaths.PortFile);
+                string portText = WorkerThreadSnapshots.ReadFileWithRetry(path);
                 return int.TryParse(portText, out int port)
                     ? port
                     : AnyAvailablePort;
             }
             catch(Exception e)
             {
-                Debug.LogWarning($"UnityLeanMcp: Failed to read port file: {e}");
+                WorkerDiagnosticsLogger.Warning(
+                    UnityLeanMcpPaths.WorkerLogFile,
+                    $"Failed to read port file: {e}");
                 return AnyAvailablePort;
             }
         }
