@@ -97,7 +97,7 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
             return false;
         }
 
-        if (identity.StartTimeUtcTicks != startTimeTicks ||
+        if (Math.Abs(identity.StartTimeUtcTicks - startTimeTicks) > TimeSpan.FromSeconds(3).Ticks ||
             !PathsEqual(identity.ProjectRoot, projectRoot))
         {
             return false;
@@ -234,6 +234,39 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
             }
             catch
             {
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                try
+                {
+                    string exeSymlink = $"/proc/{process.Id}/exe";
+                    var target = File.ResolveLinkTarget(exeSymlink, returnFinalTarget: true);
+                    if (target != null && !string.IsNullOrWhiteSpace(target.FullName))
+                    {
+                        return target.FullName;
+                    }
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    string cmdlinePath = $"/proc/{process.Id}/cmdline";
+                    if (File.Exists(cmdlinePath))
+                    {
+                        string cmdline = File.ReadAllText(cmdlinePath);
+                        string[] tokens = cmdline.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+                        if (tokens.Length > 0 && !string.IsNullOrWhiteSpace(tokens[0]))
+                        {
+                            return tokens[0];
+                        }
+                    }
+                }
+                catch
+                {
+                }
             }
 
             if (i < 4 && !process.HasExited)

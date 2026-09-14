@@ -312,3 +312,13 @@ Caching the last completed operation result in static in-memory fields (`s_LastR
 
 When linking C# source files from Unity Editor packages (which target Unity 2021.3 / .NET Standard 2.1 without nullable reference types enabled) into a .NET test project with `<Nullable>enable</Nullable>`, MSBuild ignores per-item `<Nullable>disable</Nullable>` on `<Compile>`. Adding `#nullable disable` directives directly into Unity package source files violates coding standards and alters package source code. Instead, place an `.editorconfig` file in the Unity source directory (`src/UnityLeanMcp.Unity3d/.editorconfig`) suppressing CS86xx/CS87xx compiler diagnostic severity (`severity = none`) for files under that tree. This cleanly silences nullable warnings for linked package code when compiled by Roslyn while maintaining strict `<Nullable>enable</Nullable>` enforcement across test and host projects.
 
+### `UNITY_PATH` Directory Resolution in Containerized Environments
+
+Official Unity CI Docker images (such as `unityci/editor:ubuntu-...`) set `UNITY_PATH=/opt/unity` pointing to the installation root directory rather than the Editor binary directly. When resolving `UNITY_PATH` or `UNITY_EDITOR`, executable locators must probe candidate executable locations inside configured directories (`Editor/Unity`, `Unity`, `Editor/Unity.exe`, `Unity.exe`, `Unity.app/Contents/MacOS/Unity`) and validate the containing installation metadata (`Data/Managed/UnityEditor.dll` / `UnityEngine.dll`) before declaring candidates missing or invalid.
+
+### Linux Cross-Process Identity Precision & Yama LSM Permissions
+
+- **Start-Time Jitter Tolerance**: On Linux, `Process.StartTime` is computed by .NET from `/proc/stat` `btime` and `/proc/[pid]/stat` `starttime`. Because `/proc/stat` `btime` can fluctuate by up to ±1 second between reads, strict tick equality (`==`) across different process queries causes false-negative process matches. Comparing start times with a short tolerance (e.g. 3 seconds) preserves durable protection against PID reuse while accommodating kernel jitter.
+- **Process Path Fallback**: In restricted Linux environments (such as Docker or systems with Yama LSM `ptrace_scope` enabled), calling `process.MainModule` on another process may fail with `EACCES` (`Win32Exception: Permission denied`). Falling back to resolving `/proc/[pid]/exe` via `File.ResolveLinkTarget` or inspecting `/proc/[pid]/cmdline` ensures deterministic identity verification across containerized environments.
+
+

@@ -129,6 +129,20 @@ public class UnityExecutableLocator : IUnityExecutableLocator
 
         if (!File.Exists(fullPath))
         {
+            if (Directory.Exists(fullPath))
+            {
+                foreach (var candidateFile in GetDirectoryCandidateExecutables(fullPath))
+                {
+                    if (File.Exists(candidateFile) && TryAcceptCandidate(candidateFile, source, out executable, ref firstDiagnostic))
+                    {
+                        return true;
+                    }
+                }
+
+                RecordRejection(source, fullPath, "it is a directory but contains no Unity Editor executable", ref firstDiagnostic);
+                return false;
+            }
+
             // A PATH directory is probed with several platform-specific names;
             // missing names are normal and should not hide a later, meaningful
             // rejection (such as a same-named Unity CLI binary).
@@ -301,10 +315,32 @@ public class UnityExecutableLocator : IUnityExecutableLocator
             }
             paths.Add($"/opt/unity/Editor/{version}/Editor/Unity");
             paths.Add($"/opt/Unity/Editor/{version}/Editor/Unity");
-            paths.Add("/opt/unity/Editor/Unity");
-            paths.Add("/opt/Unity/Editor/Unity");
+            paths.Add($"/opt/unity/hub/Editor/{version}/Editor/Unity");
+            paths.Add($"/opt/unity/editors/{version}/Editor/Unity");
+            paths.Add($"/opt/Unity/Hub/Editor/{version}/Editor/Unity");
         }
 
         return paths;
+    }
+
+    private static IEnumerable<string> GetDirectoryCandidateExecutables(string directoryPath)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            yield return Path.Combine(directoryPath, "Editor", "Unity.exe");
+            yield return Path.Combine(directoryPath, "Unity.exe");
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            yield return Path.Combine(directoryPath, "Unity.app", "Contents", "MacOS", "Unity");
+            yield return Path.Combine(directoryPath, "Contents", "MacOS", "Unity");
+            yield return Path.Combine(directoryPath, "MacOS", "Unity");
+            yield return Path.Combine(directoryPath, "Unity");
+        }
+        else // Linux
+        {
+            yield return Path.Combine(directoryPath, "Editor", "Unity");
+            yield return Path.Combine(directoryPath, "Unity");
+        }
     }
 }

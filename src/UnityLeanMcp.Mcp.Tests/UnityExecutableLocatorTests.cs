@@ -180,6 +180,68 @@ public class UnityExecutableLocatorTests
     }
 
     [Fact]
+    public void FindUnityExecutable_WhenConfiguredPathIsEditorInstallationDirectory_ReturnsDiscoveredExecutable()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_dir_env_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        string fakeExe = CreateEditorFixture(tempDir);
+
+        string? originalUnityPath = Environment.GetEnvironmentVariable("UNITY_PATH");
+        string? originalUnityEditor = Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        try
+        {
+            // Point UNITY_PATH to the parent directory (like /opt/unity in docker images)
+            Environment.SetEnvironmentVariable("UNITY_PATH", tempDir);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", null);
+
+            var locator = new UnityExecutableLocator(tempDir, NullLogger<UnityExecutableLocator>.Instance);
+            UnityLocatorResult result = locator.FindUnityExecutable();
+
+            Assert.True(result.Success);
+            Assert.NotNull(result.ExecutablePath);
+            Assert.Equal(Path.GetFullPath(fakeExe), Path.GetFullPath(result.ExecutablePath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("UNITY_PATH", originalUnityPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", originalUnityEditor);
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void FindUnityExecutable_WhenConfiguredPathIsEmptyDirectory_RejectsItWithDiagnostic()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "test_empty_dir_env_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        string? originalUnityPath = Environment.GetEnvironmentVariable("UNITY_PATH");
+        string? originalUnityEditor = Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        string? originalPath = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("UNITY_PATH", tempDir);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", null);
+            Environment.SetEnvironmentVariable("PATH", GetIsolatedPathWithDotnet(tempDir, originalPath));
+
+            var locator = new UnityExecutableLocator(tempDir, NullLogger<UnityExecutableLocator>.Instance);
+            UnityLocatorResult result = locator.FindUnityExecutable();
+
+            Assert.False(result.Success);
+            Assert.Null(result.ExecutablePath);
+            Assert.Contains("UNITY_PATH", result.Diagnostic);
+            Assert.Contains("directory", result.Diagnostic);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("UNITY_PATH", originalUnityPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", originalUnityEditor);
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void FindUnityExecutable_WhenConfiguredPathIsUnityCli_RejectsItWithDiagnostic()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "test_cli_env_" + Guid.NewGuid().ToString("N"));
