@@ -307,6 +307,10 @@ In MCP server tools exposed to LLM agents (such as `unity_run_tests`), omitted a
 
 When unit tests modify process-wide environment variables (such as `PATH`) to verify fallback behavior or rejection of unauthorized binaries, completely wiping `PATH` or omitting the `dotnet` host directory causes concurrent test processes (which rely on `dotnet` in PATH to launch child processes such as `McpTestClient`) to fail with `Win32Exception: The system cannot find the file specified`. Furthermore, `Environment.ProcessPath` during `dotnet test` points to the test host runner (`testhost.exe`), which cannot execute `dotnet` CLI verbs like `publish`. Tests isolating `PATH` must preserve the directory containing the genuine `dotnet` CLI binary (discovered from the original `PATH` or `DOTNET_ROOT`) so that concurrent background subprocess execution remains deterministic and unaffected.
 
+### Blocking Retry Tests Must Not Depend on ThreadPool Scheduling
+
+Tests that synchronously exercise retry loops must not schedule the condition-clearing callback with `Task.Run` and then block the same shared ThreadPool with `Thread.Sleep`. Under CI parallelism, the callback can remain queued until every retry is exhausted even though the delay is nominally shorter than the retry window. Release simulated file locks from the first failed read (or use a dedicated synchronization primitive) so the test is deterministic across Windows, Linux, and macOS without relying on elapsed-time scheduling. Similarly, startup test doubles must report endpoint readiness as false until their simulated process reaches the running state; an always-ready endpoint bypasses startup and can leave readiness gates permanently unsignaled.
+
 ### Immutable Result Models vs. Stateful Diagnostic Properties on Services
 
 Exposing diagnostic properties like `LastDiagnostic` on singleton discovery services creates hidden temporal coupling and thread-safety bugs: concurrent calls from separate threads or callers overwrite each other's diagnostic state. Returning a dedicated, immutable Result type (such as `UnityLocatorResult`) bundles the outcome (`ExecutablePath`) with actionable failure details (`Diagnostic`) in a single return value. This keeps locator services completely stateless, eliminates the need for property locking, and makes mocking straightforward without residual diagnostic state.
@@ -335,3 +339,10 @@ Official Unity CI Docker images (such as `unityci/editor:ubuntu-...`) set `UNITY
 ### macOS Interactive Unity Locks May Be Unattributable to the MCP Host
 
 On macOS, an interactive Unity Editor can hold a zero-byte project `UnityLockfile` while a sandboxed MCP host cannot inspect its process command line. Treating that failed inspection as proof that no Editor exists causes a conflicting batchmode launch. A held lock must therefore be preserved and treated as an active-but-unattributed Editor for startup safety; it blocks auto-start and waits for the project socket, but must not be used as authority to stop a process.
+
+### xUnit Exact Type Matching with `OperationCanceledException`
+
+In .NET asynchronous code, operations honoring `CancellationToken` may throw either `OperationCanceledException` directly or its subclass `TaskCanceledException` (for example, from async socket, stream, or task continuations). In xUnit:
+- `Assert.ThrowsAsync<OperationCanceledException>` requires an exact type match (`ex.GetType() == typeof(OperationCanceledException)`) and fails if `TaskCanceledException` is thrown.
+- Always use `Assert.ThrowsAnyAsync<OperationCanceledException>` when testing cancellation behavior to accommodate any derived `OperationCanceledException` subtype across platforms and CLR async state machines.
+

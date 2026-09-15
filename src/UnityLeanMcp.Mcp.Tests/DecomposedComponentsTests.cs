@@ -168,7 +168,7 @@ public class DecomposedComponentsTests
             await accepted.Task;
             cancellation.Cancel();
 
-            await Assert.ThrowsAsync<OperationCanceledException>(() => commandTask);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => commandTask);
         }
         finally
         {

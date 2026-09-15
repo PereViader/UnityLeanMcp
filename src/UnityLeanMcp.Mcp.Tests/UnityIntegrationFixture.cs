@@ -63,12 +63,15 @@ public class UnityIntegrationFixture : IAsyncLifetime
 
     private static async Task PublishMcpServerAsync()
     {
-        string publishedDll = Path.Combine(
+        string mcpDir = Path.Combine(
             McpTestClient.GetUnityProjectRoot(),
             "Packages",
             "com.pereviader.unityleanmcp",
-            "MCP~",
-            "UnityLeanMcp.Mcp.dll");
+            "MCP~");
+        string publishedDll = Path.Combine(mcpDir, "UnityLeanMcp.Mcp.dll");
+
+        PreparePublishDirectory(mcpDir);
+
         var psi = new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
@@ -81,6 +84,8 @@ public class UnityIntegrationFixture : IAsyncLifetime
         using var proc = System.Diagnostics.Process.Start(psi)!;
         await proc.WaitForExitAsync();
 
+        CleanupStaleOldFiles(mcpDir);
+
         if (proc.ExitCode != 0)
         {
             throw new InvalidOperationException(
@@ -92,6 +97,79 @@ public class UnityIntegrationFixture : IAsyncLifetime
             throw new FileNotFoundException(
                 "dotnet publish completed successfully but did not produce the package MCP server DLL.",
                 publishedDll);
+        }
+    }
+
+    private static void PreparePublishDirectory(string mcpDir)
+    {
+        if (!Directory.Exists(mcpDir))
+        {
+            return;
+        }
+
+        CleanupStaleOldFiles(mcpDir);
+
+        foreach (string candidate in Directory.EnumerateFiles(mcpDir, "*.*"))
+        {
+            if (candidate.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                candidate.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase))
+            {
+                bool isLocked = false;
+                try
+                {
+                    using (File.Open(candidate, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                    {
+                    }
+                }
+                catch
+                {
+                    isLocked = true;
+                }
+
+                if (isLocked)
+                {
+                    string oldTarget = candidate + ".old";
+                    try
+                    {
+                        if (File.Exists(oldTarget))
+                        {
+                            File.Delete(oldTarget);
+                        }
+                        File.Move(candidate, oldTarget);
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            File.Move(candidate, candidate + ".old." + Guid.NewGuid().ToString("N"));
+                        }
+                        catch
+                        {
+                            // Best-effort rename per LEARNINGS.md
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void CleanupStaleOldFiles(string mcpDir)
+    {
+        if (!Directory.Exists(mcpDir))
+        {
+            return;
+        }
+
+        foreach (string oldFile in Directory.EnumerateFiles(mcpDir, "*.old*"))
+        {
+            try
+            {
+                File.Delete(oldFile);
+            }
+            catch
+            {
+                // Ignored: still held by running host process
+            }
         }
     }
 

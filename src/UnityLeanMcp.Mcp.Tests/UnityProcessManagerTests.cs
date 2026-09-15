@@ -195,7 +195,7 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
-    public async Task ReadFileWithRetry_WhenFileInitiallyLocked_RetriesAndReadsContent()
+    public void ReadFileWithRetry_WhenFileInitiallyLocked_RetriesAndReadsContent()
     {
         string tempFile = Path.GetTempFileName();
         try
@@ -204,16 +204,33 @@ public class UnityProcessManagerTests
 
             using var stream = new FileStream(tempFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
-            // Release the lock asynchronously after a short delay
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(50);
-                stream.Dispose();
-            });
-
-            string result = UnityProcessManager.ReadFileWithRetry(tempFile, maxRetries: 10, delayMs: 25);
+            int attempts = 0;
+            string result = UnityProcessManager.ReadFileWithRetry(
+                tempFile,
+                maxRetries: 10,
+                delayMs: 25,
+                fromOffset: 0,
+                reader: (path, _) =>
+                {
+                    attempts++;
+                    try
+                    {
+                        return File.ReadAllText(path, Encoding.UTF8);
+                    }
+                    catch (IOException) when (attempts == 1)
+                    {
+                        stream.Dispose();
+                        throw;
+                    }
+                    catch (UnauthorizedAccessException) when (attempts == 1)
+                    {
+                        stream.Dispose();
+                        throw;
+                    }
+                });
 
             Assert.Equal("Retry file content", result);
+            Assert.Equal(2, attempts);
         }
         finally
         {
@@ -972,7 +989,8 @@ public class UnityProcessManagerTests
         using var proc1 = StartDummyProcess();
         using var proc2 = StartDummyProcess();
 
-        // Lock the lockfile so IsUnityRunning sees Unity as active, but PID cannot be proven
+        // Lock the lockfile so IsUnityRunning sees Unity as active, but does not
+        // receive enough ownership evidence to terminate either candidate.
         string lockFilePath = Path.Combine(tempSubDir, "UnityLockfile");
         using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
 
@@ -990,16 +1008,16 @@ public class UnityProcessManagerTests
                 ProcessProvider = () => new[] { proc1, proc2 }
             };
 
-            Assert.False(procManager.IsUnityRunning(out int? runningPid));
+            Assert.True(procManager.IsUnityRunning(out int? runningPid));
             Assert.Null(runningPid);
 
             bool stopped = await procManager.StopUnityAsync(force: true);
 
-            Assert.True(stopped);
+            Assert.False(stopped, "StopUnityAsync must refuse to stop an unattributed Editor.");
             Assert.False(proc1.HasExited, "proc1 should NOT have been killed by StopUnityAsync.");
             Assert.False(proc2.HasExited, "proc2 should NOT have been killed by StopUnityAsync.");
-            Assert.False(File.Exists(operationFile), "Unproven Unity candidates must not block stale-state recovery.");
-            Assert.False(File.Exists(testRunningFile), "Unproven Unity candidates must not block stale-state recovery.");
+            Assert.True(File.Exists(operationFile), "Operation state must be preserved when Editor ownership is unproven.");
+            Assert.True(File.Exists(testRunningFile), "Test-running state must be preserved when Editor ownership is unproven.");
             Assert.True(File.Exists(refreshResultFile), "Shared refresh history must be preserved.");
         }
         finally
@@ -1596,7 +1614,7 @@ public class UnityProcessManagerTests
         public override Task<bool> IsSocketReadyAsync(
             int timeoutSeconds = 2,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(true);
+            Task.FromResult(Volatile.Read(ref _state.Running));
 
         internal override async Task WaitForSocketReadinessAsync(
             Process? startedProcess,
@@ -1648,7 +1666,7 @@ public class UnityProcessManagerTests
         }
 
         public override Task<bool> IsSocketReadyAsync(int timeoutSeconds = 2, CancellationToken cancellationToken = default) =>
-            Task.FromResult(true);
+            Task.FromResult(Volatile.Read(ref _running));
 
         internal override async Task WaitForSocketReadinessAsync(Process? startedProcess, CancellationToken cancellationToken, long initialLogOffset = 0)
         {

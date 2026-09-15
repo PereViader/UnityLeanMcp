@@ -850,10 +850,8 @@ public class InstallerTests
         try
         {
             string resolved = UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(tempPackage);
-            string expected = Directory.Exists(Path.Combine(tempPackage, "MCP~"))
-                ? Path.Combine(tempPackage, "MCP~")
-                : mcpLowerDir;
-            Assert.Equal(expected.Replace('\\', '/') + "/", resolved);
+            string expected = UnityLeanMcp.McpConfigurationPaths.NormalizeDirectoryPath(mcpLowerDir);
+            Assert.Equal(expected, resolved);
         }
         finally
         {
