@@ -118,6 +118,8 @@ unity_background_log.txt
 
 # Non-portable MCP configuration files (contain user/machine-specific absolute paths)
 .agents/plugins/*/mcp_config.json
+.cursor/mcp.json
 .codex/
 # MCP server published binaries
 [Mm][Cc][Pp]~/
+.DS_Store

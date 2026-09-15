@@ -1,4 +1,4 @@
-{
+﻿{
   "servers": {
     "unity-lean-mcp": {
       "command": "dotnet",

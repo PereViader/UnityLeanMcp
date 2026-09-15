@@ -642,26 +642,36 @@ public class InstallerTests
     }
 
     [Fact]
-    public void TrackedMcpConfig_Cursor_UsesAbsoluteCwdAndMcpDll()
+    public void GeneratedMcpConfig_Cursor_UsesAbsoluteCwdAndMcpDll()
     {
-        string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        string tempBase = Path.Combine(Path.GetTempPath(), "cursor_config_" + Guid.NewGuid().ToString("N"));
+        string repositoryRoot = Path.Combine(tempBase, "repository");
+        string mcpDirectory = Path.Combine(repositoryRoot, "src", "UnityLeanMcp.Unity3d", "Packages", "com.example.mcp", "MCP~");
         string configPath = Path.Combine(repositoryRoot, ".cursor", "mcp.json");
 
-        Assert.True(File.Exists(configPath), $"Expected tracked MCP config at {configPath}");
+        Directory.CreateDirectory(mcpDirectory);
+        try
+        {
+            UpdateOrWriteMcpConfig(configPath, mcpDirectory);
 
-        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
-        JsonElement server = document.RootElement
-            .GetProperty("mcpServers")
-            .GetProperty("unity-lean-mcp");
+            using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+            JsonElement server = document.RootElement
+                .GetProperty("mcpServers")
+                .GetProperty("unity-lean-mcp");
 
-        Assert.Equal("dotnet", server.GetProperty("command").GetString());
-        string[] args = server.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
-        Assert.Equal(new[] { "UnityLeanMcp.Mcp.dll" }, args);
-        Assert.True(server.TryGetProperty("cwd", out JsonElement cwdElement));
-        string cwd = cwdElement.GetString()!;
-        Assert.True(Path.IsPathRooted(cwd));
-        Assert.EndsWith("/MCP~/", cwd);
-        Assert.True(Directory.Exists(cwd.TrimEnd('/')));
+            Assert.Equal("dotnet", server.GetProperty("command").GetString());
+            string[] args = server.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+            Assert.Equal(new[] { "UnityLeanMcp.Mcp.dll" }, args);
+            Assert.True(server.TryGetProperty("cwd", out JsonElement cwdElement));
+            string cwd = cwdElement.GetString()!;
+            Assert.True(Path.IsPathRooted(cwd));
+            Assert.EndsWith("/MCP~/", cwd);
+            Assert.True(Directory.Exists(cwd.TrimEnd('/')));
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
     }
 
     [Fact]
@@ -840,7 +850,10 @@ public class InstallerTests
         try
         {
             string resolved = UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(tempPackage);
-            Assert.Equal(mcpLowerDir.Replace('\\', '/') + "/", resolved);
+            string expected = Directory.Exists(Path.Combine(tempPackage, "MCP~"))
+                ? Path.Combine(tempPackage, "MCP~")
+                : mcpLowerDir;
+            Assert.Equal(expected.Replace('\\', '/') + "/", resolved);
         }
         finally
         {

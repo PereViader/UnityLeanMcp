@@ -59,7 +59,7 @@ This automatically creates or updates the configuration files for:
 
 For this checkout, the supported project configuration paths are `.vscode/mcp.json` for VS Code, `.cursor/mcp.json` for Cursor, `.mcp.json` for Claude Code, `.agents/plugins/unity-lean-mcp/mcp_config.json` for Antigravity, and `.codex/config.toml` for Codex.
 - **VS Code** (`.vscode/mcp.json`) and **Claude Code** (`.mcp.json`) use workspace root variables (`${workspaceFolder}` and `${CLAUDE_PROJECT_DIR:-.}`) in `cwd` so they remain portable and consistent in version control.
-- **Antigravity** and **Cursor** require absolute paths in `cwd`.
+- **Antigravity** and **Cursor** require absolute paths in `cwd`; their generated machine-specific configuration files are intentionally excluded from version control.
 - **Codex** uses an absolute path in `cwd` and sets `tool_timeout_sec = 1800`.
 - All clients set `cwd` to the package `MCP~` folder and execute `dotnet` with `args: ["UnityLeanMcp.Mcp.dll"]`.
 
