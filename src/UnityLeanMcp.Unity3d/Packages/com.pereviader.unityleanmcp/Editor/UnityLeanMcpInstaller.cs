@@ -18,10 +18,10 @@ namespace UnityLeanMcp
         {
             try
             {
-                var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UnityLeanMcpInstaller).Assembly);
-                if (packageInfo == null)
+                string packagePath = FindPackagePath();
+                if (string.IsNullOrEmpty(packagePath))
                 {
-                    Debug.LogError("[UnityLeanMcp] Could not find package info for assembly.");
+                    Debug.LogError("[UnityLeanMcp] Could not find package information for assembly. Installation aborted.");
                     if (showDialog && !Application.isBatchMode)
                     {
                         EditorUtility.DisplayDialog("UnityLeanMcp Error", "Could not find package information for assembly. Installation aborted.", "OK");
@@ -29,15 +29,16 @@ namespace UnityLeanMcp
                     return false;
                 }
 
+                string mcpDir = McpConfigurationPaths.FindMcpDirectory(packagePath);
+                string dllPath = Path.Combine(mcpDir, "UnityLeanMcp.Mcp.dll");
+                if (!File.Exists(dllPath))
+                {
+                    Debug.LogWarning($"[UnityLeanMcp] UnityLeanMcp.Mcp.dll was not found at '{dllPath}'. Ensure the MCP server binary is built or published.");
+                }
+
                 string assetsPath = Application.dataPath;
                 string rootFolder = FindRepositoryRoot(assetsPath);
                 string projectRoot = Path.GetFullPath(Path.Combine(assetsPath, ".."));
-                string packagePath = packageInfo.resolvedPath;
-                string mcpDir = Path.GetFullPath(Path.Combine(packagePath, "MCP~")).Replace('\\', '/');
-                if (!mcpDir.EndsWith("/"))
-                {
-                    mcpDir += "/";
-                }
 
                 // Ensure Antigravity plugin manifest
                 string pluginJsonPath = Path.Combine(rootFolder, ".agents", "plugins", "unity-lean-mcp", "plugin.json");
@@ -88,6 +89,81 @@ namespace UnityLeanMcp
             }
         }
 
+        public static string FindPackagePath()
+        {
+            // 1. Try PackageManager PackageInfo for the assembly (resolves absolute path regardless of location)
+            try
+            {
+                var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(UnityLeanMcpInstaller).Assembly);
+                if (packageInfo != null && !string.IsNullOrWhiteSpace(packageInfo.resolvedPath))
+                {
+                    return Path.GetFullPath(packageInfo.resolvedPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[UnityLeanMcp] PackageInfo.FindForAssembly failed: {ex.Message}");
+            }
+
+            // 2. Try locating via MonoScript asset (handles cases where assembly is not recognized as package)
+            try
+            {
+                string[] guids = AssetDatabase.FindAssets("UnityLeanMcpInstaller t:MonoScript");
+                if (guids == null || guids.Length == 0)
+                {
+                    guids = AssetDatabase.FindAssets("UnityLeanMcpInstaller");
+                }
+
+                if (guids != null)
+                {
+                    foreach (string guid in guids)
+                    {
+                        string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                        if (!string.IsNullOrEmpty(assetPath) && assetPath.EndsWith("UnityLeanMcpInstaller.cs", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string fullPath = Path.GetFullPath(assetPath);
+                            var dir = new DirectoryInfo(Path.GetDirectoryName(fullPath));
+                            while (dir != null)
+                            {
+                                if (Directory.Exists(Path.Combine(dir.FullName, "MCP~")) ||
+                                    Directory.Exists(Path.Combine(dir.FullName, "mcp~")) ||
+                                    File.Exists(Path.Combine(dir.FullName, "package.json")))
+                                {
+                                    return dir.FullName;
+                                }
+                                dir = dir.Parent;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[UnityLeanMcp] AssetDatabase search for package path failed: {ex.Message}");
+            }
+
+            // 3. Fallback: probe standard embedded package location relative to Assets
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string standardEmbedded = Path.Combine(projectRoot, "Packages", "com.pereviader.unityleanmcp");
+            if (Directory.Exists(standardEmbedded))
+            {
+                return standardEmbedded;
+            }
+
+            // 4. Fallback: probe Library/PackageCache
+            string packageCache = Path.Combine(projectRoot, "Library", "PackageCache");
+            if (Directory.Exists(packageCache))
+            {
+                string[] matches = Directory.GetDirectories(packageCache, "com.pereviader.unityleanmcp*");
+                if (matches != null && matches.Length > 0)
+                {
+                    return Path.GetFullPath(matches[0]);
+                }
+            }
+
+            return null;
+        }
+
         public static string FindRepositoryRoot(string assetsPath)
         {
             var dir = new DirectoryInfo(assetsPath);
@@ -117,7 +193,7 @@ namespace UnityLeanMcp
                 Directory.CreateDirectory(dir);
             }
 
-            string serverJsonSnippet = BuildMcpServerJsonSnippet(mcpDir, repositoryRoot, projectRoot);
+            string serverJsonSnippet = BuildMcpServerJsonSnippet(configPath, mcpDir, repositoryRoot);
 
             string normalizedPath = configPath.Replace('\\', '/');
             string effectiveRootKey = rootKey;
@@ -221,32 +297,22 @@ namespace UnityLeanMcp
             File.WriteAllText(configPath, fallbackContent, Encoding.UTF8);
         }
 
-        private static string BuildMcpServerJsonSnippet(string mcpDir, string repositoryRoot, string projectRoot)
+        private static string BuildMcpServerJsonSnippet(string configPath, string mcpDir, string repositoryRoot)
         {
-            if (McpConfigurationPaths.TryGetPortablePaths(
-                    repositoryRoot,
-                    mcpDir,
-                    projectRoot,
-                    out string relativeMcpDll,
-                    out string relativeProjectRoot))
-            {
-                return
-                    "    \"unity-lean-mcp\": {\n" +
-                    "      \"command\": \"dotnet\",\n" +
-                    "      \"args\": [\n" +
-                    $"        \"{EscapeJsonString(relativeMcpDll)}\",\n" +
-                    "        \"--project\",\n" +
-                    $"        \"{EscapeJsonString(relativeProjectRoot)}\"\n" +
-                    "      ]\n" +
-                    "    }";
-            }
-
-            // A package resolved outside the checkout cannot be addressed portably. The
-            // installer is the correct place to materialize that machine-specific path.
             string formattedMcpDir = mcpDir.Replace('\\', '/');
             if (!formattedMcpDir.EndsWith("/"))
             {
                 formattedMcpDir += "/";
+            }
+
+            string effectiveCwd = formattedMcpDir;
+            if (McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
+                    repositoryRoot,
+                    formattedMcpDir,
+                    configPath,
+                    out string workspaceRelativePath))
+            {
+                effectiveCwd = workspaceRelativePath;
             }
 
             return
@@ -255,7 +321,7 @@ namespace UnityLeanMcp
                 "      \"args\": [\n" +
                 "        \"UnityLeanMcp.Mcp.dll\"\n" +
                 "      ],\n" +
-                $"      \"cwd\": \"{EscapeJsonString(formattedMcpDir)}\"\n" +
+                $"      \"cwd\": \"{EscapeJsonString(effectiveCwd)}\"\n" +
                 "    }";
         }
 
@@ -282,7 +348,8 @@ namespace UnityLeanMcp
                 "[mcp_servers.unity-lean-mcp]\n" +
                 "command = \"dotnet\"\n" +
                 "args = [\"UnityLeanMcp.Mcp.dll\"]\n" +
-                $"cwd = \"{formattedMcpDir}\"\n";
+                $"cwd = \"{formattedMcpDir}\"\n" +
+                "tool_timeout_sec = 1800\n";
 
             if (!File.Exists(configPath))
             {

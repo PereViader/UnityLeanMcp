@@ -10,6 +10,115 @@ namespace UnityLeanMcp
     /// </summary>
     public static class McpConfigurationPaths
     {
+        public static string FindMcpDirectory(string packagePath)
+        {
+            if (string.IsNullOrWhiteSpace(packagePath))
+            {
+                return null;
+            }
+
+            string fullPackagePath = Path.GetFullPath(packagePath);
+
+            // Check standard uppercase MCP~
+            string mcpDir = Path.Combine(fullPackagePath, "MCP~");
+            if (Directory.Exists(mcpDir))
+            {
+                return NormalizeDirectoryPath(mcpDir);
+            }
+
+            // Check lowercase mcp~ (case-sensitive Linux filesystem support)
+            string lowerMcpDir = Path.Combine(fullPackagePath, "mcp~");
+            if (Directory.Exists(lowerMcpDir))
+            {
+                return NormalizeDirectoryPath(lowerMcpDir);
+            }
+
+            return NormalizeDirectoryPath(mcpDir);
+        }
+
+        public static string NormalizeDirectoryPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            string normalized = Path.GetFullPath(path).Replace('\\', '/');
+            if (!normalized.EndsWith("/"))
+            {
+                normalized += "/";
+            }
+            return normalized;
+        }
+
+        public static bool TryGetWorkspaceRootVariable(string configPath, out string variable)
+        {
+            variable = null;
+            if (string.IsNullOrWhiteSpace(configPath))
+            {
+                return false;
+            }
+
+            string normalized = configPath.Replace('\\', '/');
+            if (normalized.Equals(".vscode/mcp.json", StringComparison.OrdinalIgnoreCase) ||
+                normalized.EndsWith("/.vscode/mcp.json", StringComparison.OrdinalIgnoreCase))
+            {
+                variable = "${workspaceFolder}";
+                return true;
+            }
+
+            if (normalized.Equals(".mcp.json", StringComparison.OrdinalIgnoreCase) ||
+                normalized.EndsWith("/.mcp.json", StringComparison.OrdinalIgnoreCase))
+            {
+                variable = "${CLAUDE_PROJECT_DIR:-.}";
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool TryGetWorkspaceRelativeMcpPath(
+            string repositoryRoot,
+            string mcpDirectory,
+            string configPath,
+            out string workspaceRelativePath)
+        {
+            workspaceRelativePath = null;
+            if (string.IsNullOrWhiteSpace(repositoryRoot) ||
+                string.IsNullOrWhiteSpace(mcpDirectory) ||
+                string.IsNullOrWhiteSpace(configPath))
+            {
+                return false;
+            }
+
+            if (!TryGetWorkspaceRootVariable(configPath, out string variable))
+            {
+                return false;
+            }
+
+            if (!TryGetRepositoryRelativePath(repositoryRoot, mcpDirectory, out string relativeMcpDir))
+            {
+                return false;
+            }
+
+            string formattedRelative = relativeMcpDir.Trim('/');
+            if (string.IsNullOrEmpty(formattedRelative) || formattedRelative == ".")
+            {
+                workspaceRelativePath = variable;
+            }
+            else
+            {
+                workspaceRelativePath = $"{variable}/{formattedRelative}";
+            }
+
+            if (mcpDirectory.Replace('\\', '/').EndsWith("/"))
+            {
+                workspaceRelativePath += "/";
+            }
+
+            return true;
+        }
+
         public static bool TryGetPortablePaths(
             string repositoryRoot,
             string mcpDirectory,
@@ -41,7 +150,7 @@ namespace UnityLeanMcp
             return true;
         }
 
-        private static bool TryGetRepositoryRelativePath(string repositoryRoot, string targetPath, out string relativePath)
+        public static bool TryGetRepositoryRelativePath(string repositoryRoot, string targetPath, out string relativePath)
         {
             relativePath = null;
             if (string.IsNullOrWhiteSpace(repositoryRoot) || string.IsNullOrWhiteSpace(targetPath))

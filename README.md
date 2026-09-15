@@ -57,11 +57,15 @@ This automatically creates or updates the configuration files for:
 - **Claude Code**: `.mcp.json`
 - **Codex**: `.codex/config.toml`
 
-For this checkout, the supported project configuration paths are `.vscode/mcp.json` for VS Code, `.cursor/mcp.json` for Cursor, and `.codex/config.toml` for Codex. The tracked VS Code, Cursor, and Claude Code files use paths relative to the repository root, so they can be used after cloning on Windows, macOS, or Linux. The Unity installer regenerates the JSON project files from the resolved package location; it uses the same relative form when the package is inside the repository and falls back to an absolute path when a package cache is outside the repository. Codex configuration is generated locally under `.codex/` and remains machine-specific because that directory is ignored.
+For this checkout, the supported project configuration paths are `.vscode/mcp.json` for VS Code, `.cursor/mcp.json` for Cursor, `.mcp.json` for Claude Code, `.agents/plugins/unity-lean-mcp/mcp_config.json` for Antigravity, and `.codex/config.toml` for Codex.
+- **VS Code** (`.vscode/mcp.json`) and **Claude Code** (`.mcp.json`) use workspace root variables (`${workspaceFolder}` and `${CLAUDE_PROJECT_DIR:-.}`) in `cwd` so they remain portable and consistent in version control.
+- **Antigravity** and **Cursor** require absolute paths in `cwd`.
+- **Codex** uses an absolute path in `cwd` and sets `tool_timeout_sec = 1800`.
+- All clients set `cwd` to the package `MCP~` folder and execute `dotnet` with `args: ["UnityLeanMcp.Mcp.dll"]`.
 
 ### Manual MCP Server Configuration
 
-If configuring manually, add the following to your MCP client configuration:
+If configuring manually, add the following to your MCP client configuration (adjusting `cwd` as needed):
 
 ```json
 {
@@ -69,16 +73,15 @@ If configuring manually, add the following to your MCP client configuration:
     "unity-lean-mcp": {
       "command": "dotnet",
       "args": [
-        "src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll",
-        "--project",
-        "src/UnityLeanMcp.Unity3d"
-      ]
+        "UnityLeanMcp.Mcp.dll"
+      ],
+      "cwd": "C:/Path/To/Your/Project/Packages/com.pereviader.unityleanmcp/MCP~/"
     }
   }
 }
 ```
 
-Run the host from the checkout root so the relative DLL and project paths resolve correctly. For a Unity project installed as a package outside this repository, use **Tools > UnityLeanMcp > Install MCP Configurations** so the installer can write the resolved package path.
+When `cwd` points to the `MCP~` folder, the MCP server automatically resolves the Unity project root from the current working directory. Use **Tools > UnityLeanMcp > Install MCP Configurations** in Unity to configure all installed IDEs and agent clients automatically.
 
 ### Release Versioning
 

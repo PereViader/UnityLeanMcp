@@ -25,7 +25,12 @@ public class InstallerTests
         return Path.GetFullPath(Path.Combine(assetsPath, ".."));
     }
 
-    private static void UpdateOrWriteMcpConfig(string configPath, string mcpDir, string rootKey = "mcpServers")
+    private static void UpdateOrWriteMcpConfig(
+        string configPath,
+        string mcpDir,
+        string rootKey = "mcpServers",
+        string? repositoryRoot = null,
+        string? projectRoot = null)
     {
         string dir = Path.GetDirectoryName(configPath)!;
         if (!Directory.Exists(dir))
@@ -39,13 +44,24 @@ public class InstallerTests
             formattedMcpDir += "/";
         }
 
+        string effectiveCwd = formattedMcpDir;
+        if (!string.IsNullOrEmpty(repositoryRoot) &&
+            McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
+                repositoryRoot,
+                formattedMcpDir,
+                configPath,
+                out string workspaceRelativePath))
+        {
+            effectiveCwd = workspaceRelativePath;
+        }
+
         string serverJsonSnippet =
             "    \"unity-lean-mcp\": {\n" +
             "      \"command\": \"dotnet\",\n" +
             "      \"args\": [\n" +
             "        \"UnityLeanMcp.Mcp.dll\"\n" +
             "      ],\n" +
-            $"      \"cwd\": \"{formattedMcpDir}\"\n" +
+            $"      \"cwd\": \"{effectiveCwd}\"\n" +
             "    }";
 
         string normalizedPath = configPath.Replace('\\', '/');
@@ -167,7 +183,8 @@ public class InstallerTests
             "[mcp_servers.unity-lean-mcp]\n" +
             "command = \"dotnet\"\n" +
             "args = [\"UnityLeanMcp.Mcp.dll\"]\n" +
-            $"cwd = \"{formattedMcpDir}\"\n";
+            $"cwd = \"{formattedMcpDir}\"\n" +
+            "tool_timeout_sec = 1800\n";
 
         if (!File.Exists(configPath))
         {
@@ -232,6 +249,28 @@ public class InstallerTests
         {
             string gitDir = Path.Combine(tempBase, ".git");
             Directory.CreateDirectory(gitDir);
+
+            string assetsDir = Path.Combine(tempBase, "unity_project", "Assets");
+            Directory.CreateDirectory(assetsDir);
+
+            string detectedRoot = FindRepositoryRoot(assetsDir);
+            Assert.Equal(Path.GetFullPath(tempBase), Path.GetFullPath(detectedRoot));
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
+    public void FindRepositoryRoot_WhenGitIsAFile_Worktree_FindsDirectory()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_git_worktree_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(tempBase);
+            string gitFile = Path.Combine(tempBase, ".git");
+            File.WriteAllText(gitFile, "gitdir: /path/to/main/repo/.git/worktrees/branch");
 
             string assetsDir = Path.Combine(tempBase, "unity_project", "Assets");
             Directory.CreateDirectory(assetsDir);
@@ -556,37 +595,163 @@ public class InstallerTests
         }
     }
 
-    [Theory]
-    [InlineData(".mcp.json", "mcpServers")]
-    [InlineData(".cursor/mcp.json", "mcpServers")]
-    [InlineData(".vscode/mcp.json", "servers")]
-    public void TrackedMcpConfig_UsesCheckoutRelativeServerAndProjectPaths(string relativeConfigPath, string rootKey)
+    [Fact]
+    public void TrackedMcpConfig_VsCode_UsesWorkspaceFolderVariableAndMcpDll()
     {
         string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
-        string configPath = Path.Combine(repositoryRoot, relativeConfigPath.Replace('/', Path.DirectorySeparatorChar));
+        string configPath = Path.Combine(repositoryRoot, ".vscode", "mcp.json");
 
         Assert.True(File.Exists(configPath), $"Expected tracked MCP config at {configPath}");
 
         using var document = JsonDocument.Parse(File.ReadAllText(configPath));
         JsonElement server = document.RootElement
-            .GetProperty(rootKey)
+            .GetProperty("servers")
             .GetProperty("unity-lean-mcp");
 
         Assert.Equal("dotnet", server.GetProperty("command").GetString());
         string[] args = server.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
-        Assert.Equal(
-            new[]
-            {
-                "src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/MCP~/UnityLeanMcp.Mcp.dll",
-                "--project",
-                "src/UnityLeanMcp.Unity3d"
-            },
-            args);
-        Assert.False(server.TryGetProperty("cwd", out _));
+        Assert.Equal(new[] { "UnityLeanMcp.Mcp.dll" }, args);
+        Assert.True(server.TryGetProperty("cwd", out JsonElement cwdElement));
+        string cwd = cwdElement.GetString()!;
+        Assert.StartsWith("${workspaceFolder}/", cwd);
+        Assert.EndsWith("/MCP~/", cwd);
         Assert.DoesNotContain("C:/Users/perev/", File.ReadAllText(configPath), StringComparison.OrdinalIgnoreCase);
-        Assert.False(Path.IsPathRooted(args[0]));
-        Assert.EndsWith("/MCP~/UnityLeanMcp.Mcp.dll", args[0], StringComparison.Ordinal);
-        Assert.True(Directory.Exists(Path.Combine(repositoryRoot, args[2].Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    [Fact]
+    public void TrackedMcpConfig_Claude_UsesClaudeProjectDirVariableAndMcpDll()
+    {
+        string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        string configPath = Path.Combine(repositoryRoot, ".mcp.json");
+
+        Assert.True(File.Exists(configPath), $"Expected tracked MCP config at {configPath}");
+
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        JsonElement server = document.RootElement
+            .GetProperty("mcpServers")
+            .GetProperty("unity-lean-mcp");
+
+        Assert.Equal("dotnet", server.GetProperty("command").GetString());
+        string[] args = server.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+        Assert.Equal(new[] { "UnityLeanMcp.Mcp.dll" }, args);
+        Assert.True(server.TryGetProperty("cwd", out JsonElement cwdElement));
+        string cwd = cwdElement.GetString()!;
+        Assert.StartsWith("${CLAUDE_PROJECT_DIR:-.}/", cwd);
+        Assert.EndsWith("/MCP~/", cwd);
+        Assert.DoesNotContain("C:/Users/perev/", File.ReadAllText(configPath), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TrackedMcpConfig_Cursor_UsesAbsoluteCwdAndMcpDll()
+    {
+        string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        string configPath = Path.Combine(repositoryRoot, ".cursor", "mcp.json");
+
+        Assert.True(File.Exists(configPath), $"Expected tracked MCP config at {configPath}");
+
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        JsonElement server = document.RootElement
+            .GetProperty("mcpServers")
+            .GetProperty("unity-lean-mcp");
+
+        Assert.Equal("dotnet", server.GetProperty("command").GetString());
+        string[] args = server.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+        Assert.Equal(new[] { "UnityLeanMcp.Mcp.dll" }, args);
+        Assert.True(server.TryGetProperty("cwd", out JsonElement cwdElement));
+        string cwd = cwdElement.GetString()!;
+        Assert.True(Path.IsPathRooted(cwd));
+        Assert.EndsWith("/MCP~/", cwd);
+        Assert.True(Directory.Exists(cwd.TrimEnd('/')));
+    }
+
+    [Fact]
+    public void TrackedMcpConfig_Codex_UsesAbsoluteCwdAndTimeout()
+    {
+        string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        string configPath = Path.Combine(repositoryRoot, ".codex", "config.toml");
+        if (!File.Exists(configPath))
+        {
+            return;
+        }
+
+        string content = File.ReadAllText(configPath);
+        Assert.Contains("[mcp_servers.unity-lean-mcp]", content);
+        Assert.Contains("command = \"dotnet\"", content);
+        Assert.Contains("args = [\"UnityLeanMcp.Mcp.dll\"]", content);
+        Assert.Contains("tool_timeout_sec = 1800", content);
+        Assert.Contains("cwd = ", content);
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_TryGetWorkspaceRootVariable_IdentifiesSupportedClients()
+    {
+        Assert.True(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable(".vscode/mcp.json", out string vsVar));
+        Assert.Equal("${workspaceFolder}", vsVar);
+
+        Assert.True(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable("C:/repo/.vscode/mcp.json", out string vsVarAbs));
+        Assert.Equal("${workspaceFolder}", vsVarAbs);
+
+        Assert.True(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable(".mcp.json", out string claudeVar));
+        Assert.Equal("${CLAUDE_PROJECT_DIR:-.}", claudeVar);
+
+        Assert.True(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable("C:/repo/.mcp.json", out string claudeVarAbs));
+        Assert.Equal("${CLAUDE_PROJECT_DIR:-.}", claudeVarAbs);
+
+        Assert.False(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable(".cursor/mcp.json", out _));
+        Assert.False(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable(".agents/plugins/unity-lean-mcp/mcp_config.json", out _));
+        Assert.False(UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRootVariable(".codex/config.toml", out _));
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_TryGetWorkspaceRelativeMcpPath_WhenInsideRepository_ReturnsFormattedVariablePath()
+    {
+        string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
+        string mcpDirectory = Path.Combine(repositoryRoot, "src", "UnityProject", "Packages", "com.example.mcp", "MCP~") + "/";
+
+        try
+        {
+            bool vsSuccess = UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
+                repositoryRoot,
+                mcpDirectory,
+                Path.Combine(repositoryRoot, ".vscode", "mcp.json"),
+                out string vsPath);
+            Assert.True(vsSuccess);
+            Assert.Equal("${workspaceFolder}/src/UnityProject/Packages/com.example.mcp/MCP~/", vsPath);
+
+            bool claudeSuccess = UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
+                repositoryRoot,
+                mcpDirectory,
+                Path.Combine(repositoryRoot, ".mcp.json"),
+                out string claudePath);
+            Assert.True(claudeSuccess);
+            Assert.Equal("${CLAUDE_PROJECT_DIR:-.}/src/UnityProject/Packages/com.example.mcp/MCP~/", claudePath);
+
+            bool cursorSuccess = UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
+                repositoryRoot,
+                mcpDirectory,
+                Path.Combine(repositoryRoot, ".cursor", "mcp.json"),
+                out _);
+            Assert.False(cursorSuccess);
+        }
+        finally
+        {
+            if (Directory.Exists(repositoryRoot)) Directory.Delete(repositoryRoot, true);
+        }
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_TryGetWorkspaceRelativeMcpPath_WhenOutsideRepository_ReturnsFalse()
+    {
+        string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
+        string externalPackage = Path.Combine(Path.GetTempPath(), "mcp_package_" + Guid.NewGuid().ToString("N"), "MCP~") + "/";
+
+        bool success = UnityLeanMcp.McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
+            repositoryRoot,
+            externalPackage,
+            Path.Combine(repositoryRoot, ".vscode", "mcp.json"),
+            out _);
+
+        Assert.False(success);
     }
 
     [Fact]
@@ -647,5 +812,56 @@ public class InstallerTests
             out _);
 
         Assert.False(portable);
+    }
+
+    [Fact]
+    public void FindMcpDirectory_WhenMcpUpperExists_ReturnsUpperMcp()
+    {
+        string tempPackage = Path.Combine(Path.GetTempPath(), "test_pkg_" + Guid.NewGuid().ToString("N"));
+        string mcpDir = Path.Combine(tempPackage, "MCP~");
+        Directory.CreateDirectory(mcpDir);
+        try
+        {
+            string resolved = UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(tempPackage);
+            Assert.Equal(mcpDir.Replace('\\', '/') + "/", resolved);
+        }
+        finally
+        {
+            if (Directory.Exists(tempPackage)) Directory.Delete(tempPackage, true);
+        }
+    }
+
+    [Fact]
+    public void FindMcpDirectory_WhenOnlyMcpLowerExists_ReturnsLowerMcp()
+    {
+        string tempPackage = Path.Combine(Path.GetTempPath(), "test_pkg_" + Guid.NewGuid().ToString("N"));
+        string mcpLowerDir = Path.Combine(tempPackage, "mcp~");
+        Directory.CreateDirectory(mcpLowerDir);
+        try
+        {
+            string resolved = UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(tempPackage);
+            Assert.Equal(mcpLowerDir.Replace('\\', '/') + "/", resolved);
+        }
+        finally
+        {
+            if (Directory.Exists(tempPackage)) Directory.Delete(tempPackage, true);
+        }
+    }
+
+    [Fact]
+    public void FindMcpDirectory_WhenNeitherExists_ReturnsNormalizedDefaultMcp()
+    {
+        string tempPackage = Path.Combine(Path.GetTempPath(), "test_pkg_" + Guid.NewGuid().ToString("N"));
+        string expected = Path.Combine(tempPackage, "MCP~").Replace('\\', '/') + "/";
+
+        string resolved = UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(tempPackage);
+        Assert.Equal(expected, resolved);
+    }
+
+    [Fact]
+    public void FindMcpDirectory_WhenNullOrEmpty_ReturnsNull()
+    {
+        Assert.Null(UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(null!));
+        Assert.Null(UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory("   "));
     }
 }

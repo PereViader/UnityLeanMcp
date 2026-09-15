@@ -263,9 +263,15 @@ The Unity process manager keeps startup/shutdown orchestration separate from the
 
 The Unity CLI can be a real native executable named `Unity`, so checking only the filename, extension, executable bit, or Mach-O/PE/ELF format cannot distinguish it from the Editor. Unity Editor installation markers are safer and deterministic: macOS uses the `Unity.app/Contents/MacOS/Unity` bundle layout with `Contents/Managed/UnityEditor.dll`; Windows and Linux use the Editor's sibling `Data/Managed/UnityEditor.dll` (and `UnityEngine.dll`). Note that `<executable>_Data` is used only for standalone player builds, never for the Unity Editor. All discovery sources must run the same validation, and a rejected configured candidate should leave a diagnostic explaining the expected layout so auto-start errors are actionable.
 
-### MCP Configuration Working-Directory Portability
-
-Project-scoped MCP hosts do not share one portable interpolation syntax for `cwd`; VS Code and Cursor support workspace variables in selected fields, while Claude Code uses environment expansion with different semantics. A checkout configuration is therefore more reliable when it omits `cwd`, passes a repository-relative published DLL and `--project` path as separate arguments, and is launched from the project root. Installation-time generation can use a resolved absolute `cwd` only when the package lives outside the repository and cannot be represented by a checkout-relative path.
+### MCP Configuration Working-Directory & Workspace Variable Support
+MCP clients differ fundamentally in their support for workspace-relative path variables in configuration files:
+- **VS Code** supports `${workspaceFolder}` in `.vscode/mcp.json` (under the `"servers"` root key).
+- **Claude Code** supports environment and directory expansion in `.mcp.json` using the `${CLAUDE_PROJECT_DIR:-.}` format (under the `"mcpServers"` root key).
+- **Antigravity and Cursor** do not expand workspace root variables in their MCP client configurations. Attempting to use workspace tokens or relative paths causes them to fail to locate the server. Therefore, Antigravity (`.agents/plugins/unity-lean-mcp/mcp_config.json`) and Cursor (`.cursor/mcp.json`) must use absolute paths in `cwd`.
+- **Working Directory (`cwd`) Affinity**: The MCP server discovers the target Unity project by ascending directories from its working directory until reaching a directory containing `Assets` and `ProjectSettings`. Setting `cwd` directly to the `MCP~` folder and running `dotnet UnityLeanMcp.Mcp.dll` ensures reliable project resolution without requiring hardcoded `--project` arguments.
+ 
+### Unity Package Location & MCP~ Directory Discovery
+`PackageInfo.FindForAssembly(typeof(...).Assembly)` reliably resolves the absolute disk path for any package registered in the Unity Package Manager (whether embedded in `Packages/`, cloned via git, referenced by `file:`, or downloaded into `Library/PackageCache/` or the global package cache). However, if an assembly is not registered as a UPM package (for instance, when users copy source files directly into `Assets/`), `PackageInfo.FindForAssembly` returns `null`. Robust package discovery must pair `PackageInfo.FindForAssembly` with an `AssetDatabase.FindAssets` fallback that locates the installer script and ascends to find `package.json` or `MCP~`. Furthermore, on case-sensitive filesystems (Linux), probing both `MCP~` and `mcp~` ensures cross-platform compatibility.
 
 
 ### Integration-Test MCP Artifact Selection
