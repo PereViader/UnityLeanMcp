@@ -952,9 +952,10 @@ public class UnityClient : IUnityClient
     {
         if (progress == null) return;
         int total = result.PassCount + result.FailCount + result.SkipCount;
+        string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
         string msg = result.Success
-            ? $"Tests finished: {result.PassCount} passed, {result.SkipCount} skipped."
-            : $"Tests finished: {result.FailCount} failed, {result.PassCount} passed, {result.SkipCount} skipped.";
+            ? $"Tests finished: {result.PassCount} passed{skipStr}."
+            : $"Tests finished: {result.FailCount} failed, {result.PassCount} passed{skipStr}.";
         progress.Report(new ProgressNotificationValue
         {
             Progress = total,

@@ -169,6 +169,124 @@ public class TestRunProgressTests
                 Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Suite.TestAlpha"));
                 Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Suite.TestBeta"));
                 Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Tests finished:"));
+                Assert.Contains(receivedProgress, p => p.Message == "Tests finished: 9 passed.");
+                Assert.DoesNotContain(receivedProgress, p => p.Message != null && p.Message.Contains("0 skipped"));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenTestsSkipped_ReportsProgressWithSkippedCount()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_test_progress_skip_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        try
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
+            TestProcessProvider.WriteTrustedPidFile(tempDir);
+
+            var logger = NullLogger<UnityProcessManager>.Instance;
+            var procManager = new UnityProcessManager(tempDir, logger)
+                .WithTrustedTestProcessProvider();
+            var clientLogger = NullLogger<UnityClient>.Instance;
+            var client = new UnityClient(procManager, clientLogger)
+            {
+                PollIntervalMs = 50
+            };
+
+            var receivedProgress = new List<ProgressNotificationValue>();
+            var progress = new Progress<ProgressNotificationValue>(p =>
+            {
+                lock (receivedProgress)
+                {
+                    receivedProgress.Add(p);
+                }
+            });
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            string? opId = null;
+
+            var serverTask = Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    TcpClient tcp;
+                    try
+                    {
+                        tcp = await listener.AcceptTcpClientAsync(cts.Token);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+
+                    using (tcp)
+                    using (var reader = new StreamReader(tcp.GetStream(), Encoding.UTF8))
+                    using (var writer = new StreamWriter(tcp.GetStream(), new UTF8Encoding(false)) { AutoFlush = true })
+                    {
+                        string? line = await reader.ReadLineAsync();
+                        if (line == "PING")
+                        {
+                            await writer.WriteLineAsync("PONG");
+                        }
+                        else if (line != null && line.StartsWith("POLL_REFRESH"))
+                        {
+                            await writer.WriteLineAsync("READY");
+                        }
+                        else if (line != null && line.StartsWith("REFRESH"))
+                        {
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            await writer.WriteLineAsync("REFRESHING");
+                        }
+                        else if (line != null && line.StartsWith("RUN_TESTS"))
+                        {
+                            string[] parts = line.Split(' ');
+                            opId = parts.Length > 1 ? parts[1] : "test-op";
+                            await writer.WriteLineAsync("RUNNING");
+                        }
+                        else if (line != null && line.StartsWith("POLL_TESTS"))
+                        {
+                            var result = new UnityTestRunResult
+                            {
+                                RunId = opId ?? "test-op",
+                                Success = true,
+                                PassCount = 27,
+                                FailCount = 0,
+                                SkipCount = 1,
+                                ResultState = "Passed"
+                            };
+                            File.WriteAllText(procManager.PathResolver.GetResultFilePath(UnityOperationKind.Test, opId ?? "test-op"), JsonSerializer.Serialize(result));
+                            await writer.WriteLineAsync("SUCCESS 27 passed, 1 skipped");
+                        }
+                    }
+                }
+            }, cts.Token);
+
+            var runResult = await client.RunTestsAsync(null, null, null, null, "editmode", false, progress, cts.Token);
+
+            listener.Stop();
+            cts.Cancel();
+
+            Assert.True(runResult.Success);
+            Assert.Equal(27, runResult.PassCount);
+            Assert.Equal(1, runResult.SkipCount);
+
+            lock (receivedProgress)
+            {
+                Assert.NotEmpty(receivedProgress);
+                Assert.Contains(receivedProgress, p => p.Message == "Tests finished: 27 passed, 1 skipped.");
             }
         }
         finally

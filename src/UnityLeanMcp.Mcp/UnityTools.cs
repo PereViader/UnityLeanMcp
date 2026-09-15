@@ -405,12 +405,13 @@ public class UnityTools
                 }
                 else
                 {
-                    output.AppendLine("Tests Passed: 0 passed, 0 skipped (no tests found in suite).");
+                    output.AppendLine("Tests Passed: 0 passed (no tests found in suite).");
                 }
             }
             else
             {
-                output.AppendLine($"Tests Passed: {result.PassCount} passed, {result.SkipCount} skipped.");
+                string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
+                output.AppendLine($"Tests Passed: {result.PassCount} passed{skipStr}.");
             }
         }
         else if (result.Message?.Contains("busy", StringComparison.OrdinalIgnoreCase) == true)
@@ -423,7 +424,8 @@ public class UnityTools
         }
         else
         {
-            output.AppendLine($"Tests Failed: {result.FailCount} failed, {result.PassCount} passed, {result.SkipCount} skipped.");
+            string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
+            output.AppendLine($"Tests Failed: {result.FailCount} failed, {result.PassCount} passed{skipStr}.");
             if (!string.IsNullOrWhiteSpace(result.Message))
             {
                 output.AppendTrimmedBounded(

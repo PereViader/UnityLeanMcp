@@ -226,6 +226,9 @@ When test suites experience large numbers of failures, emitting full stack trace
 - **Reserved Summary Budget (16 KiB)**: When later summaries exist, the failure section reserves 16 KiB of the existing aggregate output cap for up to 20 compact summaries. Detailed failures use only the remaining capacity, so large first-failure stack traces cannot suppress later failure summaries. The reserved size covers the documented identifier and 200-character summary-message limits, including platform newline overhead. Runs with 5 or fewer failures have no summary section and retain the full aggregate capacity for details.
 - **Total Failure Cap & Truncation (Max 25 Total)**: At most 25 failures total are listed in the response. Any failures exceeding 25 are truncated with an omission notice (`... and X more failed test(s).`). If 5 or fewer tests fail, all failures are rendered with full details without summary sections or truncation notices.
 
+### Concise Test Outcome Summaries & Skipped Test Omission
+Test execution summaries in `unity_run_tests` and progress notifications report pass, fail, and skip metrics cleanly. To optimize token usage and avoid visual clutter for autonomous agents, skipped test counts are omitted entirely when zero (e.g. `Tests Passed: 27 passed.` rather than `Tests Passed: 27 passed, 0 skipped.`, and `Tests Passed: 0 passed (no tests found in suite).`), and included only when tests were actually skipped (`Tests Passed: 27 passed, 1 skipped.`).
+
 ### Interactive GUI Editor Termination Protection
 When Unity runs in interactive GUI mode, terminating the Editor risks losing unsaved user work (scene edits, inspector changes). `unity_stop` inspects the target Editor mode:
 - Refuses termination when running in `GUI` mode unless `force: true` is explicitly provided.

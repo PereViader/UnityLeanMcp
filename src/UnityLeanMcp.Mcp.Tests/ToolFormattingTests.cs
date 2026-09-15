@@ -1260,7 +1260,115 @@ public class ToolFormattingTests
 
             Assert.False(result.IsError);
             string text = GetResultText(result);
-            Assert.Equal("Tests Passed: 0 passed, 0 skipped (no tests found in suite).", text);
+            Assert.Equal("Tests Passed: 0 passed (no tests found in suite).", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenTestsPassedAndZeroSkipped_OmitsZeroSkipped()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 27,
+                SkipCount = 0
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Tests Passed: 27 passed.", text);
+            Assert.DoesNotContain("skipped", text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenTestsPassedAndSkippedGreaterThanZero_IncludesSkipped()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 27,
+                SkipCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Tests Passed: 27 passed, 1 skipped.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenTestsFailedAndZeroSkipped_OmitsZeroSkipped()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                FailCount = 1,
+                PassCount = 27,
+                SkipCount = 0,
+                FailedTests = [new FailedTestInfo { Name = "FailTest", FullName = "Suite.FailTest", Message = "Failed assertion" }]
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Tests Failed: 1 failed, 27 passed.", text);
+            Assert.DoesNotContain("skipped", text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenTestsFailedAndSkippedGreaterThanZero_IncludesSkipped()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                FailCount = 1,
+                PassCount = 27,
+                SkipCount = 2,
+                FailedTests = [new FailedTestInfo { Name = "FailTest", FullName = "Suite.FailTest", Message = "Failed assertion" }]
+            };
+
+            var result = await tools.UnityRunTestsAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Tests Failed: 1 failed, 27 passed, 2 skipped.", text);
         }
         finally
         {

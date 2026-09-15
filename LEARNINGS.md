@@ -346,3 +346,7 @@ In .NET asynchronous code, operations honoring `CancellationToken` may throw eit
 - `Assert.ThrowsAsync<OperationCanceledException>` requires an exact type match (`ex.GetType() == typeof(OperationCanceledException)`) and fails if `TaskCanceledException` is thrown.
 - Always use `Assert.ThrowsAnyAsync<OperationCanceledException>` when testing cancellation behavior to accommodate any derived `OperationCanceledException` subtype across platforms and CLR async state machines.
 
+### Consistent Zero-Skipped Test Metric Omission
+
+While `PollTestsHandler` on the wire protocol omitted `, 0 skipped` when `SkipCount == 0`, the MCP tool layer (`UnityTools.cs`) and client progress reporter (`UnityClient.cs`) previously hardcoded `, {result.SkipCount} skipped.` onto test summaries and progress messages. This produced inconsistent formatting (`Tests Passed: 27 passed, 0 skipped.` and `Tests finished: 27 passed, 0 skipped.`) and consumed unnecessary LLM token context. Conditionally formatting `, {result.SkipCount} skipped` only when `result.SkipCount > 0` across all tool result lines, empty suite messages (`Tests Passed: 0 passed (no tests found in suite).`), and progress notifications ensures consistent, concise output without noisy zero counts.
+
