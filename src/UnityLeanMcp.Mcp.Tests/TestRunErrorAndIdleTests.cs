@@ -166,7 +166,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.DoesNotContain("ERROR", result.Message);
@@ -195,7 +195,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.DoesNotContain("FAILURE", result.Message);
@@ -228,7 +228,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
@@ -260,7 +260,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.DoesNotContain("ERROR", result.Message);
@@ -293,7 +293,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.DoesNotContain("ERROR", result.Message);
@@ -322,7 +322,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.DoesNotContain("FAILURE", result.Message);
@@ -367,7 +367,7 @@ public class TestRunErrorAndIdleTests
 
         try
         {
-            var result = await server.client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await server.client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.True(result.Success);
             Assert.Equal(10, result.PassCount);
@@ -393,17 +393,17 @@ public class TestRunErrorAndIdleTests
             }
             if (cmd.StartsWith("POLL_TESTS"))
             {
-                return "BUSY execute foreign-op";
+                return "BUSY eval foreign-op";
             }
             return null;
         }, cts.Token);
 
         try
         {
-            var result = await client.RunTestsAsync(null, null, "editmode", null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
             Assert.False(result.Success);
-            Assert.Contains("Lost ownership of test run: BUSY execute foreign-op", result.Message);
+            Assert.Contains("Lost ownership of test run: BUSY eval foreign-op", result.Message);
         }
         finally
         {
@@ -433,40 +433,6 @@ public class TestRunErrorAndIdleTests
         try
         {
             var result = await client.EvalAsync("return 1 + 1;", cts.Token);
-
-            Assert.False(result.Success);
-            Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityClient_ExecuteMethodAsync_WhenPollResponseIsIdle_TerminatesWithFailure()
-    {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
-        {
-            if (cmd.StartsWith("EXECUTE_METHOD"))
-            {
-                return "RUNNING";
-            }
-            if (cmd.StartsWith("POLL_EXECUTE"))
-            {
-                return "IDLE";
-            }
-            return null;
-        }, cts.Token);
-
-        try
-        {
-#pragma warning disable CS0618
-            var result = await client.ExecuteMethodAsync("Namespace.Class.Method", null, cts.Token);
-#pragma warning restore CS0618
 
             Assert.False(result.Success);
             Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
@@ -632,35 +598,6 @@ public class TestRunErrorAndIdleTests
         }
     }
 
-#pragma warning disable CS0618
-    [Fact]
-    public async Task UnityClient_ExecuteMethodAsync_WhenInitialResponseIsFailureOrError_StripsPrefixCorrectly()
-    {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
-        {
-            if (cmd.StartsWith("EXECUTE_METHOD"))
-            {
-                return "FAILURE Compilation failed";
-            }
-            return null;
-        }, cts.Token);
-
-        try
-        {
-            var result = await client.ExecuteMethodAsync("TestClass.TestMethod", null, cts.Token);
-
-            Assert.False(result.Success);
-            Assert.DoesNotContain("FAILURE", result.Message);
-            Assert.Equal("Compilation failed", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
     [Fact]
     public async Task UnityClient_RunTestsAsync_SendsStructuredJsonCommandOverSocket()
     {
@@ -711,41 +648,4 @@ public class TestRunErrorAndIdleTests
         }
     }
 
-    [Fact]
-    public async Task UnityClient_RunTestsAsync_LegacyOverload_SerializesFilterAsGroupNames()
-    {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        string? receivedCommand = null;
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
-        {
-            if (cmd.StartsWith("RUN_TESTS"))
-            {
-                receivedCommand = cmd;
-                return "ERROR: Intended mock stop";
-            }
-            return null;
-        }, cts.Token);
-
-        try
-        {
-            var result = await client.RunTestsAsync("LegacyFilter", "LegacyCategory", "playmode", false, null, cts.Token);
-
-            Assert.NotNull(receivedCommand);
-            string[] parts = receivedCommand.Split(' ', 3);
-            string json = ProtocolCodec.UnescapeLine(parts[2]);
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            Assert.Equal("playmode", root.GetProperty("mode").GetString());
-            Assert.False(root.TryGetProperty("testNames", out _));
-            Assert.Equal("LegacyFilter", root.GetProperty("groupNames")[0].GetString());
-            Assert.Equal("LegacyCategory", root.GetProperty("categoryNames")[0].GetString());
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-#pragma warning restore CS0618
 }

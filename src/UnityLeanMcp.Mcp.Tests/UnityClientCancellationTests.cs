@@ -57,9 +57,12 @@ public sealed class UnityClientCancellationTests
 
         using var cancellation = new CancellationTokenSource();
         Task<UnityTestRunResult> testTask = client.RunTestsAsync(
-            filter: null,
-            category: null,
+            testNames: null,
+            groupNames: null,
+            categoryNames: null,
+            assemblyNames: null,
             mode: "EditMode",
+            failedOnly: false,
             progress: null,
             cancellationToken: cancellation.Token);
 
@@ -94,9 +97,12 @@ public sealed class UnityClientCancellationTests
             int timeoutSeconds = 10,
             CancellationToken cancellationToken = default)
         {
-            if (command.StartsWith("POLL_REFRESH CHECK ", StringComparison.Ordinal))
+            if (command.StartsWith("POLL_REFRESH ", StringComparison.Ordinal) ||
+                command.StartsWith("REFRESH ", StringComparison.Ordinal))
             {
-                return Task.FromResult<string?>("READY");
+                return Task.FromResult<string?>(command.StartsWith("REFRESH ", StringComparison.Ordinal)
+                    ? "REFRESHING"
+                    : "READY");
             }
 
             if (command.StartsWith("EVAL ", StringComparison.Ordinal))
@@ -134,8 +140,19 @@ public sealed class UnityClientCancellationTests
 
         public Task<TResult> PollOperationUntilTerminalAsync<TResult>(
             OperationPollingSpec<TResult> spec,
-            CancellationToken cancellationToken) where TResult : class, IOperationResult, new() =>
-            Task.FromException<TResult>(new InvalidOperationException("Polling should not begin."));
+            CancellationToken cancellationToken) where TResult : class, IOperationResult, new()
+        {
+            if (typeof(TResult) == typeof(UnityRefreshResult))
+            {
+                return Task.FromResult((TResult)(object)new UnityRefreshResult
+                {
+                    OperationId = spec.OperationId,
+                    Success = true
+                });
+            }
+
+            return Task.FromException<TResult>(new InvalidOperationException("Polling should not begin."));
+        }
 
         public Task<TResult> PollOperationResultAsync<TResult>(
             string opId,

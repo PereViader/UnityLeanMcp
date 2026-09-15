@@ -17,16 +17,22 @@ internal static class TestFilterValidation
             TryValidate("assemblyNames", assemblyNames, out error);
     }
 
-    internal static bool TryValidate(SingleOrArray? values, string parameterName, out string error)
+    internal static bool TryValidate(string[]? values, string parameterName, out string error)
     {
-        if (values == null || !values.HasBlankItems)
+        if (values != null)
         {
-            error = "";
-            return true;
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(values[i]))
+                {
+                    error = CreateError(parameterName, 1);
+                    return false;
+                }
+            }
         }
 
-        error = CreateError(parameterName, values.BlankItemCount);
-        return false;
+        error = "";
+        return true;
     }
 
     private static bool TryValidate(string parameterName, string[]? values, out string error)
@@ -35,9 +41,7 @@ internal static class TestFilterValidation
         {
             for (int i = 0; i < values.Length; i++)
             {
-                // Null entries have historically represented omitted values and
-                // remain harmless. Empty and whitespace-only strings are invalid.
-                if (values[i] != null && string.IsNullOrWhiteSpace(values[i]))
+                if (string.IsNullOrWhiteSpace(values[i]))
                 {
                     error = CreateError(parameterName, 1, i);
                     return false;

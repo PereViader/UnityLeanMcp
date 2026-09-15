@@ -8,7 +8,6 @@ namespace UnityLeanMcp
         public const string Refresh = "refresh";
         public const string Recompile = "recompile";
         public const string Test = "test";
-        public const string Execute = "execute";
         public const string Eval = "eval";
     }
 
@@ -149,11 +148,6 @@ namespace UnityLeanMcp
         public bool Success { get => success; set => success = value; }
         public bool Interrupted { get => interrupted; set => interrupted = value; }
         public string Message { get => message; set => message = value; }
-    }
-
-    [Serializable]
-    public class UnityExecuteResult : UnityOperationResult
-    {
     }
 
     [Serializable]

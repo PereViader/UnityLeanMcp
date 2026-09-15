@@ -12,10 +12,10 @@ By communicating with a running Unity Editor (or a headless background instance)
 
 UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 
-1. **`unity_refresh`**: Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Optional `clean` flag forces clean rebuild by clearing compiler cache when recovering from stale/corrupted cache. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary.
-2. **`unity_eval`**: Evaluates C# top-level script source code in-memory against the active Unity Editor. Write code directly as top-level statements without class or method wrappers. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types.
+1. **`unity_refresh`**: Refreshes AssetDatabase and returns compiler diagnostics. Normal refreshes are fast when unchanged. Set `clean: true` only when a more expensive full script recompilation is needed to recover from a stale or corrupted compiler cache.
+2. **`unity_eval`**: Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types.
 3. **`unity_run_tests`**: Runs EditMode/PlayMode tests with failure diagnostics.
-4. **`unity_stop`**: Safely terminates the background Unity Editor instance (to release project locks or recover from hangs).
+4. **`unity_stop`**: Stops the running Unity instance when explicitly requested. `force: true` may discard unsaved changes in an interactive GUI Editor and requires explicit approval.
 
 ---
 
@@ -23,10 +23,10 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 
 | Tool | Parameters | Description |
 | :--- | :--- | :--- |
-| **`unity_refresh`** | `clean` (optional bool, default `false`) | Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Set `clean: true` only to force clean rebuild by clearing compiler cache. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary. |
-| **`unity_eval`** | `code` (string: raw C# text) | Evaluates C# top-level script source code in-memory. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types. |
-| **`unity_run_tests`** | `testNames`, `groupNames`, `categoryNames`, `assemblyNames`, `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. Supports string or array of strings for filter parameters. |
-| **`unity_stop`** | `force` (optional bool, default `false`) | Safely terminates the background instance (used to release GUI locks or recover; do not stop routinely). |
+| **`unity_refresh`** | `clean` (optional bool, default `false`) | Refreshes AssetDatabase and returns compiler diagnostics. Set `clean: true` only for a more expensive full script recompilation. |
+| **`unity_eval`** | `code` (string: raw C# text) | Evaluates C# top-level script source code in-memory and may mutate Unity state. Supports top-level `await` and `return <value>;`. |
+| **`unity_run_tests`** | `testNames`, `groupNames`, `categoryNames`, `assemblyNames` (optional string arrays), `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. `groupNames` uses .NET regular expressions. |
+| **`unity_stop`** | `force` (optional bool, default `false`) | Stops the running instance. `force: true` may discard unsaved changes in an interactive GUI Editor. |
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts a headless background instance in batchmode first and keeps it warm for subsequent commands.
 

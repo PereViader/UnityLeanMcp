@@ -65,7 +65,6 @@ public class UnityProcessManager : IUnityProcessManager
                     Path.GetFullPath(_pathResolver.GetResultFilePath(UnityOperationKind.Refresh)),
                     Path.GetFullPath(_pathResolver.GetResultFilePath(UnityOperationKind.Recompile)),
                     Path.GetFullPath(_pathResolver.GetResultFilePath(UnityOperationKind.Test)),
-                    Path.GetFullPath(_pathResolver.GetResultFilePath(UnityOperationKind.Execute)),
                     Path.GetFullPath(_pathResolver.GetResultFilePath(UnityOperationKind.Eval))
                 };
 
@@ -243,6 +242,19 @@ public class UnityProcessManager : IUnityProcessManager
                     processId = projectPid.Value;
                     return true;
                 }
+
+                // A lock held in this project's Temp directory is enough to
+                // establish that starting another Editor would be unsafe, even
+                // when this host cannot inspect the lock holder's command line.
+                // This is intentionally not process ownership proof: callers
+                // receive no PID and therefore cannot use it to terminate an
+                // Editor. It only makes startup wait for the existing Editor to
+                // republish its socket (or release the lock) instead of racing it
+                // with a conflicting batchmode launch.
+                _logger.LogInformation(
+                    "Unity project lockfile {LockFile} is held but its process cannot be attributed; waiting for the existing Editor socket.",
+                    lockFilePath);
+                return true;
             }
         }
 
@@ -635,10 +647,23 @@ public class UnityProcessManager : IUnityProcessManager
     public string? GetProjectEditorVersion() => (_executableLocator as UnityExecutableLocator)?.GetProjectEditorVersion();
 
     /// <summary>
-    /// Auto-starts Unity in headless batchmode if not already running, and waits for socket readiness.
+    /// Ensures the project has a live Unity socket, auto-starting Unity in headless batchmode only when
+    /// no project-scoped endpoint responds to PING and process discovery finds no existing Editor.
     /// </summary>
     public async Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default)
     {
+        // The port file is written by the Unity package under this project's Temp
+        // directory. A successful PING is stronger evidence than lockfile shape or
+        // OS command-line inspection: GUI Editors commonly have zero-byte lockfiles
+        // and their command lines are not inspectable on every platform. Do not use
+        // the port file by itself; IsSocketReadyAsync validates it with PING/PONG so
+        // an orphaned or reused port cannot suppress startup.
+        if (await IsSocketReadyAsync(2, cancellationToken))
+        {
+            _logger.LogInformation("Unity socket server for this project is already ready.");
+            return;
+        }
+
         if (IsUnityRunning(out int? existingPid))
         {
             if (await IsSocketReadyAsync(2, cancellationToken))
@@ -657,9 +682,18 @@ public class UnityProcessManager : IUnityProcessManager
         // launched Editor is ready (or startup fails) so a second host cannot
         // launch while the first one is still publishing its identity.
         using FileStream startupLock = await AcquireStartupLockAsync(cancellationToken);
-        // Another caller may have completed startup while this caller was
-        // waiting for the inter-process claim. Re-check before resolving or
-        // launching another Editor process.
+        // Another caller may have completed startup while this caller was waiting
+        // for the inter-process claim. Repeat the endpoint check before process
+        // discovery so a newly ready GUI Editor is never mistaken for absent.
+        if (await IsSocketReadyAsync(2, cancellationToken))
+        {
+            _logger.LogInformation("Unity socket server for this project became ready while waiting for startup ownership.");
+            return;
+        }
+
+        // Re-check process ownership before resolving or launching another Editor
+        // process. Process discovery remains the fallback when the project port is
+        // absent, stale, or does not answer PING.
         if (IsUnityRunning(out existingPid))
         {
             if (await IsSocketReadyAsync(2, cancellationToken))
@@ -767,7 +801,7 @@ public class UnityProcessManager : IUnityProcessManager
     public virtual async Task<bool> StartUnityAsync(CancellationToken cancellationToken = default)
     {
         await EnsureUnityRunningAsync(cancellationToken);
-        return IsUnityRunning(out _);
+        return await IsSocketReadyAsync(2, cancellationToken);
     }
 
     public virtual async Task<bool> WaitForHealthyAsync(CancellationToken cancellationToken = default)
@@ -811,7 +845,12 @@ public class UnityProcessManager : IUnityProcessManager
             }
             else
             {
-                if (!IsUnityRunning(out _))
+                // An interactive GUI Editor can be live and serving this project's
+                // socket even when platform process inspection cannot establish an
+                // owned PID. PING/PONG is authoritative for endpoint readiness;
+                // only treat Unity as absent if neither source has positive proof.
+                bool socketIsLive = await IsSocketReadyAsync(2, cancellationToken);
+                if (!socketIsLive && !IsUnityRunning(out _))
                 {
                     if (File.Exists(_pathResolver.LogFile))
                     {
@@ -1021,6 +1060,18 @@ public class UnityProcessManager : IUnityProcessManager
     {
         if (!IsUnityRunning(out int? pid))
         {
+            // A live endpoint without a process identity can belong to an
+            // interactive GUI Editor whose command line is unavailable to this
+            // host. Do not erase its project state or claim it stopped when we
+            // cannot safely identify a process to terminate.
+            if (await IsSocketReadyAsync(2, cancellationToken))
+            {
+                _logger.LogWarning(
+                    "Refusing to stop a live Unity socket without verified process ownership for project {ProjectRoot}.",
+                    _pathResolver.ProjectRoot);
+                return false;
+            }
+
             // Unity is confirmed absent, so stale operation-scoped state can be
             // recovered. Do not perform this cleanup while a process may remain.
             PurgeOperationState();

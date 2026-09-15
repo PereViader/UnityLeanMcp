@@ -41,8 +41,7 @@ internal static class TestProcessProvider
     {
         string[] parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 2 &&
-            parts[0].Equals("POLL_REFRESH", StringComparison.OrdinalIgnoreCase) &&
-            !parts[1].Equals("CHECK", StringComparison.OrdinalIgnoreCase))
+            parts[0].Equals("POLL_REFRESH", StringComparison.OrdinalIgnoreCase))
         {
             operationId = parts[1];
             return true;

@@ -28,7 +28,6 @@ namespace UnityLeanMcp
         private static void InitializeDefaultHandlers()
         {
             RegisterDefault(new TestLifecycleHandler());
-            RegisterDefault(new ExecuteLifecycleHandler());
             RegisterDefault(new EvalLifecycleHandler());
             RegisterDefault(new RefreshLifecycleHandler());
             RegisterDefault(new RecompileLifecycleHandler());
@@ -178,37 +177,6 @@ namespace UnityLeanMcp
         public void OnEditorQuitting(string operationId)
         {
             RunTestsHandler.MarkTransportInterruption(OperationStatus.ShuttingDown);
-        }
-    }
-
-    internal class ExecuteLifecycleHandler : IOperationLifecycleHandler
-    {
-        public string OperationKind => OperationKinds.Execute;
-
-        public bool TryRequestCancelFromWorker(string operationId)
-        {
-            return ExecuteMethodHandler.CancelActiveExecute(operationId);
-        }
-
-        public OperationCancelResult TryCancel(string operationId)
-        {
-            bool cancelled = ExecuteMethodHandler.CancelActiveExecute(operationId);
-            return cancelled ? OperationCancelResult.Cancelled : OperationCancelResult.NotCancelable;
-        }
-
-        public void OnEditorRestarted(string operationId, string message)
-        {
-            ExecuteMethodHandler.MarkInterrupted(message, operationId);
-        }
-
-        public void OnDomainReloaded(string operationId, string message)
-        {
-            ExecuteMethodHandler.MarkInterrupted(message, operationId);
-        }
-
-        public void OnEditorQuitting(string operationId)
-        {
-            ExecuteMethodHandler.MarkInterrupted("Command interrupted by Unity editor shutdown.", operationId);
         }
     }
 

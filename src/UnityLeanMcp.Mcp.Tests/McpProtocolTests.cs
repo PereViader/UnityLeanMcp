@@ -98,7 +98,15 @@ public class McpProtocolTests
         Assert.False(properties.TryGetProperty("category", out _));
         Assert.False(properties.TryGetProperty("assembly", out _));
 
-        Assert.Contains(".NET Regular Expression pattern(s)", groupNamesProp.GetProperty("description").GetString());
+        Assert.Contains(".NET Regular Expression patterns", groupNamesProp.GetProperty("description").GetString());
+        Assert.Contains("array", groupNamesProp.GetProperty("type").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal("string", groupNamesProp.GetProperty("items").GetProperty("type").EnumerateArray().First(value => value.GetString() == "string").GetString());
+
+        var modeProp = properties.GetProperty("mode");
+        Assert.Equal("string", modeProp.GetProperty("type").GetString());
+        Assert.Equal(
+            new[] { "all", "editmode", "playmode" },
+            modeProp.GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray());
 
         // 4. tools/call unity_stop
         string callMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"unity_stop\",\"arguments\":{}}}";

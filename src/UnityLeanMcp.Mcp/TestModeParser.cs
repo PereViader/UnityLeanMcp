@@ -10,4 +10,17 @@ internal static class TestModeParser
         normalizedMode = mode?.Trim().ToLowerInvariant() ?? string.Empty;
         return normalizedMode is "all" or "editmode" or "playmode";
     }
+
+    internal static bool TryNormalize(UnityTestMode mode, out string normalizedMode)
+    {
+        normalizedMode = mode switch
+        {
+            UnityTestMode.All => "all",
+            UnityTestMode.EditMode => "editmode",
+            UnityTestMode.PlayMode => "playmode",
+            _ => string.Empty
+        };
+
+        return normalizedMode.Length > 0;
+    }
 }

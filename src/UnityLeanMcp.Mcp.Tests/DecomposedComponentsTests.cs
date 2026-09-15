@@ -14,6 +14,30 @@ namespace UnityLeanMcp.Mcp.Tests;
 public class DecomposedComponentsTests
 {
     [Fact]
+    public async Task UnityClient_GetStatusAsync_WhenProjectSocketRespondsPong_ReturnsReadyWithoutProcessEvidence()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_status_socket_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            var processManager = new StubProcessManager(resolver, isRunning: false);
+            var client = new UnityClient(
+                processManager,
+                resolver,
+                NullLogger<UnityClient>.Instance,
+                socketTransport: new StubSocketTransport("PONG"));
+
+            string status = await client.GetStatusAsync();
+
+            Assert.Equal("Ready", status);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void UnityLogScanner_HasCompilationErrors_IdentifiesErrorsAccurately()
     {
         var scanner = new UnityLogScanner();
@@ -897,10 +921,20 @@ public class DecomposedComponentsTests
 
     private sealed class StubProcessManager : IUnityProcessManager
     {
+        private readonly bool _isRunning;
+
         public IUnityPathResolver PathResolver { get; }
         public IUnityExecutableLocator ExecutableLocator => throw new NotImplementedException();
-        public StubProcessManager(IUnityPathResolver pathResolver) => PathResolver = pathResolver;
-        public bool IsUnityRunning(out int? processId) { processId = 1234; return true; }
+        public StubProcessManager(IUnityPathResolver pathResolver, bool isRunning = true)
+        {
+            PathResolver = pathResolver;
+            _isRunning = isRunning;
+        }
+        public bool IsUnityRunning(out int? processId)
+        {
+            processId = _isRunning ? 1234 : null;
+            return _isRunning;
+        }
         public string GetUnityMode(int? pid = null) => "Batchmode";
         public int ReadPortFile() => 12345;
         public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

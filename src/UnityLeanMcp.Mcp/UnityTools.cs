@@ -36,9 +36,9 @@ public class UnityTools
     }
 
     [McpServerTool(Name = "unity_refresh")]
-    [Description("Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary.")]
+    [Description("Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     public async Task<CallToolResult> UnityRefreshAsync(
-        [Description("Optional. If true, forces a full clean rebuild by clearing the assembly compiler cache. Defaults to false; use only when recovering from corrupted cache or stale errors.")]
+        [Description("Optional. If true, forces a more expensive full script recompilation by clearing the assembly compiler cache. Defaults to false; use only when recovering from corrupted cache or stale errors.")]
         bool clean = false,
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
@@ -103,7 +103,7 @@ public class UnityTools
     }
 
     [McpServerTool(Name = "unity_eval")]
-    [Description("Evaluates C# top-level script source code in-memory against the active Unity Editor to query or modify state. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result; void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
+    [Description("Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result; void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
     public async Task<CallToolResult> UnityEvalAsync(
         [Description("Raw C# source text to evaluate. Send plain text directly—do not wrap in JSON.")] string code,
         IProgress<ProgressNotificationValue>? progress = null,
@@ -260,22 +260,22 @@ public class UnityTools
 
 
     [McpServerTool(Name = "unity_run_tests")]
-    [Description("Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported. Set failedOnly to run only tests that previously failed. Pending changes are refreshed automatically, so a preceding unity_refresh is normally unnecessary.")]
+    [Description("Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to run only tests that previously failed.")]
     public async Task<CallToolResult> UnityRunTestsAsync(
         [Description("Exact fully qualified test names in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format. Matches exact names only.")]
-        SingleOrArray? testNames = null,
+        string[]? testNames = null,
 
-        [Description(".NET Regular Expression pattern(s) to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).")]
-        SingleOrArray? groupNames = null,
+        [Description(".NET Regular Expression patterns to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).")]
+        string[]? groupNames = null,
 
-        [Description("Test category filter(s) to include or exclude (prefix with '!' to exclude, e.g. '!Integration').")]
-        SingleOrArray? categoryNames = null,
+        [Description("Test category filters to include or exclude (prefix with '!' to exclude, e.g. '!Integration').")]
+        string[]? categoryNames = null,
 
-        [Description("Test assembly name(s) without .dll extension to run.")]
-        SingleOrArray? assemblyNames = null,
+        [Description("Test assembly names without the .dll extension to run.")]
+        string[]? assemblyNames = null,
 
         [Description("Test execution mode: 'all' (default), 'editmode', or 'playmode'.")]
-        string? mode = "all",
+        UnityTestMode mode = UnityTestMode.All,
 
         [Description("Only run tests that previously failed.")]
         bool failedOnly = false,
@@ -285,38 +285,37 @@ public class UnityTools
     {
         try
         {
-            string effectiveMode = string.IsNullOrWhiteSpace(mode) ? "all" : mode;
-            if (!TestModeParser.TryNormalize(effectiveMode, out string normalizedMode))
-        {
-            return new CallToolResult
+            if (!TestModeParser.TryNormalize(mode, out string normalizedMode))
             {
-                Content =
-                [
-                    new TextContentBlock { Text = TestModeParser.InvalidModeMessage }
-                ],
-                IsError = true
-            };
-        }
+                return new CallToolResult
+                {
+                    Content =
+                    [
+                        new TextContentBlock { Text = TestModeParser.InvalidModeMessage }
+                    ],
+                    IsError = true
+                };
+            }
 
-        if (!TestFilterValidation.TryValidate(testNames, "testNames", out string filterError) ||
-            !TestFilterValidation.TryValidate(groupNames, "groupNames", out filterError) ||
-            !TestFilterValidation.TryValidate(categoryNames, "categoryNames", out filterError) ||
-            !TestFilterValidation.TryValidate(assemblyNames, "assemblyNames", out filterError))
-        {
-            return new CallToolResult
+            if (!TestFilterValidation.TryValidate(testNames, "testNames", out string filterError) ||
+                !TestFilterValidation.TryValidate(groupNames, "groupNames", out filterError) ||
+                !TestFilterValidation.TryValidate(categoryNames, "categoryNames", out filterError) ||
+                !TestFilterValidation.TryValidate(assemblyNames, "assemblyNames", out filterError))
             {
-                Content =
-                [
-                    new TextContentBlock { Text = filterError }
-                ],
-                IsError = true
-            };
-        }
+                return new CallToolResult
+                {
+                    Content =
+                    [
+                        new TextContentBlock { Text = filterError }
+                    ],
+                    IsError = true
+                };
+            }
 
-        string[]? tests = testNames?.ToArray();
-        string[]? groups = groupNames?.ToArray();
-        string[]? categories = categoryNames?.ToArray();
-        string[]? assemblies = assemblyNames?.ToArray();
+            string[]? tests = testNames;
+            string[]? groups = groupNames;
+            string[]? categories = categoryNames;
+            string[]? assemblies = assemblyNames;
 
         var result = await _client.RunTestsAsync(tests, groups, categories, assemblies, normalizedMode, failedOnly, progress, cancellationToken);
         var output = new BoundedTextBuilder(
@@ -369,27 +368,27 @@ public class UnityTools
 
             if (!string.IsNullOrWhiteSpace(filterDesc) && !string.IsNullOrWhiteSpace(categoryDesc))
             {
-                output.AppendLine($"No tests found matching filter '{filterDesc}' and category '{categoryDesc}' (mode: {mode}).");
+                output.AppendLine($"No tests found matching filter '{filterDesc}' and category '{categoryDesc}' (mode: {normalizedMode}).");
             }
             else if (!string.IsNullOrWhiteSpace(filterDesc))
             {
-                output.AppendLine($"No tests found matching filter '{filterDesc}' (mode: {mode}).");
+                output.AppendLine($"No tests found matching filter '{filterDesc}' (mode: {normalizedMode}).");
             }
             else if (!string.IsNullOrWhiteSpace(categoryDesc))
             {
-                output.AppendLine($"No tests found matching category '{categoryDesc}' (mode: {mode}).");
+                output.AppendLine($"No tests found matching category '{categoryDesc}' (mode: {normalizedMode}).");
             }
             else if (tests is { Length: > 0 })
             {
-                output.AppendLine($"No tests found matching testNames '{string.Join(", ", tests)}' (mode: {mode}).");
+                output.AppendLine($"No tests found matching testNames '{string.Join(", ", tests)}' (mode: {normalizedMode}).");
             }
             else if (assemblies is { Length: > 0 })
             {
-                output.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblies)}' (mode: {mode}).");
+                output.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblies)}' (mode: {normalizedMode}).");
             }
             else
             {
-                output.AppendLine($"No tests found matching the specified test filter(s) (mode: {mode}).");
+                output.AppendLine($"No tests found matching the specified test filter(s) (mode: {normalizedMode}).");
             }
         }
         else if (result.Success)
@@ -653,9 +652,9 @@ public class UnityTools
 
 
     [McpServerTool(Name = "unity_stop")]
-    [Description("Safely stops the running Unity background instance. Do NOT call this automatically after operations; keep the instance warm for speed. Only use when explicitly requested by the user, to recover from a freeze/hang, or to release project locks so the user can open the Unity GUI.")]
+    [Description("Stops the running Unity instance when explicitly requested, to recover from a freeze or release project locks. Stopping an interactive GUI Editor can discard unsaved changes; use force: true only with explicit approval. Do not call automatically after operations.")]
     public async Task<CallToolResult> UnityStopAsync(
-        [Description("Optional. If true, forces termination even if Unity is running as an interactive GUI Editor. Defaults to false.")] bool force = false,
+        [Description("Optional. If true, forces termination even when Unity is an interactive GUI Editor; this may discard unsaved Editor changes and requires explicit user approval. Defaults to false.")] bool force = false,
         CancellationToken cancellationToken = default)
     {
         if (!_processManager.IsUnityRunning(out int? pid))

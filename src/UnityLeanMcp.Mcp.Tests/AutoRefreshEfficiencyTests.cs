@@ -12,22 +12,26 @@ namespace UnityLeanMcp.Mcp.Tests;
 public sealed class AutoRefreshEfficiencyTests
 {
     [Fact]
-    public async Task EvalAsync_WhenReadinessProbeIsReady_SkipsRefresh()
+    public async Task EvalAsync_AlwaysRefreshesBeforeEvaluation()
     {
-        using var context = TestContext.Create("READY");
+        using var context = TestContext.Create();
 
         var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Contains(context.Transport.Commands, c => c.StartsWith("POLL_REFRESH CHECK ", StringComparison.Ordinal));
-        Assert.DoesNotContain(context.Transport.Commands, c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
-        Assert.Contains(context.Transport.Commands, c => c.StartsWith("EVAL ", StringComparison.Ordinal));
+        int refreshIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
+        int evalIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("EVAL ", StringComparison.Ordinal));
+        Assert.True(refreshIndex >= 0);
+        Assert.True(evalIndex > refreshIndex);
     }
 
     [Fact]
-    public async Task RunTestsAsync_WhenReadinessProbeRequiresRefresh_RunsRefreshBeforeTests()
+    public async Task RunTestsAsync_AlwaysRefreshesBeforeTests()
     {
-        using var context = TestContext.Create("REFRESH_REQUIRED");
+        // Unity can return READY before its external-file watcher has reported
+        // a changed test source. The test command must not use that snapshot
+        // as permission to execute the old compiled test assembly.
+        using var context = TestContext.Create();
 
         var result = await context.Client.RunTestsAsync(
             testNames: null,
@@ -45,15 +49,15 @@ public sealed class AutoRefreshEfficiencyTests
     }
 
     [Fact]
-    public async Task EvalAsync_WhenReadinessProbeReportsCompilation_WaitsWithoutSecondRefresh()
+    public async Task EvalAsync_WhenCompilationStartsAfterRefresh_WaitsForTheRefreshResult()
     {
-        using var context = TestContext.Create("COMPILING");
+        using var context = TestContext.Create();
         context.Transport.PendingCompilationPolls = 1;
 
         var result = await context.Client.EvalAsync("return 7;", CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.DoesNotContain(context.Transport.Commands, c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
+        Assert.Contains(context.Transport.Commands, c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
         Assert.Contains(context.Transport.Commands, c => c.StartsWith("POLL_REFRESH ", StringComparison.Ordinal));
         Assert.Contains(context.Transport.Commands, c => c.StartsWith("EVAL ", StringComparison.Ordinal));
     }
@@ -64,7 +68,7 @@ public sealed class AutoRefreshEfficiencyTests
         public RecordingTransport Transport { get; }
         public UnityClient Client { get; }
 
-        private TestContext(string readiness)
+        private TestContext()
         {
             _projectRoot = Path.Combine(Path.GetTempPath(), "unity_auto_refresh_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(_projectRoot, "Temp"));
@@ -72,7 +76,7 @@ public sealed class AutoRefreshEfficiencyTests
 
             var resolver = new UnityPathResolver(_projectRoot);
             var processManager = new TestProcessManager(_projectRoot);
-            Transport = new RecordingTransport(resolver, readiness);
+            Transport = new RecordingTransport(resolver);
             Client = new UnityClient(
                 processManager,
                 resolver,
@@ -80,7 +84,7 @@ public sealed class AutoRefreshEfficiencyTests
                 Transport);
         }
 
-        public static TestContext Create(string readiness) => new(readiness);
+        public static TestContext Create() => new();
 
         public void Dispose()
         {
@@ -109,14 +113,12 @@ public sealed class AutoRefreshEfficiencyTests
     private sealed class RecordingTransport : IUnitySocketTransport
     {
         private readonly IUnityPathResolver _resolver;
-        private readonly string _readiness;
         public List<string> Commands { get; } = new();
         public int PendingCompilationPolls { get; set; }
 
-        public RecordingTransport(IUnityPathResolver resolver, string readiness)
+        public RecordingTransport(IUnityPathResolver resolver)
         {
             _resolver = resolver;
-            _readiness = readiness;
         }
 
         public Task<string?> SendCommandAsync(
@@ -126,11 +128,6 @@ public sealed class AutoRefreshEfficiencyTests
             CancellationToken cancellationToken = default)
         {
             Commands.Add(command);
-
-            if (command.StartsWith("POLL_REFRESH CHECK ", StringComparison.Ordinal))
-            {
-                return Task.FromResult<string?>(_readiness);
-            }
 
             if (command.StartsWith("POLL_REFRESH ", StringComparison.Ordinal))
             {

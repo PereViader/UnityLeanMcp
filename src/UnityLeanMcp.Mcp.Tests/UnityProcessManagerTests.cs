@@ -222,6 +222,78 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureUnityRunningAsync_WhenProjectPortRespondsPong_DoesNotRequireProcessDiscoveryOrStartUnity()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_live_socket_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Temp"));
+
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            File.WriteAllText(resolver.PortFile, "45678");
+            var transport = new DiscoverySocketTransport(isReady: true);
+            int startAttempts = 0;
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: transport,
+                executableLocator: new FixedExecutableLocator())
+            {
+                ProcessStarter = _ =>
+                {
+                    startAttempts++;
+                    throw new InvalidOperationException("A live project socket must prevent auto-start.");
+                }
+            };
+
+            await manager.EnsureUnityRunningAsync();
+
+            Assert.Equal(1, transport.ReadinessProbeCount);
+            Assert.Equal(0, startAttempts);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_WhenProjectPortIsStale_FallsBackToAutoStart()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_stale_socket_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Temp"));
+
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            File.WriteAllText(resolver.PortFile, "45678");
+            var transport = new DiscoverySocketTransport(isReady: false);
+            int startAttempts = 0;
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: transport,
+                executableLocator: new FixedExecutableLocator())
+            {
+                ProcessStarter = _ =>
+                {
+                    startAttempts++;
+                    throw new InvalidOperationException("Expected startup attempt after stale socket discovery.");
+                }
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureUnityRunningAsync());
+
+            Assert.True(transport.ReadinessProbeCount >= 2);
+            Assert.Equal(1, startAttempts);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task EnsureUnityRunningAsync_WhenUnityAlreadyRunning_IgnoresHistoricalCompilationErrorsInLogFile()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_" + Guid.NewGuid().ToString("N"));
@@ -828,7 +900,7 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
-    public void IsUnityRunning_LockedUnityLockfileWithOnlyUnprovenCandidateIsRejected()
+    public void IsUnityRunning_LockedUnityLockfileWithOnlyUnprovenCandidatePreventsAutoStartWithoutAssigningOwnership()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_unproven_lock_" + Guid.NewGuid().ToString("N"));
         string tempSubDir = Path.Combine(tempDir, "Temp");
@@ -845,7 +917,7 @@ public class UnityProcessManagerTests
                 ProcessProvider = () => new[] { candidate }
             };
 
-            Assert.False(procManager.IsUnityRunning(out int? processId));
+            Assert.True(procManager.IsUnityRunning(out int? processId));
             Assert.Null(processId);
             Assert.True(File.Exists(lockFilePath), "An actively held Unity lockfile must not be deleted while probing ownership.");
         }
@@ -853,6 +925,40 @@ public class UnityProcessManagerTests
         {
             try { if (!candidate.HasExited) candidate.Kill(true); } catch { }
             try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_WhenProjectLockIsHeldButItsProcessCannotBeAttributed_WaitsWithoutStartingBatchUnity()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_unattributed_lock_" + Guid.NewGuid().ToString("N"));
+        string tempDir = Path.Combine(projectRoot, "Temp");
+        Directory.CreateDirectory(tempDir);
+
+        using var unprovenCandidate = StartDummyProcess();
+        string lockFilePath = Path.Combine(tempDir, "UnityLockfile");
+        using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+
+        try
+        {
+            var manager = new LockAwareProcessManager(
+                new UnityPathResolver(projectRoot),
+                NullLogger<UnityProcessManager>.Instance,
+                new DiscoverySocketTransport(isReady: false))
+            {
+                ProcessProvider = () => new[] { unprovenCandidate },
+                ProcessStarter = _ => throw new InvalidOperationException(
+                    "A held project lock must never cause a conflicting batchmode launch.")
+            };
+
+            await manager.EnsureUnityRunningAsync();
+
+            Assert.True(manager.WaitedForExistingEditorSocket);
+        }
+        finally
+        {
+            try { if (!unprovenCandidate.HasExited) unprovenCandidate.Kill(true); } catch { }
+            try { Directory.Delete(projectRoot, true); } catch { }
         }
     }
 
@@ -1084,13 +1190,11 @@ public class UnityProcessManagerTests
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_result.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_result.json"), resolver.GetResultFilePath(UnityOperationKind.Eval));
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_execute_result.json"), resolver.GetResultFilePath(UnityOperationKind.Execute));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_running.txt"), resolver.TestRunningFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_results.json"), resolver.GetResultFilePath(UnityOperationKind.Test));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_op0.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh, "op0"));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_op01.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile, "op01"));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_op1.json"), resolver.GetResultFilePath(UnityOperationKind.Eval, "op1"));
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_execute_op2.json"), resolver.GetResultFilePath(UnityOperationKind.Execute, "op2"));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_op3.json"), resolver.GetResultFilePath(UnityOperationKind.Test, "op3"));
     }
 
@@ -1117,7 +1221,6 @@ public class UnityProcessManagerTests
         Assert.Equal(resolver.PortFile, pm.PathResolver.PortFile);
         Assert.Equal(resolver.StartupLockFile, pm.PathResolver.StartupLockFile);
         Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Eval, "op1"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Eval, "op1"));
-        Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Execute, "op2"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Execute, "op2"));
         Assert.Equal(resolver.GetResultFilePath(UnityOperationKind.Test, "op3"), pm.PathResolver.GetResultFilePath(UnityOperationKind.Test, "op3"));
     }
 
@@ -1133,7 +1236,7 @@ public class UnityProcessManagerTests
             var pm = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
 
             string file1 = Path.Combine(unityTemp, "unity_eval_123.json");
-            string file2 = Path.Combine(unityTemp, "unity_execute_456.json");
+            string file2 = Path.Combine(unityTemp, "unity_recompile_456.json");
             string file3 = Path.Combine(unityTemp, "unity_test_789.json");
             string refreshResult = Path.Combine(unityTemp, "unity_refresh_result.json");
             string testResults = Path.Combine(unityTemp, "unity_test_results.json");
@@ -1345,7 +1448,7 @@ public class UnityProcessManagerTests
     [InlineData("Temp/unity_refresh_result.json", "refresh_123", false)]
     [InlineData("Temp/unity_eval_op123.json", "op123", true)]
     [InlineData("Temp/unity_test_OP456.json", "op456", true)]
-    [InlineData("Temp/unity_execute_op789.json", "OP789", true)]
+    [InlineData("Temp/unity_recompile_op789.json", "OP789", true)]
     [InlineData("Temp/unity_refresh_result.json", null, false)]
     [InlineData(null, "op123", false)]
     [InlineData("", "", false)]
@@ -1400,6 +1503,56 @@ public class UnityProcessManagerTests
     private sealed class FixedExecutableLocator : IUnityExecutableLocator
     {
         public UnityLocatorResult FindUnityExecutable() => UnityLocatorResult.Found("/test/unity-editor");
+    }
+
+    private sealed class DiscoverySocketTransport : IUnitySocketTransport
+    {
+        private readonly bool _isReady;
+
+        public DiscoverySocketTransport(bool isReady)
+        {
+            _isReady = isReady;
+        }
+
+        public int ReadinessProbeCount { get; private set; }
+
+        public Task<string?> SendCommandAsync(
+            int port,
+            string command,
+            int timeoutSeconds = 10,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<string?>(_isReady && command == "PING" ? "PONG" : null);
+
+        public Task<bool> IsSocketReadyAsync(
+            int port,
+            int timeoutSeconds = 2,
+            CancellationToken cancellationToken = default)
+        {
+            ReadinessProbeCount++;
+            return Task.FromResult(_isReady);
+        }
+    }
+
+    private sealed class LockAwareProcessManager : UnityProcessManager
+    {
+        public bool WaitedForExistingEditorSocket { get; private set; }
+
+        public LockAwareProcessManager(
+            UnityPathResolver pathResolver,
+            Microsoft.Extensions.Logging.ILogger<UnityProcessManager> logger,
+            IUnitySocketTransport socketTransport)
+            : base(pathResolver, logger, socketTransport: socketTransport, executableLocator: new FixedExecutableLocator())
+        {
+        }
+
+        internal override Task WaitForSocketReadinessAsync(
+            Process? startedProcess,
+            CancellationToken cancellationToken,
+            long initialLogOffset = 0)
+        {
+            WaitedForExistingEditorSocket = true;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class SharedStartupState

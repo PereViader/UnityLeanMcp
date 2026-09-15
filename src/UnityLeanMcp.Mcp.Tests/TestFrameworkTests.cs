@@ -44,7 +44,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            groupNames = "PassWithWarningTest"
+            groupNames = new[] { "PassWithWarningTest" }
         });
 
         Assert.False(result.IsError, result.Text);
@@ -58,7 +58,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            groupNames = "FailTest"
+            groupNames = new[] { "FailTest" }
         });
 
         Assert.True(result.IsError);
@@ -73,7 +73,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            groupNames = "IgnoreTest"
+            groupNames = new[] { "IgnoreTest" }
         });
 
         Assert.False(result.IsError, result.Text);
@@ -87,7 +87,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            categoryNames = "!LongRunning"
+            categoryNames = new[] { "!LongRunning" }
         });
 
         Assert.False(result.IsError, result.Text);
@@ -101,7 +101,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            groupNames = "SpecificTargetTest"
+            groupNames = new[] { "SpecificTargetTest" }
         });
 
         Assert.False(result.IsError, result.Text);
@@ -136,7 +136,7 @@ public class TestFrameworkTests
         var initialRun = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            groupNames = "PassTest"
+            groupNames = new[] { "PassTest" }
         });
         Assert.False(initialRun.IsError, initialRun.Text);
 
@@ -153,7 +153,7 @@ public class TestFrameworkTests
         var initialRun = await client.CallToolAsync("unity_run_tests", new
         {
             mode = "editmode",
-            groupNames = "FailTest"
+            groupNames = new[] { "FailTest" }
         });
         Assert.True(initialRun.IsError);
         Assert.Contains("Failures:", initialRun.Text);

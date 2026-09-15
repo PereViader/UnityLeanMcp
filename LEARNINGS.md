@@ -31,6 +31,9 @@ Unity locks managed assembly reloads while tests are actively running. Script mo
 ### Transient Lifecycle Flags
 Flags such as `EditorApplication.isCompiling` and `EditorApplication.isUpdating` are transient point-in-time observations. They frequently evaluate to `false` immediately before compilation begins and briefly between internal lifecycle phases. Never conclude that compilation or refresh has completed on the first `false` reading; require the request flag to clear and observe an idle state across multiple update ticks.
 
+### A `READY` Probe Cannot Prove Compiled Sources Are Current
+Unity's external-file watcher and `projectChanged` notification can arrive after a worker-thread readiness probe observes no pending refresh or compilation. Using that one-time `READY` response to skip preparation lets a compiled-code operation execute an old assembly. `unity_eval`, static execution, and test execution must therefore issue a correlated normal `AssetDatabase.Refresh` and await its durable outcome; an unchanged project takes Unity's no-op refresh path, while changed sources compile or report current diagnostics before execution begins. Do not retain an obsolete readiness-check protocol as a conservative fallback: remove the parser entirely so every client uses the current barrier contract.
+
 ### Compiler Diagnostic Capture Timing
 Compiler diagnostics must be captured during `CompilationPipeline.assemblyCompilationFinished`, before the domain reload occurs. Waiting for `CompilationPipeline.compilationFinished` or a subsequent Editor update tick is too late: the domain reload unloads the assembly context, causing compiler warnings from the old domain to be lost.
 
@@ -157,6 +160,9 @@ Unity lockfiles (`UnityLockfile`) are platform-dependent:
 - They may be 0 bytes, omit owner PID information, disappear briefly during startup or domain reload, or remain orphaned after an abnormal Editor crash.
 - Lockfiles should be treated as supporting evidence, never as authoritative proof of process liveness.
 
+### Interactive Editor Socket Discovery Precedes Lockfile and Process Inspection
+An interactive Unity Editor can publish a valid project-local MCP port while its lockfile is zero bytes and its process command line cannot be read (notably on macOS). Treating failed PID/lockfile/process inspection as proof that Unity is absent causes an MCP host to launch a conflicting batchmode Editor. The project `Temp/unity_lean_mcp_port.txt` is only a candidate endpoint, but a successful loopback `PING` / `PONG` exchange through that port is positive evidence of the live project Editor and must be attempted before process heuristics. A missing, invalid, unreachable, or non-`PONG` endpoint remains stale supporting data and must not suppress normal discovery or auto-start.
+
 ### Wire Protocol Backslash Escaping on Windows
 In line-oriented protocols where single-line status responses encode string payloads:
 - Failing to escape backslashes (`\\` -> `\\\\`) causes Windows path separators (`C:\new\read`) to be unescaped into newline (`\n` -> `ew`) and carriage return (`\r` -> `ead`) control characters, corrupting filesystem paths.
@@ -242,10 +248,7 @@ When an operation fails immediately upon dispatch, line-oriented socket servers 
 - When stripping status prefixes (`ERROR:`, `FAILURE:`, `SUCCESS:`), colon-delimited prefixes must be inspected before searching for whitespace (`response.IndexOf(' ')`). If a whitespace search runs first on colon-delimited payloads without spaces (e.g. `SUCCESS:All tests passed`), the space between subsequent words causes the first word of the payload to be mistakenly stripped.
 
 ### System.Text.Json Parameter Conversion in MCP Tool Methods
-- `System.Text.Json.Serialization.JsonConverterAttribute` targets classes, structs, properties, and fields, but is not valid on method parameters (producing compiler error `CS0592`). When an MCP server registers tools via method reflection (such as `WithTools<T>()` in `ModelContextProtocol.Server`), method parameters cannot be decorated with `[JsonConverter]`. To support flexible parameter deserialization (such as accepting either a JSON string `"value"` or a JSON array `["value"]`), wrap the parameter in a dedicated type (e.g. `SingleOrArray`) decorated with `[JsonConverter(typeof(SingleOrArrayJsonConverter))]`. The MCP argument deserializer automatically invokes the type's converter when binding incoming JSON-RPC tool call arguments.
-- Custom parameter types implementing `IEquatable<T>` must explicitly overload `operator ==` and `operator !=` (CA2231). Without explicit operator overloads, C# `==` falls back to reference equality, causing identical instances to compare as unequal when checked with `==`.
-- Deserializing whitespace or empty strings in custom test-filter converters must retain an invalid-entry marker rather than returning `null` or dropping the item. `unity_run_tests` validates that marker before refresh, and the Unity socket handler repeats the same empty/whitespace check for direct protocol callers, preventing a blank filter from becoming an unfiltered suite.
-- When refactoring collection types from `List<T>` to an encapsulated `IReadOnlyList<T>` (preventing CA1002), callers utilizing C# 12 collection expressions (e.g. `testNames: ["TestA", "TestB"]`) will fail compilation with `CS1061: does not contain a definition for 'Add'` unless the type is decorated with `[CollectionBuilder(typeof(TargetType), nameof(Create))]` paired with a static `Create(ReadOnlySpan<T>)` builder method.
+- `System.Text.Json.Serialization.JsonConverterAttribute` targets classes, structs, properties, and fields, but is not valid on method parameters (producing compiler error `CS0592`). MCP tools registered by method reflection therefore cannot use a parameter-level converter. Use native `string[]?` parameters when the current public contract is an array, and verify the emitted schema through `McpServerTool.Create(...).ProtocolTool.InputSchema` rather than reflection metadata alone.
 
 ### Interface Segregation & Path Resolution Anti-Pattern
 - Forwarding entire sub-service surfaces through a coordinator interface (e.g. `IUnityProcessManager` re-exposing 15+ path properties and methods from `IUnityPathResolver`) creates tight coupling and forces test doubles or mocks to implement dozens of pass-through members unnecessarily, violating the Interface Segregation Principle (ISP). Callers should directly access the dedicated sub-service (e.g. `processManager.PathResolver`).
@@ -298,7 +301,7 @@ An MCP caller can cancel after a mutating command has reached Unity but before t
 
 ### MCP Layer Parameter Normalization vs. Low-Level API Contract
 
-In MCP server tools exposed to LLM agents (such as `unity_run_tests`), callers may omit arguments, pass `null`, or supply whitespace-only strings. The tool boundary must normalize omitted or blank arguments to their documented defaults (e.g., `mode = "all"`) before invocation. Meanwhile, lower-level service methods (`UnityClient.RunTestsAsync`) maintain strict parameter validation via `TestModeParser.TryNormalize`, rejecting blank or unrecognized inputs immediately with clear error messages. This preserves robust defense-in-depth while ensuring seamless and token-efficient interactions for AI agents.
+In MCP server tools exposed to LLM agents (such as `unity_run_tests`), omitted arguments use their documented defaults and finite string choices should be represented by schema-aware enums. The tool boundary still validates invalid enum values before refresh or dispatch. Lower-level service methods (`UnityClient.RunTestsAsync`) maintain the independent string contract used by the Unity socket protocol and reject blank or unrecognized modes immediately with clear error messages. This keeps schema validation and protocol defense in depth without duplicating cross-tool instructions in every description.
 
 ### Test-Environment PATH Isolation During Parallel Test Runs
 
@@ -329,3 +332,6 @@ Official Unity CI Docker images (such as `unityci/editor:ubuntu-...`) set `UNITY
 - **Start-Time Jitter Tolerance**: On Linux, `Process.StartTime` is computed by .NET from `/proc/stat` `btime` and `/proc/[pid]/stat` `starttime`. Because `/proc/stat` `btime` can fluctuate by up to ±1 second between reads, strict tick equality (`==`) across different process queries causes false-negative process matches. Comparing start times with a short tolerance (e.g. 3 seconds) preserves durable protection against PID reuse while accommodating kernel jitter.
 - **Process Path Fallback**: In restricted Linux environments (such as Docker or systems with Yama LSM `ptrace_scope` enabled), calling `process.MainModule` on another process may fail with `EACCES` (`Win32Exception: Permission denied`). Falling back to resolving `/proc/[pid]/exe` via `File.ResolveLinkTarget` or inspecting `/proc/[pid]/cmdline` ensures deterministic identity verification across containerized environments.
 
+### macOS Interactive Unity Locks May Be Unattributable to the MCP Host
+
+On macOS, an interactive Unity Editor can hold a zero-byte project `UnityLockfile` while a sandboxed MCP host cannot inspect its process command line. Treating that failed inspection as proof that no Editor exists causes a conflicting batchmode launch. A held lock must therefore be preserved and treated as an active-but-unattributed Editor for startup safety; it blocks auto-start and waits for the project socket, but must not be used as authority to stop a process.

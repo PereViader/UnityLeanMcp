@@ -26,7 +26,7 @@ public class TieredAutowaitingTests
     [InlineData("BUSY updating op4", true, true, "updating", "op4")]
     [InlineData("BUSY test op5", true, false, "test", "op5")]
     [InlineData("BUSY eval op6", true, false, "eval", "op6")]
-    [InlineData("BUSY execute op7", true, false, "execute", "op7")]
+    [InlineData("BUSY test op7", true, false, "test", "op7")]
     [InlineData("BUSY unknown_op", true, false, "unknown_op", null)]
     [InlineData("BUSY", true, false, "unknown", null)]
     [InlineData("SUCCESS 42", false, false, null, null)]
@@ -141,7 +141,10 @@ public class TieredAutowaitingTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
-                            await writer.WriteLineAsync("READY");
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("POLL_EVAL"))
                         {
@@ -269,7 +272,10 @@ public class TieredAutowaitingTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
-                            await writer.WriteLineAsync("READY");
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("EVAL"))
                         {
@@ -374,7 +380,10 @@ public class TieredAutowaitingTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
-                            await writer.WriteLineAsync("READY");
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("POLL_EVAL"))
                         {
@@ -509,7 +518,10 @@ public class TieredAutowaitingTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
-                            await writer.WriteLineAsync("READY");
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("POLL_TESTS"))
                         {
@@ -542,7 +554,7 @@ public class TieredAutowaitingTests
                 }
             });
 
-            var result = await client.RunTestsAsync(null, null, "all", false, progress, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "all", false, progress, cts.Token);
 
             Assert.True(result.Success, result.Message);
             Assert.Equal(5, result.PassCount);
@@ -629,7 +641,10 @@ public class TieredAutowaitingTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
-                            await writer.WriteLineAsync("READY");
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
+                            await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("RUN_TESTS"))
                         {
@@ -640,7 +655,7 @@ public class TieredAutowaitingTests
                 }
             });
 
-            var result = await client.RunTestsAsync(null, null, "all", false, null, cts.Token);
+            var result = await client.RunTestsAsync(null, null, null, null, "all", false, null, cts.Token);
 
             Assert.False(result.Success);
             Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, call unity_stop to recover.", result.Message);

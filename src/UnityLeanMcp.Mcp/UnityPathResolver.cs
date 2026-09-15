@@ -25,9 +25,6 @@ public class UnityPathResolver : IUnityPathResolver
         UnityOperationKind.Test => string.IsNullOrEmpty(operationId)
             ? Path.Combine(TempDir, "unity_test_results.json")
             : Path.Combine(TempDir, $"unity_test_{operationId}.json"),
-        UnityOperationKind.Execute => string.IsNullOrEmpty(operationId)
-            ? Path.Combine(TempDir, "unity_execute_result.json")
-            : Path.Combine(TempDir, $"unity_execute_{operationId}.json"),
         UnityOperationKind.Eval => string.IsNullOrEmpty(operationId)
             ? Path.Combine(TempDir, "unity_eval_result.json")
             : Path.Combine(TempDir, $"unity_eval_{operationId}.json"),

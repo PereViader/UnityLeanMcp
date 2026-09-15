@@ -200,10 +200,6 @@ public class UnityOperationResult : IOperationResult
     public List<ConsoleLogEntry> Logs { get; set; } = new();
 }
 
-public class UnityExecuteResult : UnityOperationResult
-{
-}
-
 public class UnityEvalResult : UnityOperationResult
 {
 }

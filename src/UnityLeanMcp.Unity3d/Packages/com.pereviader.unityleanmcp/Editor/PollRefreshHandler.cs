@@ -17,44 +17,11 @@ namespace UnityLeanMcp
 
         private string GetRefreshPollResponse(string payload)
         {
-            string[] parts = (payload ?? "").Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-            bool isReadinessCheck = parts.Length == 2 && string.Equals(parts[0], "CHECK", StringComparison.OrdinalIgnoreCase);
-            string operationId = isReadinessCheck ? parts[1] : payload?.Trim();
-
-            if (isReadinessCheck)
+            string operationId = payload?.Trim();
+            if (!string.IsNullOrEmpty(operationId) &&
+                operationId.IndexOfAny(new[] { ' ', '\t', '\r', '\n' }) >= 0)
             {
-                var readiness = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
-                if (readiness != null)
-                {
-                    if (readiness.Kind == OperationKinds.Refresh || readiness.Kind == OperationKinds.Recompile)
-                    {
-                        return readiness.Status == OperationStatus.Interrupted
-                            ? "INTERRUPTION Unity editor restarted before the operation completed."
-                            : "COMPILING";
-                    }
-
-                    return $"BUSY {readiness.Kind} {readiness.OperationId}";
-                }
-
-                if (UnityLeanMcpCompilationTracker.RefreshPending ||
-                    UnityLeanMcpCompilationTracker.CompilationRequested ||
-                    UnityLeanMcpCompilationTracker.IsCompiling)
-                {
-                    return "COMPILING";
-                }
-
-                if (UnityLeanMcpCompilationTracker.IsUpdating)
-                {
-                    return "UPDATING";
-                }
-
-                if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed ||
-                    UnityLeanMcpCompilationTracker.RefreshRequired)
-                {
-                    return "REFRESH_REQUIRED";
-                }
-
-                return "READY";
+                return "ERROR Invalid refresh operation id.";
             }
 
             if (!string.IsNullOrEmpty(operationId) && UnityLeanMcpCompilationTracker.TryReadRefreshResultThreadSafe(operationId, out var result))

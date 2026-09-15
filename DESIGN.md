@@ -137,6 +137,10 @@ Line-oriented socket communication uses strict single-line framing:
 
 `UnityProcessManager` serializes auto-start attempts with an operating-system file claim at `Temp/unity_lean_mcp_startup.lock`, held with `FileShare.None` from before the ownership recheck through Editor readiness. The lock file is persistent and is never unlinked while held, preventing POSIX inode replacement races; the OS releases the handle automatically after a host crash. Every caller rechecks process ownership after acquiring the inter-process claim, so concurrent MCP hosts cannot launch multiple Editors for one project. The PID file is paired with an atomically published sidecar identity record containing the launched process ID, UTC start time, executable path, and project root; a live PID is accepted only when those values still match. A Unity lockfile or a single unproven process candidate is supporting evidence only and never establishes project ownership. Launched `Process` handles are disposed after readiness monitoring completes, while process handles supplied by injected test providers remain owned by the provider.
 
+### Project-Scoped Endpoint Verification Before Process Heuristics
+
+Before process discovery or batchmode auto-start, `UnityProcessManager` probes the port recorded in that project's `Temp/unity_lean_mcp_port.txt` with `PING` and accepts only `PONG`. This verified endpoint is authoritative evidence that the project's Editor is available, including interactive GUI Editors whose lockfile is empty or whose command line cannot be inspected. A port-file value alone never establishes availability: missing, invalid, unreachable, or non-`PONG` endpoints are stale and must fall through to durable identity, lockfile, and project-targeting process discovery before auto-start. Status and start results use the same endpoint-first rule so they cannot disagree about a live GUI Editor.
+
 ### Deterministic Unity Editor Executable Discovery
 
 `UnityExecutableLocator` validates every configured, Unity Hub, and PATH candidate before returning it. Configured directory paths (e.g. `UNITY_PATH=/opt/unity` in containerized environments) automatically probe nested Editor binaries (`Editor/Unity`, `Unity`, `Editor/Unity.exe`, `Unity.exe`, `Unity.app/Contents/MacOS/Unity`) before evaluation. Validation uses the installed Editor layout rather than the executable filename alone: macOS candidates must be the binary inside `Unity.app/Contents/MacOS` with the managed `UnityEditor.dll` present, while Windows and Linux candidates must have the corresponding `Data/Managed/UnityEditor.dll` (or `UnityEngine.dll`) installation marker. POSIX candidates must also have an execute bit. This rejects same-named Unity CLI binaries and shims without executing untrusted candidates, and discovery preserves an actionable rejection diagnostic for auto-start failures. Discovery returns a strongly-typed immutable `UnityLocatorResult` (`ExecutablePath`, `Diagnostic`, `Success`) rather than mutating shared state or exposing mutable diagnostic properties on `IUnityExecutableLocator` (`LastDiagnostic`). This ensures atomic delivery of path or failure reasons, eliminates temporal coupling, and guarantees thread-safety when registered as a singleton service.
@@ -147,10 +151,18 @@ Line-oriented socket communication uses strict single-line framing:
 
 ### Lean Public MCP Surface
 To optimize LLM context window consumption and eliminate agent decision friction:
-- **Consolidate Execution into `unity_eval`**: All dynamic C# code execution, static method invocation, and inspection are funneled through `unity_eval`. The redundant `unity_execute_method` tool is retired.
+- **Consolidate Execution into `unity_eval`**: All dynamic C# code execution, static method invocation, and inspection are funneled through `unity_eval`. The redundant `unity_execute_method` tool and its raw protocol commands are removed.
 - **Retire `unity_status` from MCP Catalog**: Autonomous agents frequently waste reasoning turns making pre-flight status calls. Because all execution tools auto-start Unity when not running and autowait for busy states, `unity_status` is removed from the public MCP catalog (while preserved internally for diagnostics and tests).
 - **Proactive Compilation Checks via `unity_refresh`**: Merging clean rebuild capabilities into `unity_refresh(clean: bool = false)` avoids multiple compilation tools. Documenting that `unity_refresh` is fast (<200ms when unchanged) encourages agents to check compilation health after edits.
 - **Compilation Diagnostic Synchronization**: When refreshing or recompiling, compilation error diagnostics published by Unity or background log scanners override optimistic success states, ensuring `UnityRefreshResult.Success` is synchronized to `false` whenever error-severity diagnostics or unparsed compilation errors are detected.
+
+### Compiled-Assembly Source Synchronization
+
+Every operation that consumes compiled user code (`unity_eval`, static execution, and `unity_run_tests`) begins with its own correlated normal `AssetDatabase.Refresh` operation and waits for that operation's durable terminal result before dispatch. A point-in-time `READY` readiness probe is insufficient: Unity can report idle before its asynchronous external-file watcher has noticed a changed source. The normal refresh remains intentionally non-clean, so unchanged projects retain Unity's inexpensive no-op refresh path while changed sources either compile or return their current compiler diagnostics. Passive readiness-check protocol variants do not exist: compiled-code consumers must always cross the correlated refresh barrier.
+
+### Current-Client-Only Protocol Evolution
+
+Protocol and client API revisions are current-client-only. When a command, overload, or input shape is replaced, its parser, adapter, fallback behavior, and tests are removed. The server does not translate deprecated requests or keep a conservative response path for an older client, because a visible incompatibility is more reliable than silently preserving an obsolete contract.
 
 ### MCP Configuration Architecture & Working-Directory Strategy
 All MCP client configurations execute `dotnet` with `args: ["UnityLeanMcp.Mcp.dll"]` and set `cwd` to the package's `MCP~` directory, allowing the MCP server to automatically resolve the Unity project root from its current working directory.
@@ -219,15 +231,15 @@ When Unity runs in interactive GUI mode, terminating the Editor risks losing uns
 - Refuses termination when running in `GUI` mode unless `force: true` is explicitly provided.
 - Safe termination proceeds unprompted when running in `Batchmode`.
 
-### Canonical Plural Parameters & Flexible Deserialization (`SingleOrArray`)
-To eliminate parameter ambiguity and prevent tool invocation failures by LLM agents:
+### Canonical Typed Test Parameters
+To make the public MCP schema directly actionable for tool-selection models:
 - **Canonical Plural Parameter Surface**: `unity_run_tests` exposes only canonical plural filter parameters (`testNames`, `groupNames`, `categoryNames`, `assemblyNames`, `mode`, `failedOnly`). Deprecated singular or legacy aliases (`testName`, `group`, `filter`, `category`, `assembly`) are eliminated from the tool signature.
 - **Accurate Regular Expression Documentation**: The `groupNames` parameter schema explicitly documents that patterns are evaluated by the Unity Test Framework as .NET Regular Expressions (e.g. `['.*Movement.*']`) rather than shell globs (e.g. `*Movement*`), preventing pre-execution regex compilation exceptions.
-- **Polymorphic String / Array Deserialization**: AI agents often send either a single string (e.g. `"MyTest"`) or an array of strings (e.g. `["MyTest"]`) for filter parameters. The `SingleOrArray` parameter type implements a custom `JsonConverter` that transparently accepts both JSON strings and JSON string arrays during MCP tool dispatch, while providing bidirectional implicit conversions to `string` and `string[]` for direct C# ergonomics, null-safe constructor overloads, and value equality operators (`==`, `!=`).
-- **Encapsulation & Invariant Protection**: `SingleOrArray` is a `sealed class` implementing `IReadOnlyList<string>, IEquatable<SingleOrArray>` rather than inheriting `List<string>`, avoiding CA1002 (do not expose generic lists), preventing unintended external mutations, and preserving valid filter values exactly. Empty or whitespace-only entries are retained as validation metadata rather than discarded, so `unity_run_tests` can fail clearly before refresh or Unity execution instead of broadening to an unfiltered suite. C# 12 collection expressions (`[ "a", "b" ]`) are first-class citizens via `[CollectionBuilder(typeof(SingleOrArray), nameof(Create))]`.
+- **Native Array Schema**: Filter parameters use nullable `string[]` values so MCP clients receive `type: ["array", "null"]` with string items instead of an untyped custom-object schema. Empty or whitespace-only entries are rejected before refresh or Unity execution instead of broadening to an unfiltered suite.
+- **String Enum Schema**: `mode` uses the `UnityTestMode` enum with JSON string values `all`, `editmode`, and `playmode`, so schema-aware clients can reject unsupported modes before dispatch. An explicit invalid enum value is still rejected at the tool boundary for defense in depth.
 
 ### Test Mode Validation
-The public `unity_run_tests` tool preserves its documented omitted-parameter default of `all`, normalizes the accepted `all`, `editmode`, and `playmode` values, and rejects null, blank, or unsupported values before refreshing or dispatching work to Unity. The socket protocol applies the same accepted-value check and requires an explicit mode because the public boundary has already supplied the documented default.
+The public `unity_run_tests` tool preserves its documented omitted-parameter default of `all`, exposes only the accepted string enum values, and rejects invalid enum values before refreshing or dispatching work to Unity. The lower-level socket protocol continues to validate its string mode contract independently.
 
 ---
 
@@ -260,6 +272,10 @@ Production defaults use a 3-second grace period when encountering foreign locks.
 
 ### Deterministic Child Processes in Process Tests
 Process lifecycle tests that need a live child launch the checked-in test executable from `AppContext.BaseDirectory` with an explicit test-only argument. The child waits until its owning test terminates it, so the fixture does not depend on OS utilities, shell syntax, or machine-specific `PATH` entries.
+
+### Held Project Lockfiles Prevent Conflicting Auto-Start
+
+A lock held at the target project's `Temp/UnityLockfile` or `Temp/UnityLockFile` is sufficient evidence that starting a second Unity Editor would be unsafe, even if platform sandboxing prevents the MCP host from attributing that lock to a process. In that case, startup treats the Editor as active with an unknown PID and waits for its project-local MCP socket rather than launching batchmode. The lock is deliberately not treated as process ownership: it authorizes neither process termination nor deletion of Editor state.
 
 ### Atomic Support Evaluation & Service Segregation
 - **Atomic Roslyn Support Evaluation**: `RoslynCompilerHelper` evaluates support status atomically via `RoslynSupportStatus(IsSupported, UnsupportedReason)`, eliminating split-return race conditions and temporal coupling.

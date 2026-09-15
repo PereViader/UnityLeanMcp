@@ -75,7 +75,7 @@ namespace UnityLeanMcp
             }
         }
 
-        // Backward-compatible forwarding methods
+        // Shared protocol helpers
         public static string[] SplitArguments(string commandLine) =>
             CommandLineTokenizer.SplitArguments(commandLine);
 

@@ -80,13 +80,13 @@ public class WorkerThreadSnapshotsTests
     }
 
     [Fact]
-    public void ReadsInterruptedExecuteResult()
+    public void ReadsInterruptedOperationResult()
     {
-        string path = CreateTempFile("{\"operationId\":\"exec-1\",\"success\":false,\"interrupted\":true,\"resultState\":\"Interrupted\",\"message\":\"Domain reload during execution\"}");
+        string path = CreateTempFile("{\"operationId\":\"operation-1\",\"success\":false,\"interrupted\":true,\"resultState\":\"Interrupted\",\"message\":\"Domain reload during operation\"}");
         try
         {
             Assert.True(WorkerThreadSnapshots.TryReadOperationResult(path, out var snapshot));
-            Assert.Equal("exec-1", snapshot.OperationId);
+            Assert.Equal("operation-1", snapshot.OperationId);
             Assert.False(snapshot.Success);
             Assert.True(snapshot.Interrupted);
             Assert.Equal("Interrupted", snapshot.ResultState);
@@ -98,13 +98,13 @@ public class WorkerThreadSnapshotsTests
     }
 
     [Fact]
-    public void ReadsSuccessfulExecuteResultWithoutInterrupted()
+    public void ReadsSuccessfulOperationResultWithoutInterrupted()
     {
-        string path = CreateTempFile("{\"operationId\":\"exec-2\",\"success\":true,\"interrupted\":false,\"resultState\":\"Success\",\"payload\":\"done\"}");
+        string path = CreateTempFile("{\"operationId\":\"operation-2\",\"success\":true,\"interrupted\":false,\"resultState\":\"Success\",\"payload\":\"done\"}");
         try
         {
             Assert.True(WorkerThreadSnapshots.TryReadOperationResult(path, out var snapshot));
-            Assert.Equal("exec-2", snapshot.OperationId);
+            Assert.Equal("operation-2", snapshot.OperationId);
             Assert.True(snapshot.Success);
             Assert.False(snapshot.Interrupted);
             Assert.Equal("Success", snapshot.ResultState);

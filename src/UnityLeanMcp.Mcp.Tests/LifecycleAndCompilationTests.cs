@@ -57,36 +57,7 @@ public class LifecycleAndCompilationTests
         var client = _fixture.SharedClient;
         var result = await client.CallToolAsync("unity_eval", new
         {
-            code = "Tests.DummyExecuteClass.PollRefreshWhileBusy();"
-        });
-
-        Assert.False(result.IsError, result.Text);
-    }
-
-    [Fact]
-    public async Task TestPollExecuteNonBlocking_PollsExecuteStateWithoutBlocking()
-    {
-        var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-
-#pragma warning disable CS0618
-        var result = await client.ExecuteMethodAsync("Tests.DummyExecuteClass.PollHandlersWhileBusy", null);
-#pragma warning restore CS0618
-
-        Assert.True(result.Success, result.Message);
-        Assert.Contains("OK|EXECUTE:RUNNING", result.Payload);
-        Assert.Contains("BUSY_EXECUTE:BUSY execute", result.Payload);
-        Assert.Contains("EVAL:BUSY execute", result.Payload);
-        Assert.Contains("TESTS:BUSY execute", result.Payload);
-    }
-
-    [Fact]
-    public async Task TestBusyDetectionBeforeRefresh_RejectsConcurrentMutatingOperations()
-    {
-        var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_eval", new
-        {
-            code = "Tests.DummyExecuteClass.TestBusyDetection();"
+            code = "Tests.RefreshProbe.PollRefreshWhileBusy();"
         });
 
         Assert.False(result.IsError, result.Text);
@@ -97,7 +68,7 @@ public class LifecycleAndCompilationTests
     {
         string operationFile = Path.Combine(_fixture.UnityRoot, "Temp", "unity_lean_mcp_operation.json");
         string opId = Guid.NewGuid().ToString("N");
-        string testOperationJson = $"{{\"operationId\":\"{opId}\",\"kind\":\"execute\",\"status\":\"Running\",\"editorSessionId\":\"test\",\"startedUtc\":\"2026-09-08T12:00:00.0000000Z\",\"updatedUtc\":\"2026-09-08T12:00:00.0000000Z\"}}";
+        string testOperationJson = $"{{\"operationId\":\"{opId}\",\"kind\":\"eval\",\"status\":\"Running\",\"editorSessionId\":\"test\",\"startedUtc\":\"2026-09-08T12:00:00.0000000Z\",\"updatedUtc\":\"2026-09-08T12:00:00.0000000Z\"}}";
 
         try
         {
@@ -107,7 +78,7 @@ public class LifecycleAndCompilationTests
             var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
             var result = await client.GetStatusAsync();
 
-            Assert.Contains("Busy (execute)", result);
+            Assert.Contains("Busy (eval)", result);
         }
         finally
         {
@@ -164,26 +135,6 @@ public class LifecycleAndCompilationTests
             DeleteFileWithRetry(operationFile);
             DeleteFileWithRetry(resultFile);
         }
-    }
-
-    [Fact]
-    public async Task TestExecuteMethodException_DoesNotLeaveStoreBusy()
-    {
-        var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-
-#pragma warning disable CS0618
-        var failResult = await client.ExecuteMethodAsync("Tests.DummyExecuteClass.FailMethod", null);
-#pragma warning restore CS0618
-
-        Assert.False(failResult.Success);
-        Assert.Contains("Intentional execution failure!", failResult.Message);
-
-        string operationFile = Path.Combine(_fixture.UnityRoot, "Temp", "unity_lean_mcp_operation.json");
-        Assert.False(File.Exists(operationFile), "unity_lean_mcp_operation.json should have been cleaned up after failure.");
-
-        string status = await client.GetStatusAsync();
-        Assert.Equal("Ready", status);
     }
 
     [Fact]
@@ -303,96 +254,6 @@ public class LifecycleAndCompilationTests
     }
 
     [Fact]
-    public async Task TestCancelOperation_CancellableExecuteMethod_CancelsSuccessfully()
-    {
-        var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.PathResolver.OperationFile);
-        int port = pm.ReadPortFile();
-        Assert.True(port > 0, "Unity port should be valid.");
-
-        string opId = Guid.NewGuid().ToString("N");
-
-        using (var tcpClient = new TcpClient())
-        {
-            await tcpClient.ConnectAsync(IPAddress.Loopback, port);
-            using var stream = tcpClient.GetStream();
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-
-            await writer.WriteLineAsync($"EXECUTE_METHOD {opId} Tests.DummyExecuteClass.CancellableMethod");
-            string? ack = await reader.ReadLineAsync();
-            Assert.Equal("RUNNING", ack);
-        }
-
-        using (var cancelClient = new TcpClient())
-        {
-            await cancelClient.ConnectAsync(IPAddress.Loopback, port);
-            using var stream = cancelClient.GetStream();
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-
-            await writer.WriteLineAsync($"CANCEL_OPERATION {opId}");
-            string? cancelResp = await reader.ReadLineAsync();
-            Assert.Equal("CANCELLED", cancelResp);
-        }
-
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(100);
-        }
-        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should be cleared when method execution cancels.");
-
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-        string status = await client.GetStatusAsync();
-        Assert.Equal("Ready", status);
-    }
-
-    [Fact]
-    public async Task TestCancelOperation_NonCancellableExecuteMethod_ReturnsNotCancelable()
-    {
-        var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.PathResolver.OperationFile);
-        int port = pm.ReadPortFile();
-        Assert.True(port > 0, "Unity port should be valid.");
-
-        string opId = Guid.NewGuid().ToString("N");
-
-        using (var tcpClient = new TcpClient())
-        {
-            await tcpClient.ConnectAsync(IPAddress.Loopback, port);
-            using var stream = tcpClient.GetStream();
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-
-            await writer.WriteLineAsync($"EXECUTE_METHOD {opId} Tests.DummyExecuteClass.NonCancellableMethod");
-            string? ack = await reader.ReadLineAsync();
-            Assert.Equal("RUNNING", ack);
-        }
-
-        using (var cancelClient = new TcpClient())
-        {
-            await cancelClient.ConnectAsync(IPAddress.Loopback, port);
-            using var stream = cancelClient.GetStream();
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
-            using var reader = new StreamReader(stream, Encoding.UTF8);
-
-            await writer.WriteLineAsync($"CANCEL_OPERATION {opId}");
-            string? cancelResp = await reader.ReadLineAsync();
-            Assert.Equal("NOT_CANCELABLE", cancelResp);
-        }
-
-        Assert.True(File.Exists(pm.PathResolver.OperationFile), "Operation file should NOT be cancelled prematurely.");
-
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(100);
-        }
-        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should be cleared once method completes naturally.");
-    }
-
-    [Fact]
     public async Task TestClientCancellation_EvalAsyncWithCancellationToken_ThrowsAndUnwinds()
     {
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
@@ -405,34 +266,6 @@ public class LifecycleAndCompilationTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             await client.EvalAsync("await System.Threading.Tasks.Task.Delay(10000, cancellationToken); return 42;", cts.Token);
-        });
-
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (File.Exists(pm.PathResolver.OperationFile) && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(100);
-        }
-        Assert.False(File.Exists(pm.PathResolver.OperationFile), "Operation file should not remain after cancellation.");
-
-        string status = await client.GetStatusAsync();
-        Assert.Equal("Ready", status);
-    }
-
-    [Fact]
-    public async Task TestClientCancellation_ExecuteMethodWithCancellationToken_ThrowsAndUnwinds()
-    {
-        var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        DeleteFileWithRetry(pm.PathResolver.OperationFile);
-
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-        {
-#pragma warning disable CS0618
-            await client.ExecuteMethodAsync("Tests.DummyExecuteClass.CancellableWithArgMethod", new[] { "myArg" }, cts.Token);
-#pragma warning restore CS0618
         });
 
         var deadline = DateTime.UtcNow.AddSeconds(5);

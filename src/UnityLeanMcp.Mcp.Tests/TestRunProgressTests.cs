@@ -87,6 +87,9 @@ public class TestRunProgressTests
                         }
                         else if (line.StartsWith("REFRESH"))
                         {
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
                             await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("RUN_TESTS"))
@@ -148,7 +151,7 @@ public class TestRunProgressTests
                 }
             }, cts.Token);
 
-            var runResult = await client.RunTestsAsync(null, null, "editmode", progress, cts.Token);
+            var runResult = await client.RunTestsAsync(null, null, null, null, "editmode", false, progress, cts.Token);
 
             listener.Stop();
             cts.Cancel();
@@ -161,7 +164,7 @@ public class TestRunProgressTests
             lock (receivedProgress)
             {
                 Assert.NotEmpty(receivedProgress);
-                Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Checking compilation"));
+                Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("AssetDatabase"));
                 Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Initializing editmode test run"));
                 Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Suite.TestAlpha"));
                 Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Suite.TestBeta"));
@@ -227,6 +230,20 @@ public class TestRunProgressTests
                         else if (line.StartsWith("POLL_REFRESH"))
                         {
                             await writer.WriteLineAsync("READY");
+                        }
+                        else if (line.StartsWith("REFRESH"))
+                        {
+                            string[] parts = line.Split(' ');
+                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
+                            var refreshResult = new UnityRefreshResult
+                            {
+                                OperationId = operationId,
+                                Success = true
+                            };
+                            File.WriteAllText(
+                                Path.Combine(unityTemp, $"unity_refresh_{operationId}.json"),
+                                JsonSerializer.Serialize(refreshResult));
+                            await writer.WriteLineAsync("REFRESHING");
                         }
                         else if (line.StartsWith("RUN_TESTS"))
                         {

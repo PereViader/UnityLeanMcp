@@ -78,7 +78,6 @@ public class ToolFormattingTests
         public string StatusToReturn { get; set; } = "Ready";
         public UnityRefreshResult RefreshResultToReturn { get; set; } = new();
         public UnityEvalResult EvalResultToReturn { get; set; } = new();
-        public UnityExecuteResult ExecuteResultToReturn { get; set; } = new();
         public UnityTestRunResult TestRunResultToReturn { get; set; } = new();
 
         public FakeUnityClient(UnityProcessManager pm, IUnityPathResolver pathResolver)
@@ -106,14 +105,6 @@ public class ToolFormattingTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult(EvalResultToReturn);
 
-        [Obsolete]
-        public override Task<UnityExecuteResult> ExecuteMethodAsync(
-            string methodName,
-            string[]? args,
-            IProgress<ProgressNotificationValue>? progress = null,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(ExecuteResultToReturn);
-
         public string[]? LastTestNames { get; private set; }
         public string[]? LastGroupNames { get; private set; }
         public string[]? LastCategoryNames { get; private set; }
@@ -121,23 +112,6 @@ public class ToolFormattingTests
         public string? LastMode { get; private set; }
         public bool LastFailedOnly { get; private set; }
         public int RunTestsCallCount { get; private set; }
-
-        public override Task<UnityTestRunResult> RunTestsAsync(
-            string? filter,
-            string? category,
-            string? mode,
-            bool failedOnly = false,
-            IProgress<ProgressNotificationValue>? progress = null,
-            CancellationToken cancellationToken = default) =>
-            RunTestsAsync(
-                testNames: null,
-                groupNames: !string.IsNullOrEmpty(filter) ? [filter] : null,
-                categoryNames: !string.IsNullOrEmpty(category) ? [category] : null,
-                assemblyNames: null,
-                mode: mode,
-                failedOnly: failedOnly,
-                progress: progress,
-                cancellationToken: cancellationToken);
 
         public override Task<UnityTestRunResult> RunTestsAsync(
             string[]? testNames,
@@ -678,7 +652,31 @@ public class ToolFormattingTests
         var (tempDir, _, client, tools) = CreateTestContext();
         try
         {
-            var result = await tools.UnityRunTestsAsync(mode: "smoketest");
+            var result = await tools.UnityRunTestsAsync(mode: (UnityTestMode)999);
+
+            Assert.True(result.IsError);
+            Assert.Equal(TestModeParser.InvalidModeMessage, GetResultText(result));
+            Assert.Equal(0, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_WhenModeEnumIsInvalid_ReturnsValidationErrorBeforeCallingClient()
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 1
+            };
+
+            var result = await tools.UnityRunTestsAsync(mode: (UnityTestMode)999);
 
             Assert.True(result.IsError);
             Assert.Equal(TestModeParser.InvalidModeMessage, GetResultText(result));
@@ -691,38 +689,10 @@ public class ToolFormattingTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task UnityRunTests_WhenModeIsBlankOrNull_NormalizesToAllAndCallsClient(string? mode)
-    {
-        var (tempDir, _, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 1
-            };
-
-            var result = await tools.UnityRunTestsAsync(mode: mode);
-
-            Assert.False(result.IsError);
-            Assert.Equal("all", client.LastMode);
-            Assert.Equal(1, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("all", "all")]
-    [InlineData("editmode", "editmode")]
-    [InlineData("playmode", "playmode")]
-    [InlineData(" EDITMODE ", "editmode")]
-    public async Task UnityRunTests_WhenModeIsValid_PassesCanonicalModeToClient(string mode, string expectedMode)
+    [InlineData(UnityTestMode.All, "all")]
+    [InlineData(UnityTestMode.EditMode, "editmode")]
+    [InlineData(UnityTestMode.PlayMode, "playmode")]
+    public async Task UnityRunTests_WhenModeIsValid_PassesCanonicalModeToClient(UnityTestMode mode, string expectedMode)
     {
         var (tempDir, _, client, tools) = CreateTestContext();
         try
@@ -1208,7 +1178,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(groupNames: "SomeFilter");
+            var result = await tools.UnityRunTestsAsync(groupNames: ["SomeFilter"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1234,7 +1204,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(categoryNames: "SomeCat");
+            var result = await tools.UnityRunTestsAsync(categoryNames: ["SomeCat"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1260,7 +1230,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(groupNames: "SomeFilter", categoryNames: "SomeCat");
+            var result = await tools.UnityRunTestsAsync(groupNames: ["SomeFilter"], categoryNames: ["SomeCat"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1299,7 +1269,7 @@ public class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRunTests_SingleStringParameters_PassThroughToClient()
+    public async Task UnityRunTests_ArrayParameters_PassThroughToClient()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
@@ -1311,10 +1281,10 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
-                testNames: "MyNamespace.MyTestClass.MyMethod",
-                groupNames: "MyNamespace\\.MyTestClass",
-                categoryNames: "Integration",
-                assemblyNames: "MyProject.Tests");
+                testNames: ["MyNamespace.MyTestClass.MyMethod"],
+                groupNames: ["MyNamespace\\.MyTestClass"],
+                categoryNames: ["Integration"],
+                assemblyNames: ["MyProject.Tests"]);
 
             Assert.False(result.IsError);
             Assert.NotNull(client.LastTestNames);
@@ -1368,7 +1338,7 @@ public class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRunTests_SingleStringAndArrayParameters_ConvertProperly()
+    public async Task UnityRunTests_SingleAndMultipleArrayParameters_PassThroughProperly()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
@@ -1379,13 +1349,13 @@ public class ToolFormattingTests
                 PassCount = 2
             };
 
-            // Passing single string
-            var singleResult = await tools.UnityRunTestsAsync(testNames: "TestA");
+            // Passing a single-element array
+            var singleResult = await tools.UnityRunTestsAsync(testNames: ["TestA"]);
             Assert.False(singleResult.IsError);
             Assert.NotNull(client.LastTestNames);
             Assert.Equal(["TestA"], client.LastTestNames);
 
-            // Passing array of strings
+            // Passing an array with multiple strings
             var arrayResult = await tools.UnityRunTestsAsync(testNames: ["TestA", "TestB"]);
             Assert.False(arrayResult.IsError);
             Assert.NotNull(client.LastTestNames);
@@ -1406,17 +1376,17 @@ public class ToolFormattingTests
     [InlineData("categoryNames", " ")]
     [InlineData("assemblyNames", "")]
     [InlineData("assemblyNames", " ")]
-    public async Task UnityRunTests_BlankSingleFilter_ReturnsErrorBeforeCallingClient(string filterName, string value)
+    public async Task UnityRunTests_BlankFilterArray_ReturnsErrorBeforeCallingClient(string filterName, string value)
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
         {
             CallToolResult result = filterName switch
             {
-                "testNames" => await tools.UnityRunTestsAsync(testNames: value),
-                "groupNames" => await tools.UnityRunTestsAsync(groupNames: value),
-                "categoryNames" => await tools.UnityRunTestsAsync(categoryNames: value),
-                "assemblyNames" => await tools.UnityRunTestsAsync(assemblyNames: value),
+                "testNames" => await tools.UnityRunTestsAsync(testNames: [value]),
+                "groupNames" => await tools.UnityRunTestsAsync(groupNames: [value]),
+                "categoryNames" => await tools.UnityRunTestsAsync(categoryNames: [value]),
+                "assemblyNames" => await tools.UnityRunTestsAsync(assemblyNames: [value]),
                 _ => throw new ArgumentOutOfRangeException(nameof(filterName))
             };
 
@@ -1460,7 +1430,7 @@ public class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRunTests_ValidMixedSingleAndArrayFilters_PassThroughWithoutBroadening()
+    public async Task UnityRunTests_ValidArrayFilters_PassThroughWithoutBroadening()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
@@ -1472,9 +1442,9 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
-                testNames: "Namespace.Fixture.Test",
+                testNames: ["Namespace.Fixture.Test"],
                 groupNames: ["Namespace.Fixture.*", "OtherFixture.*"],
-                categoryNames: "Fast",
+                categoryNames: ["Fast"],
                 assemblyNames: ["Project.Tests", "Project.EditorTests"]);
 
             Assert.False(result.IsError);
@@ -1495,7 +1465,7 @@ public class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRunTests_PluralParametersWithSingleString_PassThroughToClient()
+    public async Task UnityRunTests_PluralArrayParameters_PassThroughToClient()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
@@ -1507,8 +1477,8 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
-                groupNames: "MyLegacyFilter",
-                categoryNames: "MyLegacyCat");
+                groupNames: ["MyLegacyFilter"],
+                categoryNames: ["MyLegacyCat"]);
 
             Assert.False(result.IsError);
             Assert.NotNull(client.LastGroupNames);
@@ -1538,7 +1508,7 @@ public class ToolFormattingTests
                 Message = "Regex parsing error: Quantifier * following nothing"
             };
 
-            var result = await tools.UnityRunTestsAsync(groupNames: "*Movement*");
+            var result = await tools.UnityRunTestsAsync(groupNames: ["*Movement*"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -2522,9 +2492,10 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     // ==========================================
 
     [Theory]
-    [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler diagnostics. Fast (<200ms) when unchanged. Use to verify compilation after editing scripts. Note: unity_run_tests and unity_eval automatically refresh pending changes beforehand, so calling unity_refresh immediately before those tools is unnecessary.")]
-    [InlineData("unity_eval", "Evaluates C# top-level script source code in-memory against the active Unity Editor to query or modify state. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result; void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
-    [InlineData("unity_run_tests", "Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported. Set failedOnly to run only tests that previously failed. Pending changes are refreshed automatically, so a preceding unity_refresh is normally unnecessary.")]
+    [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
+    [InlineData("unity_eval", "Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result; void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
+    [InlineData("unity_run_tests", "Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to run only tests that previously failed.")]
+    [InlineData("unity_stop", "Stops the running Unity instance when explicitly requested, to recover from a freeze or release project locks. Stopping an interactive GUI Editor can discard unsaved changes; use force: true only with explicit approval. Do not call automatically after operations.")]
     public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
     {
         var methods = typeof(UnityTools).GetMethods(BindingFlags.Public | BindingFlags.Instance);
@@ -2569,7 +2540,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.NotNull(cleanParam);
         var descAttr = cleanParam.GetCustomAttribute<DescriptionAttribute>();
         Assert.NotNull(descAttr);
-        Assert.Contains("forces a full clean rebuild", descAttr.Description);
+        Assert.Contains("full script recompilation", descAttr.Description);
     }
 
     [Fact]
@@ -2581,7 +2552,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.NotNull(forceParam);
         var descAttr = forceParam.GetCustomAttribute<DescriptionAttribute>();
         Assert.NotNull(descAttr);
-        Assert.Contains("forces termination even if Unity is running as an interactive GUI Editor", descAttr.Description);
+        Assert.Contains("may discard unsaved Editor changes", descAttr.Description);
     }
 
     [Fact]
@@ -2623,7 +2594,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
 
         // Check default parameter values
         var modeParam = method.GetParameters().First(p => p.Name == "mode");
-        Assert.Equal("all", modeParam.DefaultValue);
+        Assert.Equal(UnityTestMode.All, modeParam.DefaultValue);
 
         var failedOnlyParam = method.GetParameters().First(p => p.Name == "failedOnly");
         Assert.Equal(false, failedOnlyParam.DefaultValue);
@@ -2641,92 +2612,8 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var descAttr = groupNamesParam.GetCustomAttribute<DescriptionAttribute>();
         Assert.NotNull(descAttr);
         Assert.Equal(
-            ".NET Regular Expression pattern(s) to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).",
+            ".NET Regular Expression patterns to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).",
             descAttr.Description);
-    }
-
-    [Fact]
-    public void SingleOrArray_JsonSerializationAndDeserialization_SupportsStringAndArray()
-    {
-        // 1. Single string deserialization
-        var single = JsonSerializer.Deserialize<SingleOrArray>("\"MySingleTest\"");
-        Assert.NotNull(single);
-        Assert.Single(single);
-        Assert.Equal("MySingleTest", single[0]);
-
-        // 2. Array of strings deserialization
-        var array = JsonSerializer.Deserialize<SingleOrArray>("[\"Test1\", \"Test2\"]");
-        Assert.NotNull(array);
-        Assert.Equal(2, array.Count);
-        Assert.Equal("Test1", array[0]);
-        Assert.Equal("Test2", array[1]);
-
-        // 3. Empty array deserialization
-        var empty = JsonSerializer.Deserialize<SingleOrArray>("[]");
-        Assert.NotNull(empty);
-        Assert.Empty(empty);
-
-        // 4. Null deserialization
-        var nullResult = JsonSerializer.Deserialize<SingleOrArray>("null");
-        Assert.Null(nullResult);
-
-        // 4b. Whitespace / empty string deserialization retains an invalid marker
-        // so the tool can reject it instead of broadening to an unfiltered run.
-        var emptyStringResult = JsonSerializer.Deserialize<SingleOrArray>("\"\"");
-        Assert.NotNull(emptyStringResult);
-        Assert.True(emptyStringResult.HasBlankItems);
-        Assert.Empty(emptyStringResult);
-        var whitespaceStringResult = JsonSerializer.Deserialize<SingleOrArray>("\"   \"");
-        Assert.NotNull(whitespaceStringResult);
-        Assert.True(whitespaceStringResult.HasBlankItems);
-        Assert.Empty(whitespaceStringResult);
-
-        var whitespaceArrayResult = JsonSerializer.Deserialize<SingleOrArray>("[\"Valid\", \" \"]");
-        Assert.NotNull(whitespaceArrayResult);
-        Assert.True(whitespaceArrayResult.HasBlankItems);
-        Assert.Equal(["Valid"], whitespaceArrayResult.ToArray());
-
-        // 5. Invalid token (number) throws JsonException
-        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<SingleOrArray>("123"));
-
-        // 6. Serialization produces JSON array
-        var serialized = JsonSerializer.Serialize(new SingleOrArray("Foo", "Bar"));
-        Assert.Equal("[\"Foo\",\"Bar\"]", serialized);
-    }
-
-    [Fact]
-    public void SingleOrArray_ImplicitConversions_WorkBidirectionally()
-    {
-        // String -> SingleOrArray
-        SingleOrArray? fromString = "MyNamespace.MyTest";
-        Assert.NotNull(fromString);
-        Assert.Single(fromString);
-        Assert.Equal("MyNamespace.MyTest", fromString[0]);
-
-        // String[] -> SingleOrArray
-        SingleOrArray? fromArray = new[] { "TestA", "TestB" };
-        Assert.NotNull(fromArray);
-        Assert.Equal(2, fromArray.Count);
-        Assert.Equal("TestA", fromArray[0]);
-        Assert.Equal("TestB", fromArray[1]);
-
-        // SingleOrArray -> String[]
-        string[]? toArray = fromArray;
-        Assert.NotNull(toArray);
-        Assert.Equal(new[] { "TestA", "TestB" }, toArray);
-
-        // Null conversions
-        string? nullString = null;
-        SingleOrArray? fromNullString = nullString;
-        Assert.Null(fromNullString);
-
-        string[]? nullArray = null;
-        SingleOrArray? fromNullArray = nullArray;
-        Assert.Null(fromNullArray);
-
-        SingleOrArray? nullSingleOrArray = null;
-        string[]? toNullArray = nullSingleOrArray;
-        Assert.Null(toNullArray);
     }
 
     [Theory]
@@ -2734,39 +2621,39 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     [InlineData("groupNames")]
     [InlineData("categoryNames")]
     [InlineData("assemblyNames")]
-    public async Task UnityRunTests_IndividualFilters_SupportBothStringAndArray(string filterParam)
+    public async Task UnityRunTests_IndividualFilters_SupportSingleAndMultipleArrayValues(string filterParam)
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
         try
         {
             client.TestRunResultToReturn = new UnityTestRunResult { Success = true, PassCount = 1 };
 
-            // Single string call
+            // Single-element array call
             switch (filterParam)
             {
                 case "testNames":
-                    await tools.UnityRunTestsAsync(testNames: "MyTest");
+                    await tools.UnityRunTestsAsync(testNames: ["MyTest"]);
                     Assert.NotNull(client.LastTestNames);
                     Assert.Equal(["MyTest"], client.LastTestNames);
                     break;
                 case "groupNames":
-                    await tools.UnityRunTestsAsync(groupNames: "MyGroup.*");
+                    await tools.UnityRunTestsAsync(groupNames: ["MyGroup.*"]);
                     Assert.NotNull(client.LastGroupNames);
                     Assert.Equal(["MyGroup.*"], client.LastGroupNames);
                     break;
                 case "categoryNames":
-                    await tools.UnityRunTestsAsync(categoryNames: "Unit");
+                    await tools.UnityRunTestsAsync(categoryNames: ["Unit"]);
                     Assert.NotNull(client.LastCategoryNames);
                     Assert.Equal(["Unit"], client.LastCategoryNames);
                     break;
                 case "assemblyNames":
-                    await tools.UnityRunTestsAsync(assemblyNames: "MyAssembly");
+                    await tools.UnityRunTestsAsync(assemblyNames: ["MyAssembly"]);
                     Assert.NotNull(client.LastAssemblyNames);
                     Assert.Equal(["MyAssembly"], client.LastAssemblyNames);
                     break;
             }
 
-            // Array call
+            // Multiple-element array call
             switch (filterParam)
             {
                 case "testNames":
@@ -2795,137 +2682,6 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         {
             try { Directory.Delete(tempDir, true); } catch { }
         }
-    }
-
-    [Fact]
-    public void SingleOrArray_EqualityOperators_CompareByValueAndHandleNulls()
-    {
-        SingleOrArray? a = new SingleOrArray("Test1", "Test2");
-        SingleOrArray? b = new SingleOrArray("Test1", "Test2");
-        SingleOrArray? c = new SingleOrArray("Test1", "Different");
-        SingleOrArray? d = null;
-        SingleOrArray? e = null;
-
-        // Value equality via ==
-        Assert.True(a == b);
-        Assert.False(a != b);
-
-        // Inequality via == and !=
-        Assert.False(a == c);
-        Assert.True(a != c);
-
-        // Null comparisons
-        Assert.False(a == d);
-        Assert.True(a != d);
-        Assert.False(d == a);
-        Assert.True(d != a);
-        Assert.True(d == e);
-        Assert.False(d != e);
-
-        // Same reference equality
-        SingleOrArray? aRef = a;
-        Assert.True(a == aRef);
-        Assert.False(a != aRef);
-    }
-
-    [Fact]
-    public void SingleOrArray_Constructors_HandleNullArgumentsSafely()
-    {
-        // params string[]? with null array
-        var fromNullArray = new SingleOrArray((string[])null!);
-        Assert.Empty(fromNullArray);
-
-        // IEnumerable<string>? with null collection
-        var fromNullCollection = new SingleOrArray((IEnumerable<string>)null!);
-        Assert.Empty(fromNullCollection);
-
-        // Whitespace and empty strings are retained as invalid metadata.
-        var fromEmptyItems = new SingleOrArray("  ", "", "\t");
-        Assert.Empty(fromEmptyItems);
-        Assert.Equal(3, fromEmptyItems.BlankItemCount);
-    }
-
-    [Fact]
-    public void SingleOrArray_ImplementsIReadOnlyList_AndIsNotIList()
-    {
-        Assert.True(typeof(SingleOrArray).IsSealed);
-
-        var soa = new SingleOrArray("Test1", "Test2");
-
-        // Implements IReadOnlyList<string>
-        Assert.IsAssignableFrom<IReadOnlyList<string>>(soa);
-        Assert.Equal(2, soa.Count);
-        Assert.Equal("Test1", soa[0]);
-        Assert.Equal("Test2", soa[1]);
-
-        // Does NOT implement IList<string>, IList, or ICollection<string> (CA1002 / Encapsulation)
-        object boxed = soa;
-        Assert.False(boxed is IList<string>);
-        Assert.False(boxed is System.Collections.IList);
-        Assert.False(boxed is ICollection<string>);
-        Assert.False(typeof(IList<string>).IsAssignableFrom(typeof(SingleOrArray)));
-        Assert.False(typeof(System.Collections.IList).IsAssignableFrom(typeof(SingleOrArray)));
-        Assert.False(typeof(ICollection<string>).IsAssignableFrom(typeof(SingleOrArray)));
-
-        // Non-generic IEnumerable GetEnumerator works
-        System.Collections.IEnumerable nonGenericEnum = soa;
-        var nonGenericItems = new List<object?>();
-        foreach (var item in nonGenericEnum)
-        {
-            nonGenericItems.Add(item);
-        }
-        Assert.Equal(new object[] { "Test1", "Test2" }, nonGenericItems);
-    }
-
-    [Fact]
-    public void SingleOrArray_Constructors_RetainBlankValuesAsValidationMetadata()
-    {
-        // 1. Single string constructor with whitespace
-        var fromWhitespace = new SingleOrArray("   \t  \r\n  ");
-        Assert.Empty(fromWhitespace);
-        Assert.True(fromWhitespace.HasBlankItems);
-        Assert.Equal(1, fromWhitespace.BlankItemCount);
-
-        // 2. Single string constructor with null
-        var fromNullSingle = new SingleOrArray((string?)null);
-        Assert.Empty(fromNullSingle);
-
-        // 3. Single string constructor with valid string
-        var fromValidSingle = new SingleOrArray("  ValidTest  ");
-        Assert.Single(fromValidSingle);
-        Assert.Equal("  ValidTest  ", fromValidSingle[0]);
-
-        // 4. params string[] constructor with mixed valid, null, empty, and whitespace
-        string?[] mixedParams = ["First", null, "", "   ", "Second", "\t", "Third", " "];
-        var fromMixedParams = new SingleOrArray(mixedParams);
-        Assert.Equal(3, fromMixedParams.Count);
-        Assert.Equal(4, fromMixedParams.BlankItemCount);
-        Assert.Equal("First", fromMixedParams[0]);
-        Assert.Equal("Second", fromMixedParams[1]);
-        Assert.Equal("Third", fromMixedParams[2]);
-        Assert.Equal(new[] { "First", "Second", "Third" }, fromMixedParams.ToArray());
-
-        // 5. IEnumerable<string?> constructor with mixed valid, null, empty, and whitespace
-        var mixedList = new List<string?> { "Alpha", null, "", "   ", "Beta" };
-        var fromMixedEnumerable = new SingleOrArray(mixedList);
-        Assert.Equal(2, fromMixedEnumerable.Count);
-        Assert.Equal(2, fromMixedEnumerable.BlankItemCount);
-        Assert.Equal("Alpha", fromMixedEnumerable[0]);
-        Assert.Equal("Beta", fromMixedEnumerable[1]);
-
-        // 6. C# 12 collection expression syntax retains invalid metadata.
-        SingleOrArray fromCollectionExpr = ["One", "", "   ", "Two"];
-        Assert.Equal(2, fromCollectionExpr.Count);
-        Assert.Equal(2, fromCollectionExpr.BlankItemCount);
-        Assert.Equal("One", fromCollectionExpr[0]);
-        Assert.Equal("Two", fromCollectionExpr[1]);
-
-        // 7. Create method directly retains invalid metadata with nulls.
-        var fromCreate = SingleOrArray.Create(["One", null, "", "   ", "Two"]);
-        Assert.Equal(2, fromCreate.Count);
-        Assert.Equal(2, fromCreate.BlankItemCount);
-        Assert.Equal("One", fromCreate[0]);
-        Assert.Equal("Two", fromCreate[1]);
     }
 
     [Theory]
