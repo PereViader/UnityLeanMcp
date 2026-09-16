@@ -132,12 +132,6 @@ public class UnityTestRunState
     [JsonPropertyName("mode")]
     public string Mode { get; set; } = "";
 
-    [JsonPropertyName("filter")]
-    public string Filter { get; set; } = "";
-
-    [JsonPropertyName("category")]
-    public string Category { get; set; } = "";
-
     [JsonPropertyName("testNames")]
     public string[]? TestNames { get; set; }
 

@@ -352,15 +352,10 @@ namespace UnityLeanMcp
                     Directory.CreateDirectory(TempDirectory);
                 }
 
-                string filterSummary = args.groupNames != null && args.groupNames.Length > 0 ? string.Join(", ", args.groupNames) : "";
-                string categorySummary = args.categoryNames != null && args.categoryNames.Length > 0 ? string.Join(", ", args.categoryNames) : "";
-
                 var state = new UnityTestRunState
                 {
                     runId = runId,
                     mode = mode.ToString(),
-                    filter = filterSummary,
-                    category = categorySummary,
                     testNames = args.testNames,
                     groupNames = args.groupNames,
                     categoryNames = args.categoryNames,

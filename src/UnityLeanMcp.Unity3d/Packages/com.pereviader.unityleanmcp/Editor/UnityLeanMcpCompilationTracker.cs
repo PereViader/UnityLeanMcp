@@ -8,7 +8,6 @@ using UnityEngine;
 
 namespace UnityLeanMcp
 {
-    [InitializeOnLoad]
     public static class UnityLeanMcpCompilationTracker
     {
         private static readonly Dictionary<string, List<string>> s_AssemblyDiagnostics = new Dictionary<string, List<string>>();

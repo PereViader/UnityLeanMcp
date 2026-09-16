@@ -29,7 +29,6 @@ namespace UnityLeanMcp
     /// Durable, project-scoped ownership for commands which may outlive their
     /// socket or managed AppDomain. All mutations happen on Unity's main thread.
     /// </summary>
-    [InitializeOnLoad]
     internal static class UnityLeanMcpOperationStore
     {
         private const string EditorSessionKey = "UnityLeanMcp.EditorSessionId";

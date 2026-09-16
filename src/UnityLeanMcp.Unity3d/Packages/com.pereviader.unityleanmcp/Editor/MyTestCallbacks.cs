@@ -51,7 +51,7 @@ namespace UnityLeanMcp
 
         public void RunStarted(ITestAdaptor testsToRun)
         {
-            if (string.IsNullOrEmpty(m_RunId) || !UnityLeanMcpOperationStore.IsOwnedBy(m_RunId, "test"))
+            if (string.IsNullOrEmpty(m_RunId) || !UnityLeanMcpOperationStore.IsOwnedBy(m_RunId, OperationKinds.Test))
             {
                 m_IsRunning = false;
                 return;
@@ -141,7 +141,7 @@ namespace UnityLeanMcp
                 string resultsPath = RunTestsHandler.GetResultsFilePath(runId);
 
                 if (state == null || string.IsNullOrEmpty(runId) || state.runId != runId ||
-                    !UnityLeanMcpOperationStore.IsOwnedBy(runId, "test"))
+                    !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
                 {
                     m_IsRunning = false;
                     return;

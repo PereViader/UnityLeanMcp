@@ -55,8 +55,6 @@ namespace UnityLeanMcp
     {
         public string runId;
         public string mode;
-        public string filter;
-        public string category;
         public string[] testNames;
         public string[] groupNames;
         public string[] categoryNames;

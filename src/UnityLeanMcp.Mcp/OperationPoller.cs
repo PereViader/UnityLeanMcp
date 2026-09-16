@@ -398,17 +398,4 @@ public class OperationPoller : IOperationPoller
         string fileName = Path.GetFileName(filePath);
         return fileName.Contains(operationId, StringComparison.OrdinalIgnoreCase);
     }
-
-    private static void DeleteResultFileSilently(string? filePath)
-    {
-        if (string.IsNullOrEmpty(filePath)) return;
-        try
-        {
-            if (File.Exists(filePath))
-            {
-                File.Delete(filePath);
-            }
-        }
-        catch { }
-    }
 }

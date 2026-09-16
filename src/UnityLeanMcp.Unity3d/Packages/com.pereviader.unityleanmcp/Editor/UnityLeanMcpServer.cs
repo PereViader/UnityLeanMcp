@@ -427,7 +427,7 @@ namespace UnityLeanMcp
 
                     // Reject mutating operations early on the worker thread if another operation is active,
                     // or if Unity is compiling. This prevents main thread deadlock and dispatcher queue pollution
-                    // when an operation (e.g. eval or execute) is executing synchronously on the main thread.
+                    // when an operation (e.g. eval) is executing synchronously on the main thread.
                     if (handler.IsMutating)
                     {
                         var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();

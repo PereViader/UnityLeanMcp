@@ -255,7 +255,7 @@ Tests are partitioned using xUnit traits to support fast local developer loops a
 3. `Category=UnityIntegration`: Live Unity Editor smoke and end-to-end integration tests.
 
 ### Pre-Compiled Test Fixtures (Domain Reload Avoidance)
-Modifying project files or creating dynamic script fixtures during test runs triggers asset importing and domain reloads (2–4 seconds each). Integration tests use statically compiled test fixtures (`DummyTest.cs`, `DummyExecuteClass.cs`) combined with NUnit test filters (`testNames`, `groupNames`, `categoryNames`), executing suite runs against pre-compiled assemblies in milliseconds without domain reloads.
+Modifying project files or creating dynamic script fixtures during test runs triggers asset importing and domain reloads (2–4 seconds each). Integration tests use statically compiled test fixtures (`DummyTest.cs`) combined with NUnit test filters (`testNames`, `groupNames`, `categoryNames`), executing suite runs against pre-compiled assemblies in milliseconds without domain reloads.
 
 ### Persistent MCP Client Sessions
 Spawning a fresh child process (`dotnet UnityLeanMcp.Mcp.dll`) per test incurs significant .NET CLR initialization and pipe handshake overhead. Reusing a persistent `McpTestClient` session per test fixture mirrors production MCP clients, tests socket stability under repeated requests, and substantially cuts suite execution time.

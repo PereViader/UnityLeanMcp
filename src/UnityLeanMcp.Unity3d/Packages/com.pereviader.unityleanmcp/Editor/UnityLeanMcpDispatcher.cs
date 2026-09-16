@@ -1,11 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using UnityEditor;
 using UnityEngine;
 
 namespace UnityLeanMcp
 {
-    [InitializeOnLoad]
     internal static class UnityLeanMcpDispatcher
     {
         private static readonly ConcurrentQueue<Action> s_Queue = new ConcurrentQueue<Action>();

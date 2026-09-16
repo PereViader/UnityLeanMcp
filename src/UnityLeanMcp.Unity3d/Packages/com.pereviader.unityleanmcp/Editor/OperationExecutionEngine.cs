@@ -106,8 +106,7 @@ namespace UnityLeanMcp
             string resultFilePath,
             bool isVoid,
             Func<CancellationToken, object> invoker,
-            bool canCancel = true,
-            Action<Exception> onInvocationException = null)
+            bool canCancel = true)
         {
             UnityLeanMcpDispatcher.EnsureInitialized();
 
@@ -181,7 +180,6 @@ namespace UnityLeanMcp
                     FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: true);
                     return;
                 }
-                onInvocationException?.Invoke(inner);
                 string errorMsg = inner.ToString();
                 FinishOperation(operationId, operationKind, resultFilePath, false, errorMsg, stopwatch.Elapsed.TotalSeconds, null, logs);
                 return;
@@ -199,7 +197,6 @@ namespace UnityLeanMcp
             catch (Exception ex)
             {
                 stopwatch.Stop();
-                onInvocationException?.Invoke(ex);
                 string errorMsg = ex.ToString();
                 var logs = logCapture.GetLogs();
                 DisposeCapture(logCapture);
@@ -209,7 +206,7 @@ namespace UnityLeanMcp
 
             try
             {
-                UnwrapAndFinish(result, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture, onInvocationException);
+                UnwrapAndFinish(result, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
             }
             catch (Exception ex)
             {
@@ -227,8 +224,7 @@ namespace UnityLeanMcp
             string resultFilePath,
             bool isVoid,
             System.Diagnostics.Stopwatch stopwatch,
-            ConsoleLogCapture logCapture,
-            Action<Exception> onInvocationException)
+            ConsoleLogCapture logCapture)
         {
             // Check if rawResult is a ValueTask or ValueTask<T>
             if (rawResult != null)
@@ -251,10 +247,6 @@ namespace UnityLeanMcp
                             DisposeCapture(logCapture);
                             bool isCanceled = inner is OperationCanceledException;
                             string msg = isCanceled ? GetCancellationMessage(operationKind) : inner.ToString();
-                            if (!isCanceled)
-                            {
-                                onInvocationException?.Invoke(inner);
-                            }
                             FinishOperation(operationId, operationKind, resultFilePath, false, msg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: isCanceled);
                             return;
                         }
@@ -271,7 +263,7 @@ namespace UnityLeanMcp
                     {
                         try
                         {
-                            UnwrapCompletedTask(t, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture, onInvocationException);
+                            UnwrapCompletedTask(t, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
                         }
                         catch (Exception ex)
                         {
@@ -286,7 +278,7 @@ namespace UnityLeanMcp
 
                 try
                 {
-                    UnwrapCompletedTask(innerTask, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture, onInvocationException);
+                    UnwrapCompletedTask(innerTask, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
                 }
                 catch (Exception ex)
                 {
@@ -326,8 +318,7 @@ namespace UnityLeanMcp
             string resultFilePath,
             bool isVoid,
             System.Diagnostics.Stopwatch stopwatch,
-            ConsoleLogCapture logCapture,
-            Action<Exception> onInvocationException)
+            ConsoleLogCapture logCapture)
         {
             if (innerTask.IsFaulted)
             {
@@ -345,7 +336,6 @@ namespace UnityLeanMcp
                     FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, duration, null, logs, interrupted: true);
                     return;
                 }
-                onInvocationException?.Invoke(ex);
                 string errorMsg = ex.ToString();
                 FinishOperation(operationId, operationKind, resultFilePath, false, errorMsg, duration, null, logs);
                 return;
@@ -387,7 +377,7 @@ namespace UnityLeanMcp
             if (resultProp != null)
             {
                 object innerVal = resultProp.GetValue(innerTask);
-                UnwrapAndFinish(innerVal, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture, onInvocationException);
+                UnwrapAndFinish(innerVal, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
             }
             else
             {
@@ -491,7 +481,7 @@ namespace UnityLeanMcp
         {
             return operationKind == OperationKinds.Eval
                 ? "Evaluation was canceled."
-                : "Method execution was canceled.";
+                : "Operation was canceled.";
         }
     }
 }

@@ -8,10 +8,9 @@ using UnityEngine;
 
 namespace UnityLeanMcp
 {
-    [InitializeOnLoad]
     internal static class CommandHelper
     {
-        // Capture this once on Unity's main thread. User execute/eval code can
+        // Capture this once on Unity's main thread. User eval code can
         // change Environment.CurrentDirectory, which must not redirect protocol
         // files to an arbitrary directory.
         private static string s_ProjectRoot;
