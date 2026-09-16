@@ -372,3 +372,8 @@ Calling `UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.CancelTestRun(jobGui
 
 In `ExitHandler.ExitUnity()`, the Editor process is terminated explicitly via `EditorApplication.Exit(0)` after stopping the socket server. When `EditorApplication.Exit(0)` is called programmatically, `EditorApplication.quitting` callbacks may execute after socket shutdown or not at all before OS termination begins. Explicitly invoking `OperationLifecycleRegistry.NotifyQuitting(operation)` before stopping the server and calling `Exit(0)` ensures that active test runs, AssetDatabase refreshes, and recompilations persist terminal interrupted results to disk before the process shuts down.
 
+### External Termination of Stdio MCP Server Child Processes
+
+When Antigravity or similar IDE hosts spawn an MCP server over stdio transport (`command: dotnet`, `args: ["UnityLeanMcp.Mcp.dll"]`), terminating the child process externally (e.g. via `Stop-Process` or `kill`) permanently breaks the IDE host's stdio transport pipe for that session. Antigravity's Language Server host does not automatically respawn killed stdio subprocesses mid-session, causing subsequent MCP tool calls to block waiting for JSON-RPC messages on the dead pipe until hitting the 3-minute client context deadline timeout (`context deadline exceeded`). To update the binary or restart the MCP server, the Antigravity window or session must be reloaded (or reloaded via MCP settings), never forcibly terminated from the terminal.
+
+
