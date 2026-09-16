@@ -364,3 +364,11 @@ Calling `UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.CancelTestRun(jobGui
 - Dispatch the actual `TestRunnerApi.CancelTestRun` invocation onto Unity's main thread via `UnityLeanMcpDispatcher.Enqueue(...)`.
 - Never call synchronous main-thread Unity APIs directly from `ICommandHandler` implementations marked with `ExecutionTarget.WorkerThread`.
 
+### Pre-Flight Refresh Barrier Deadlocks in Mock Socket Transports
+
+`UnityClient.EvalAsync` unconditionally invokes `RefreshBeforeUsingCompiledAssembliesAsync` prior to evaluating C# snippets to guarantee that compiled assemblies match current source files on disk. In test suites, custom mock socket transports implementing `IUnitySocketTransport` must not stall or intercept `REFRESH` commands unconditionally if testing snippet dispatch cancellation: doing so prevents `EvalAsync` from ever completing its pre-flight refresh and advancing to snippet evaluation, deadlocking the test runner. Mocks should isolate delayed responses to the specific operation under test (e.g. via an opt-in property like `DelayRefresh = true`).
+
+### Editor Shutdown Ordering with Operation Interruption
+
+In `ExitHandler.ExitUnity()`, the Editor process is terminated explicitly via `EditorApplication.Exit(0)` after stopping the socket server. When `EditorApplication.Exit(0)` is called programmatically, `EditorApplication.quitting` callbacks may execute after socket shutdown or not at all before OS termination begins. Explicitly invoking `OperationLifecycleRegistry.NotifyQuitting(operation)` before stopping the server and calling `Exit(0)` ensures that active test runs, AssetDatabase refreshes, and recompilations persist terminal interrupted results to disk before the process shuts down.
+

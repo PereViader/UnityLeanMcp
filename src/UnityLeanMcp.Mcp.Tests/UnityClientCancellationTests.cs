@@ -75,8 +75,45 @@ public sealed class UnityClientCancellationTests
         Assert.Equal(transport.OperationId, poller.LastOperationId);
     }
 
+    [Fact]
+    public async Task RefreshAsync_CancellationDuringInitialDispatch_CancelsDispatchedOperation()
+    {
+        string projectRoot = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "unity_refresh_cancel_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(projectRoot);
+        var processManager = new StubProcessManager(pathResolver);
+        var transport = new DispatchCancellationTransport { DelayRefresh = true };
+        var poller = new RecordingOperationPoller();
+        var client = new UnityClient(
+            processManager,
+            pathResolver,
+            NullLogger<UnityClient>.Instance,
+            transport,
+            poller);
+
+        using var cancellation = new CancellationTokenSource();
+        Task<UnityRefreshResult> refreshTask = client.RefreshAsync(cancellationToken: cancellation.Token);
+
+        await transport.RefreshDispatched.Task;
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await refreshTask);
+        Assert.Equal(1, poller.CancellationCount);
+        Assert.Equal("refresh", poller.LastKind);
+        Assert.Equal(transport.OperationId, poller.LastOperationId);
+    }
+
     private sealed class DispatchCancellationTransport : IUnitySocketTransport
     {
+        public bool DelayRefresh { get; set; }
+
+        private readonly TaskCompletionSource<string?> _refreshResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> RefreshDispatched { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private readonly TaskCompletionSource<string?> _evalResponse =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -98,11 +135,24 @@ public sealed class UnityClientCancellationTests
             CancellationToken cancellationToken = default)
         {
             if (command.StartsWith("POLL_REFRESH ", StringComparison.Ordinal) ||
-                command.StartsWith("REFRESH ", StringComparison.Ordinal))
+                command.StartsWith("POLL_REFRESH", StringComparison.Ordinal))
             {
-                return Task.FromResult<string?>(command.StartsWith("REFRESH ", StringComparison.Ordinal)
-                    ? "REFRESHING"
-                    : "READY");
+                return Task.FromResult<string?>("READY");
+            }
+
+            if (command.StartsWith("REFRESH ", StringComparison.Ordinal) ||
+                command.StartsWith("RECOMPILE ", StringComparison.Ordinal))
+            {
+                if (!DelayRefresh)
+                {
+                    return Task.FromResult<string?>("REFRESHING");
+                }
+
+                string[] parts = command.Split(' ', 2);
+                OperationId = parts[1];
+                RefreshDispatched.TrySetResult(true);
+                cancellationToken.Register(() => _refreshResponse.TrySetCanceled(cancellationToken));
+                return _refreshResponse.Task;
             }
 
             if (command.StartsWith("EVAL ", StringComparison.Ordinal))

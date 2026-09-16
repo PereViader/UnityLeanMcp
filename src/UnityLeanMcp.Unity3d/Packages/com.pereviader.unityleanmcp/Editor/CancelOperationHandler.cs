@@ -23,7 +23,8 @@ namespace UnityLeanMcp
             {
                 if (!string.IsNullOrEmpty(operationId)
                     && (IsTerminalInterruptedResult(UnityLeanMcpPaths.GetWorkerTestResultsFile(operationId), operationId)
-                        || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetWorkerEvalResultFile(operationId), operationId)))
+                        || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetWorkerEvalResultFile(operationId), operationId)
+                        || IsTerminalInterruptedRefreshResult(UnityLeanMcpPaths.GetWorkerRefreshResultFile(operationId), operationId)))
                 {
                     writer.WriteLine("CANCELLED");
                     writer.Flush();
@@ -66,6 +67,14 @@ namespace UnityLeanMcp
                 && WorkerThreadSnapshots.TryReadOperationResult(path, out var result)
                 && result.OperationId == operationId
                 && (result.Interrupted || result.ResultState == OperationStatus.Cancelled);
+        }
+
+        private static bool IsTerminalInterruptedRefreshResult(string path, string operationId)
+        {
+            return !string.IsNullOrEmpty(path)
+                && WorkerThreadSnapshots.TryReadRefreshResult(path, out var result)
+                && result.OperationId == operationId
+                && result.Interrupted;
         }
     }
 }

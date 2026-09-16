@@ -38,7 +38,6 @@ namespace UnityLeanMcp
 
                 string assetsPath = Application.dataPath;
                 string rootFolder = FindRepositoryRoot(assetsPath);
-                string projectRoot = Path.GetFullPath(Path.Combine(assetsPath, ".."));
 
                 // Ensure Antigravity plugin manifest
                 string pluginJsonPath = Path.Combine(rootFolder, ".agents", "plugins", "unity-lean-mcp", "plugin.json");
@@ -62,7 +61,7 @@ namespace UnityLeanMcp
 
                 foreach (string configPath in targetConfigs)
                 {
-                    UpdateOrWriteMcpConfig(configPath, mcpDir, "mcpServers", rootFolder, projectRoot);
+                    UpdateOrWriteMcpConfig(configPath, mcpDir, "mcpServers", rootFolder);
                     sb.AppendLine($"• {MakeRelativePath(rootFolder, configPath).Replace('\\', '/')}");
                 }
 
@@ -184,8 +183,7 @@ namespace UnityLeanMcp
             string configPath,
             string mcpDir,
             string rootKey = "mcpServers",
-            string repositoryRoot = null,
-            string projectRoot = null)
+            string repositoryRoot = null)
         {
             string dir = Path.GetDirectoryName(configPath);
             if (!Directory.Exists(dir))

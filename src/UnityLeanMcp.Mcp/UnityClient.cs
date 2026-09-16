@@ -204,7 +204,7 @@ public class UnityClient : IUnityClient
             if (check != null)
             {
                 var busy = ParseBusyResponse(check);
-                if (!busy.isBusy || busy.isCompilation || (busy.kind != null && !busy.kind.Equals(kind, StringComparison.OrdinalIgnoreCase)))
+                if (!busy.isBusy || busy.isCompilation || (busy.kind != null && !busy.kind.Equals(kind, StringComparison.OrdinalIgnoreCase)) || (busy.opId != null && !busy.opId.Equals(opId, StringComparison.OrdinalIgnoreCase)))
                 {
                     return true;
                 }
@@ -212,7 +212,7 @@ public class UnityClient : IUnityClient
             else
             {
                 var activeOp = TryReadJsonFile<UnityLeanMcpOperationState>(_pathResolver.OperationFile, _ => true);
-                if (activeOp == null || (!string.Equals(activeOp.Kind, kind, StringComparison.OrdinalIgnoreCase) && activeOp.OperationId != opId))
+                if (activeOp == null || !string.Equals(activeOp.Kind, kind, StringComparison.OrdinalIgnoreCase) || (!string.IsNullOrEmpty(opId) && !string.Equals(activeOp.OperationId, opId, StringComparison.OrdinalIgnoreCase)))
                 {
                     return true;
                 }
@@ -315,7 +315,16 @@ public class UnityClient : IUnityClient
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string? initialResponse = await SendCommandAsync(triggerCommand, 10, cancellationToken);
+            string? initialResponse;
+            try
+            {
+                initialResponse = await SendCommandAsync(triggerCommand, 10, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await CancelOperationAsync(opId, isRecompile ? "recompile" : "refresh");
+                throw;
+            }
             var initialTerminalResult = TryCreateRefreshTerminalResult(initialResponse, opId);
             if (initialTerminalResult != null)
             {

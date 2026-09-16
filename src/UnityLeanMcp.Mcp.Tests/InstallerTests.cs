@@ -29,8 +29,7 @@ public class InstallerTests
         string configPath,
         string mcpDir,
         string rootKey = "mcpServers",
-        string? repositoryRoot = null,
-        string? projectRoot = null)
+        string? repositoryRoot = null)
     {
         string dir = Path.GetDirectoryName(configPath)!;
         if (!Directory.Exists(dir))

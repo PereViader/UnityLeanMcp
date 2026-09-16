@@ -117,6 +117,10 @@ namespace UnityLeanMcp
             {
                 handler.OnEditorQuitting(operation.operationId);
             }
+            else
+            {
+                UnityLeanMcpOperationStore.Complete(operation.operationId);
+            }
         }
     }
 
@@ -141,7 +145,7 @@ namespace UnityLeanMcp
 
         public void OnEditorQuitting(string operationId)
         {
-            RunTestsHandler.MarkTransportInterruption(OperationStatus.ShuttingDown);
+            RunTestsHandler.WriteInterruptedResult("Command interrupted by Unity editor shutdown.", operationId);
         }
     }
 
@@ -192,6 +196,7 @@ namespace UnityLeanMcp
 
         public void OnEditorQuitting(string operationId)
         {
+            UnityLeanMcpCompilationTracker.WriteInterruptedRefreshResult(operationId, "Command interrupted by Unity editor shutdown.");
         }
     }
 
@@ -216,6 +221,7 @@ namespace UnityLeanMcp
 
         public void OnEditorQuitting(string operationId)
         {
+            UnityLeanMcpCompilationTracker.WriteInterruptedRefreshResult(operationId, "Command interrupted by Unity editor shutdown.");
         }
     }
 }
