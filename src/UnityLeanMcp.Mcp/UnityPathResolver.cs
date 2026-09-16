@@ -16,12 +16,9 @@ public class UnityPathResolver : IUnityPathResolver
     public string TestRunningFile => Path.Combine(TempDir, "unity_test_running.txt");
     public string GetResultFilePath(UnityOperationKind kind, string? operationId = null) => kind switch
     {
-        UnityOperationKind.Refresh => string.IsNullOrEmpty(operationId)
+        UnityOperationKind.Refresh or UnityOperationKind.Recompile => string.IsNullOrEmpty(operationId)
             ? Path.Combine(TempDir, "unity_refresh_result.json")
             : Path.Combine(TempDir, $"unity_refresh_{operationId}.json"),
-        UnityOperationKind.Recompile => string.IsNullOrEmpty(operationId)
-            ? Path.Combine(TempDir, "unity_recompile_result.json")
-            : Path.Combine(TempDir, $"unity_recompile_{operationId}.json"),
         UnityOperationKind.Test => string.IsNullOrEmpty(operationId)
             ? Path.Combine(TempDir, "unity_test_results.json")
             : Path.Combine(TempDir, $"unity_test_{operationId}.json"),

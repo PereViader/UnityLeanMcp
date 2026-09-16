@@ -420,7 +420,7 @@ public class UnityClient : IUnityClient
             ShouldCancelOnAborted = false,
             RequireDurableResult = true,
             OperationDisplayName = "refresh operation",
-            ResultFilePath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId),
+            ResultFilePath = _pathResolver.GetResultFilePath(isRecompile ? UnityOperationKind.Recompile : UnityOperationKind.Refresh, opId),
             IsMatch = r => r.OperationId == opId,
             PollCommand = $"POLL_REFRESH {opId}",
             PollTimeoutSeconds = 2,

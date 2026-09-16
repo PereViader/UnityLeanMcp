@@ -297,10 +297,10 @@ public class UnityTools
                 };
             }
 
-            if (!TestFilterValidation.TryValidate(testNames, "testNames", out string filterError) ||
-                !TestFilterValidation.TryValidate(groupNames, "groupNames", out filterError) ||
-                !TestFilterValidation.TryValidate(categoryNames, "categoryNames", out filterError) ||
-                !TestFilterValidation.TryValidate(assemblyNames, "assemblyNames", out filterError))
+            if (!TestFilterValidation.TryValidate("testNames", testNames, out string filterError) ||
+                !TestFilterValidation.TryValidate("groupNames", groupNames, out filterError) ||
+                !TestFilterValidation.TryValidate("categoryNames", categoryNames, out filterError) ||
+                !TestFilterValidation.TryValidate("assemblyNames", assemblyNames, out filterError))
             {
                 return new CallToolResult
                 {

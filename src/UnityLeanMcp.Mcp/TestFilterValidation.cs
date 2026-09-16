@@ -11,13 +11,13 @@ internal static class TestFilterValidation
         string[]? assemblyNames,
         out string error)
     {
-        return TryValidate("testNames", testNames, out error) &&
-            TryValidate("groupNames", groupNames, out error) &&
-            TryValidate("categoryNames", categoryNames, out error) &&
-            TryValidate("assemblyNames", assemblyNames, out error);
+        return TryValidate("testNames", testNames, out error, includeIndex: true) &&
+            TryValidate("groupNames", groupNames, out error, includeIndex: true) &&
+            TryValidate("categoryNames", categoryNames, out error, includeIndex: true) &&
+            TryValidate("assemblyNames", assemblyNames, out error, includeIndex: true);
     }
 
-    internal static bool TryValidate(string[]? values, string parameterName, out string error)
+    internal static bool TryValidate(string parameterName, string[]? values, out string error, bool includeIndex = false)
     {
         if (values != null)
         {
@@ -25,25 +25,7 @@ internal static class TestFilterValidation
             {
                 if (string.IsNullOrWhiteSpace(values[i]))
                 {
-                    error = CreateError(parameterName, 1);
-                    return false;
-                }
-            }
-        }
-
-        error = "";
-        return true;
-    }
-
-    private static bool TryValidate(string parameterName, string[]? values, out string error)
-    {
-        if (values != null)
-        {
-            for (int i = 0; i < values.Length; i++)
-            {
-                if (string.IsNullOrWhiteSpace(values[i]))
-                {
-                    error = CreateError(parameterName, 1, i);
+                    error = CreateError(parameterName, 1, includeIndex ? i : null);
                     return false;
                 }
             }

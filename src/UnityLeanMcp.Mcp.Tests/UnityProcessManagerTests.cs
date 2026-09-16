@@ -1206,12 +1206,12 @@ public class UnityProcessManagerTests
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_process.pid"), resolver.PidFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_startup.lock"), resolver.StartupLockFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh));
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_result.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_result.json"), resolver.GetResultFilePath(UnityOperationKind.Eval));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_running.txt"), resolver.TestRunningFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_results.json"), resolver.GetResultFilePath(UnityOperationKind.Test));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_op0.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh, "op0"));
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_recompile_op01.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile, "op01"));
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_op01.json"), resolver.GetResultFilePath(UnityOperationKind.Recompile, "op01"));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_eval_op1.json"), resolver.GetResultFilePath(UnityOperationKind.Eval, "op1"));
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_test_op3.json"), resolver.GetResultFilePath(UnityOperationKind.Test, "op3"));
     }

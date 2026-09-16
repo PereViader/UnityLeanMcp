@@ -357,3 +357,10 @@ When filtering test runs by test names, groups, categories, or assemblies, allow
 - Client-side validation (`TestFilterValidation.cs`) and Editor server-side validation (`RunTestsHandler.cs`) must enforce identical invariants: rejecting any null, empty, or whitespace-only strings immediately with a clear diagnostic message rather than omitting them.
 - Eliminating legacy CLI argument parsing fallbacks in favor of structured JSON payloads ensures that both sides serialize and deserialize identical models without divergence.
 
+### Unity TestRunnerApi Cancellation Must Be Main-Thread Dispatched
+
+Calling `UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.CancelTestRun(jobGuid)` from a background socket thread throws a `UnityException` ("CancelTestRun can only be called from the main thread"). When handling `CANCEL_OPERATION` on a socket worker thread:
+- Record the cancellation intent immediately in a thread-safe snapshot file (`WorkerTestCancellationFile`) so that cancellation intent survives background thread context switches or domain reloads.
+- Dispatch the actual `TestRunnerApi.CancelTestRun` invocation onto Unity's main thread via `UnityLeanMcpDispatcher.Enqueue(...)`.
+- Never call synchronous main-thread Unity APIs directly from `ICommandHandler` implementations marked with `ExecutionTarget.WorkerThread`.
+

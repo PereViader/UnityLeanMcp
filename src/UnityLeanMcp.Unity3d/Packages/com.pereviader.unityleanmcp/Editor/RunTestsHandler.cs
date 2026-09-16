@@ -599,58 +599,6 @@ namespace UnityLeanMcp
             }
         }
 
-        internal static bool RequestCancelFromWorker(string operationId)
-        {
-            if (!string.IsNullOrEmpty(operationId))
-            {
-                var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
-                if (operation == null || operation.OperationId != operationId || operation.Kind != OperationKinds.Test)
-                {
-                    return false;
-                }
-            }
-
-            var runningState = ReadThreadSafeSnapshot();
-            if (runningState == null
-                && string.IsNullOrEmpty(operationId))
-            {
-                return false;
-            }
-
-            string requestedRunId = operationId;
-            if (string.IsNullOrEmpty(requestedRunId))
-            {
-                var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
-                requestedRunId = runningState?.RunId ?? operation?.OperationId;
-            }
-
-            if (string.IsNullOrEmpty(requestedRunId))
-            {
-                return false;
-            }
-
-            if (runningState != null && runningState.RunId != requestedRunId)
-            {
-                return false;
-            }
-
-            // Persist the intent before acknowledging the request. The marker
-            // survives a domain reload if the queued main-thread action is
-            // discarded with the old managed domain.
-            if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.WorkerTestCancellationFile, requestedRunId))
-            {
-                return false;
-            }
-
-            // The action performs all Unity API and state-transition work on
-            // the main thread. The worker acknowledges acceptance without
-            // waiting for the dispatcher, so cancellation cannot deadlock
-            // behind a synchronous operation or a domain reload.
-            string runId = requestedRunId;
-            UnityLeanMcpDispatcher.Enqueue(() => CancelActiveTestRunOnMainThread(runId));
-            return true;
-        }
-
         private static void CancelActiveTestRunOnMainThread(string operationId)
         {
             var state = ReadRunningState();
@@ -690,8 +638,8 @@ namespace UnityLeanMcp
 
         internal static OperationCancelResult CancelActiveTestRun(string operationId)
         {
-            var operation = UnityLeanMcpOperationStore.Read();
-            var runningState = ReadRunningState();
+            var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            var runningState = ReadThreadSafeSnapshot();
 
             // 1. If neither operation store nor running state is active
             if (operation == null && runningState == null)
@@ -714,12 +662,12 @@ namespace UnityLeanMcp
             }
 
             // 2. If the operation belongs to another operation ID
-            if (operation != null && !string.IsNullOrEmpty(operationId) && operation.operationId != operationId)
+            if (operation != null && !string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
             {
                 return OperationCancelResult.NotCancelable;
             }
 
-            if (runningState != null && !string.IsNullOrEmpty(operationId) && runningState.runId != operationId)
+            if (runningState != null && !string.IsNullOrEmpty(operationId) && runningState.RunId != operationId)
             {
                 return OperationCancelResult.NotCancelable;
             }
@@ -727,7 +675,7 @@ namespace UnityLeanMcp
             string activeRunId = operationId;
             if (string.IsNullOrEmpty(activeRunId))
             {
-                activeRunId = runningState?.runId ?? operation?.operationId;
+                activeRunId = runningState?.RunId ?? operation?.OperationId;
             }
 
             if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(CancellationFilePath, activeRunId))
@@ -735,7 +683,9 @@ namespace UnityLeanMcp
                 return OperationCancelResult.NotCancelable;
             }
 
-            CancelActiveTestRunOnMainThread(activeRunId);
+            // The action performs all Unity API and state-transition work on
+            // the main thread via the dispatcher.
+            UnityLeanMcpDispatcher.Enqueue(() => CancelActiveTestRunOnMainThread(activeRunId));
             return OperationCancelResult.Cancelled;
         }
 

@@ -65,44 +65,14 @@ namespace UnityLeanMcp
             return s_Handlers.TryGetValue(kind, out handler);
         }
 
-        public static OperationCancelResult Cancel(UnityLeanMcpOperationState operation)
+        public static OperationCancelResult Cancel(string operationKind, string operationId)
         {
-            if (operation != null && TryGetHandler(operation.kind, out var handler))
+            if (TryGetHandler(operationKind, out var handler))
             {
-                return handler.TryCancel(operation.operationId);
+                return handler.TryCancel(operationId);
             }
 
             return OperationCancelResult.NotCancelable;
-        }
-
-        public static void Cancel(UnityLeanMcpOperationState operation, StreamWriter writer)
-        {
-            var result = Cancel(operation);
-            switch (result)
-            {
-                case OperationCancelResult.Cancelled:
-                    writer?.WriteLine("CANCELLED");
-                    break;
-                case OperationCancelResult.NotFound:
-                    writer?.WriteLine("NO_OPERATION");
-                    break;
-                case OperationCancelResult.NotCancelable:
-                default:
-                    writer?.WriteLine("NOT_CANCELABLE");
-                    break;
-            }
-
-            writer?.Flush();
-        }
-
-        internal static bool TryRequestCancelFromWorker(string operationKind, string operationId)
-        {
-            if (!TryGetHandler(operationKind, out var handler))
-            {
-                return false;
-            }
-
-            return handler.TryRequestCancelFromWorker(operationId);
         }
 
         public static void RecoverOnDomainLoad(UnityLeanMcpOperationState operation, bool isRestart)
@@ -154,11 +124,6 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Test;
 
-        public bool TryRequestCancelFromWorker(string operationId)
-        {
-            return RunTestsHandler.RequestCancelFromWorker(operationId);
-        }
-
         public OperationCancelResult TryCancel(string operationId)
         {
             return RunTestsHandler.CancelActiveTestRun(operationId);
@@ -183,11 +148,6 @@ namespace UnityLeanMcp
     internal class EvalLifecycleHandler : IOperationLifecycleHandler
     {
         public string OperationKind => OperationKinds.Eval;
-
-        public bool TryRequestCancelFromWorker(string operationId)
-        {
-            return EvalHandler.CancelActiveEval(operationId);
-        }
 
         public OperationCancelResult TryCancel(string operationId)
         {
@@ -215,11 +175,6 @@ namespace UnityLeanMcp
     {
         public string OperationKind => OperationKinds.Refresh;
 
-        public bool TryRequestCancelFromWorker(string operationId)
-        {
-            return false;
-        }
-
         public OperationCancelResult TryCancel(string operationId)
         {
             return OperationCancelResult.NotCancelable;
@@ -243,11 +198,6 @@ namespace UnityLeanMcp
     internal class RecompileLifecycleHandler : IOperationLifecycleHandler
     {
         public string OperationKind => OperationKinds.Recompile;
-
-        public bool TryRequestCancelFromWorker(string operationId)
-        {
-            return false;
-        }
 
         public OperationCancelResult TryCancel(string operationId)
         {

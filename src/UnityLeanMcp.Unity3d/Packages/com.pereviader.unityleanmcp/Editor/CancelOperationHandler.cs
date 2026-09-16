@@ -42,9 +42,7 @@ namespace UnityLeanMcp
                 return;
             }
 
-            OperationCancelResult result = OperationLifecycleRegistry.TryGetHandler(operation.Kind, out var handler)
-                ? handler.TryCancel(operation.OperationId)
-                : OperationCancelResult.NotCancelable;
+            OperationCancelResult result = OperationLifecycleRegistry.Cancel(operation.Kind, operation.OperationId);
 
             switch (result)
             {
