@@ -12,7 +12,6 @@ namespace UnityLeanMcp
         private static string s_TestRunningFile;
         private static string s_TestCancellationFile;
         private static string s_TestResultsFile;
-        private static string s_ExecuteResultFile;
         private static string s_EvalResultFile;
         private static string s_WorkerLogFile;
 
@@ -83,14 +82,6 @@ namespace UnityLeanMcp
                 return s_TestResultsFile;
             }
         }
-        public static string ExecuteResultFile
-        {
-            get
-            {
-                if (string.IsNullOrEmpty(s_ExecuteResultFile)) EnsureInitialized();
-                return s_ExecuteResultFile;
-            }
-        }
         public static string EvalResultFile
         {
             get
@@ -102,9 +93,6 @@ namespace UnityLeanMcp
 
         public static string GetEvalResultFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? EvalResultFile : Path.Combine(TempDir, $"unity_eval_{operationId}.json");
-
-        public static string GetExecuteResultFile(string operationId) =>
-            string.IsNullOrEmpty(operationId) ? ExecuteResultFile : Path.Combine(TempDir, $"unity_execute_{operationId}.json");
 
         public static string GetTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
@@ -126,9 +114,6 @@ namespace UnityLeanMcp
         internal static string GetWorkerEvalResultFile(string operationId) =>
             string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_EvalResultFile : Path.Combine(s_TempDir, $"unity_eval_{operationId}.json"));
 
-        internal static string GetWorkerExecuteResultFile(string operationId) =>
-            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_ExecuteResultFile : Path.Combine(s_TempDir, $"unity_execute_{operationId}.json"));
-
         internal static string GetWorkerTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_TestResultsFile : Path.Combine(s_TempDir, $"unity_test_{operationId}.json"));
 
@@ -144,7 +129,6 @@ namespace UnityLeanMcp
             s_TestRunningFile = Path.Combine(s_TempDir, "unity_test_running.txt");
             s_TestCancellationFile = Path.Combine(s_TempDir, "unity_test_cancellation.txt");
             s_TestResultsFile = Path.Combine(s_TempDir, "unity_test_results.json");
-            s_ExecuteResultFile = Path.Combine(s_TempDir, "unity_execute_result.json");
             s_EvalResultFile = Path.Combine(s_TempDir, "unity_eval_result.json");
             s_WorkerLogFile = Path.Combine(s_TempDir, "unity_lean_mcp_worker.log");
         }

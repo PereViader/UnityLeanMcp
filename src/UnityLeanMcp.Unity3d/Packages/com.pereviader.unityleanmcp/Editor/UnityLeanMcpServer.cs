@@ -98,7 +98,6 @@ namespace UnityLeanMcp
             s_Handlers.TryAdd("RECOMPILE", new RecompileHandler());
             s_Handlers.TryAdd("RUN_TESTS", new RunTestsHandler());
             s_Handlers.TryAdd("POLL_TESTS", new PollTestsHandler());
-            s_Handlers.TryAdd("CANCEL_TESTS", new CancelTestsHandler());
             s_Handlers.TryAdd("CANCEL_OPERATION", new CancelOperationHandler());
             s_Handlers.TryAdd("EVAL", new EvalHandler());
             s_Handlers.TryAdd("POLL_EVAL", new PollEvalHandler());

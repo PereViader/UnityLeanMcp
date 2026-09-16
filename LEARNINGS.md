@@ -350,3 +350,10 @@ In .NET asynchronous code, operations honoring `CancellationToken` may throw eit
 
 While `PollTestsHandler` on the wire protocol omitted `, 0 skipped` when `SkipCount == 0`, the MCP tool layer (`UnityTools.cs`) and client progress reporter (`UnityClient.cs`) previously hardcoded `, {result.SkipCount} skipped.` onto test summaries and progress messages. This produced inconsistent formatting (`Tests Passed: 27 passed, 0 skipped.` and `Tests finished: 27 passed, 0 skipped.`) and consumed unnecessary LLM token context. Conditionally formatting `, {result.SkipCount} skipped` only when `result.SkipCount > 0` across all tool result lines, empty suite messages (`Tests Passed: 0 passed (no tests found in suite).`), and progress notifications ensures consistent, concise output without noisy zero counts.
 
+### Consistent Filter Array Validation Across Host and Editor Boundaries
+
+When filtering test runs by test names, groups, categories, or assemblies, allowing `null` or whitespace-only elements in filter arrays introduces subtle bugs:
+- If a client or Editor handler silently filters out or ignores `null` elements in an array for "compatibility", an array intended to scope tests (e.g. `[""]` or `[null]`) could collapse into an empty filter set and execute the entire test suite without restrictions.
+- Client-side validation (`TestFilterValidation.cs`) and Editor server-side validation (`RunTestsHandler.cs`) must enforce identical invariants: rejecting any null, empty, or whitespace-only strings immediately with a clear diagnostic message rather than omitting them.
+- Eliminating legacy CLI argument parsing fallbacks in favor of structured JSON payloads ensures that both sides serialize and deserialize identical models without divergence.
+

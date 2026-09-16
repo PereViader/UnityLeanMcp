@@ -162,70 +162,15 @@ namespace UnityLeanMcp
             string operationId = requestParts[0];
             string remainder = requestParts[1].Trim();
 
-            RunTestsArgs testArgs;
-            TestMode mode;
-
-            if (remainder.StartsWith("{"))
+            if (!remainder.StartsWith("{", StringComparison.Ordinal))
             {
-                string unescapedJson = ProtocolCodec.UnescapeLine(remainder);
-                testArgs = JsonUtility.FromJson<RunTestsArgs>(unescapedJson) ?? new RunTestsArgs();
-                mode = ParseTestMode(testArgs.mode);
+                writer.WriteLine("ERROR: Invalid test parameters. Expected JSON payload for RunTestsArgs.");
+                return;
             }
-            else
-            {
-                string[] args = CommandHelper.SplitArguments(payload);
-                if (args.Length < 2)
-                {
-                    writer.WriteLine("ERROR: Missing operation id or test mode (all/playmode/editmode)");
-                    return;
-                }
 
-                mode = ParseTestMode(args[1]);
-
-                string filter = null;
-                string category = null;
-                bool filterSpecified = false;
-                bool categorySpecified = false;
-                bool failedOnly = false;
-
-                for (int i = 2; i < args.Length; i++)
-                {
-                    if (args[i] == "--filter")
-                    {
-                        if (i + 1 >= args.Length)
-                        {
-                            writer.WriteLine("ERROR: Missing value for --filter");
-                            return;
-                        }
-
-                        filterSpecified = true;
-                        filter = args[++i];
-                    }
-                    else if (args[i] == "--category")
-                    {
-                        if (i + 1 >= args.Length)
-                        {
-                            writer.WriteLine("ERROR: Missing value for --category");
-                            return;
-                        }
-
-                        categorySpecified = true;
-                        category = args[++i];
-                    }
-                    else if (args[i] == "--failed-only")
-                    {
-                        failedOnly = true;
-                    }
-                }
-
-                testArgs = new RunTestsArgs
-                {
-                    mode = args[1],
-                    groupNames = filterSpecified ? new[] { filter } : null,
-                    categoryNames = categorySpecified ? new[] { category } : null,
-                    failedOnly = failedOnly
-                };
-            }
+            string unescapedJson = ProtocolCodec.UnescapeLine(remainder);
+            RunTestsArgs testArgs = JsonUtility.FromJson<RunTestsArgs>(unescapedJson) ?? new RunTestsArgs();
+            TestMode mode = ParseTestMode(testArgs.mode);
 
             if ((int)mode == -1)
             {
@@ -339,10 +284,9 @@ namespace UnityLeanMcp
             {
                 for (int i = 0; i < values.Length; i++)
                 {
-                    // Null entries remain omitted for compatibility. Empty and
-                    // whitespace-only entries must never be silently broadened
-                    // into an unfiltered test run.
-                    if (values[i] != null && string.IsNullOrWhiteSpace(values[i]))
+                    // Empty, whitespace-only, or null entries must never be
+                    // silently broadened into an unfiltered test run.
+                    if (string.IsNullOrWhiteSpace(values[i]))
                     {
                         error = $"Invalid test filter '{parameterName}[{i}]': value must not be empty or whitespace-only.";
                         return false;

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -76,23 +76,23 @@ namespace UnityLeanMcp
         }
 
         // Shared protocol helpers
-        public static string[] SplitArguments(string commandLine) =>
-            CommandLineTokenizer.SplitArguments(commandLine);
-
-        public static object ConvertParameter(string rawArg, Type targetType) =>
-            ParameterTypeConverter.ConvertParameter(rawArg, targetType);
-
         public static string FormatResult(object result, bool isVoidStatement = false, bool prettyPrint = true) =>
             UnityResultFormatter.FormatResult(result, isVoidStatement, prettyPrint);
 
-        public static Type FindType(string fullName) =>
-            MethodResolver.FindType(fullName);
-
-        public static MethodInfo FindStaticMethod(Type type, string methodName, int paramCount) =>
-            MethodResolver.FindStaticMethod(type, methodName, paramCount);
-
-        public static MethodInfo FindStaticMethod(Type type, string methodName, int paramCount, bool allowTrailingCancellationToken) =>
-            MethodResolver.FindStaticMethod(type, methodName, paramCount, allowTrailingCancellationToken);
+        public static Type FindType(string fullName)
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var type = assembly.GetType(fullName);
+                    if (type != null)
+                        return type;
+                }
+                catch { }
+            }
+            return null;
+        }
 
         public static bool IsAssetImportWorkerProcess()
         {
