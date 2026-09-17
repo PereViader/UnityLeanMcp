@@ -140,30 +140,28 @@ public class UnityProcessManager : IUnityProcessManager
         // two atomic publications can still recover an already-launched
         // Editor instead of starting a duplicate.
         string pidIdentityFile = GetPidIdentityFilePath();
-        if (File.Exists(_pathResolver.PidFile) || File.Exists(pidIdentityFile))
+        if (_processIdentityStore.TryRead(out var identity) && identity.ProcessId > 0)
+        {
+            if (IsOwnedPid(identity.ProcessId))
+            {
+                processId = identity.ProcessId;
+                return true;
+            }
+
+            try { File.Delete(_pathResolver.PidFile); } catch { }
+            try { File.Delete(pidIdentityFile); } catch { }
+        }
+        else if (File.Exists(_pathResolver.PidFile))
         {
             try
             {
-                int pid = 0;
-                if (File.Exists(_pathResolver.PidFile))
+                string pidText = ReadFileWithRetry(_pathResolver.PidFile).Trim();
+                if (int.TryParse(pidText, out int rawPid) && rawPid > 0 && IsOwnedPid(rawPid))
                 {
-                    string pidText = ReadFileWithRetry(_pathResolver.PidFile).Trim();
-                    int.TryParse(pidText, out pid);
-                }
-
-                if (pid <= 0 && _processIdentityStore.TryRead(out var identity))
-                {
-                    pid = identity.ProcessId;
-                }
-
-                if (pid > 0 && IsOwnedPid(pid))
-                {
-                    processId = pid;
+                    processId = rawPid;
                     return true;
                 }
 
-                // The PID is dead, reused, unrelated, or no longer has a valid
-                // ownership record. Never trust the PID file on its own.
                 try { File.Delete(_pathResolver.PidFile); } catch { }
                 try { File.Delete(pidIdentityFile); } catch { }
             }
@@ -216,7 +214,7 @@ public class UnityProcessManager : IUnityProcessManager
                         {
                             if (TryGetProcessCommandLine(proc, out string commandLine))
                             {
-                                if (CommandLineTargetsProject(commandLine))
+                                if (CommandLineTargetsProject(commandLine, proc.Id))
                                 {
                                     processId = lockPid;
                                     return true;
@@ -526,7 +524,7 @@ public class UnityProcessManager : IUnityProcessManager
                 try
                 {
                     if (!TryGetProcessCommandLine(proc, out string commandLine) ||
-                        !CommandLineTargetsProject(commandLine))
+                        !CommandLineTargetsProject(commandLine, proc.Id))
                     {
                         continue;
                     }
@@ -579,7 +577,7 @@ public class UnityProcessManager : IUnityProcessManager
         return UnityProcessCommandLineReader.TryRead(process.Id, out commandLine);
     }
 
-    private bool CommandLineTargetsProject(string commandLine)
+    internal bool CommandLineTargetsProject(string commandLine, int? processId = null)
     {
         string projectRoot = _pathResolver.ProjectRoot
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -592,7 +590,7 @@ public class UnityProcessManager : IUnityProcessManager
             int matchIndex = normalizedCommandLine.IndexOf(projectRoot, searchStart, StringComparison.OrdinalIgnoreCase);
             if (matchIndex < 0)
             {
-                return false;
+                break;
             }
 
             int matchEnd = matchIndex + projectRoot.Length;
@@ -606,7 +604,81 @@ public class UnityProcessManager : IUnityProcessManager
             searchStart = matchEnd;
         }
 
+        // Support relative -projectPath arguments (e.g. -projectPath . or -projectPath ./)
+        if (TryExtractProjectPathArgument(commandLine, out string? projectPathArg) && !string.IsNullOrWhiteSpace(projectPathArg))
+        {
+            if (FileUnityProcessIdentityStore.PathsEqual(projectPathArg, _pathResolver.ProjectRoot))
+            {
+                return true;
+            }
+
+            if (processId.HasValue && RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                string? procCwd = TryGetLinuxProcessCwd(processId.Value);
+                if (!string.IsNullOrWhiteSpace(procCwd))
+                {
+                    try
+                    {
+                        string resolved = Path.GetFullPath(Path.Combine(procCwd, projectPathArg));
+                        if (FileUnityProcessIdentityStore.PathsEqual(resolved, _pathResolver.ProjectRoot))
+                        {
+                            return true;
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
         return false;
+    }
+
+    internal static bool TryExtractProjectPathArgument(string commandLine, out string? projectPath)
+    {
+        projectPath = null;
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return false;
+        }
+
+        char[] separators = commandLine.Contains('\0') ? new[] { '\0' } : new[] { ' ', '\t' };
+        string[] parts = commandLine.Split(separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string part = parts[i].Trim('"', '\'');
+            if (part.Equals("-projectPath", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < parts.Length)
+                {
+                    projectPath = parts[i + 1].Trim('"', '\'');
+                    return !string.IsNullOrWhiteSpace(projectPath);
+                }
+            }
+            else if (part.StartsWith("-projectPath=", StringComparison.OrdinalIgnoreCase))
+            {
+                projectPath = part.Substring("-projectPath=".Length).Trim('"', '\'');
+                return !string.IsNullOrWhiteSpace(projectPath);
+            }
+        }
+
+        return false;
+    }
+
+    private static string? TryGetLinuxProcessCwd(int pid)
+    {
+        try
+        {
+            string cwdLink = $"/proc/{pid}/cwd";
+            if (Directory.Exists(cwdLink))
+            {
+                var target = File.ResolveLinkTarget(cwdLink, returnFinalTarget: true);
+                return target?.FullName ?? cwdLink;
+            }
+        }
+        catch { }
+
+        return null;
     }
 
     private static bool IsCommandLineBoundary(char value) =>
@@ -668,12 +740,6 @@ public class UnityProcessManager : IUnityProcessManager
 
         if (IsUnityRunning(out int? existingPid))
         {
-            if (await IsSocketReadyAsync(2, cancellationToken))
-            {
-                _logger.LogInformation("Unity is already running (PID {Pid}) and socket server is ready.", existingPid);
-                return;
-            }
-
             _logger.LogInformation("Unity is running (PID {Pid}) but socket is not ready yet. Waiting for readiness...", existingPid);
             await WaitForSocketReadinessAsync(null, cancellationToken);
             return;
@@ -698,12 +764,6 @@ public class UnityProcessManager : IUnityProcessManager
         // absent, stale, or does not answer PING.
         if (IsUnityRunning(out existingPid))
         {
-            if (await IsSocketReadyAsync(2, cancellationToken))
-            {
-                _logger.LogInformation("Unity is already running (PID {Pid}) and socket server is ready.", existingPid);
-                return;
-            }
-
             _logger.LogInformation("Unity is running (PID {Pid}) but socket is not ready yet. Waiting for readiness...", existingPid);
             await WaitForSocketReadinessAsync(null, cancellationToken);
             return;
@@ -820,6 +880,8 @@ public class UnityProcessManager : IUnityProcessManager
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            bool socketIsLive = false;
+
             // 1. Check if the process exited unexpectedly (deterministic check)
             if (startedProcess != null)
             {
@@ -854,7 +916,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // socket even when platform process inspection cannot establish an
                 // owned PID. PING/PONG is authoritative for endpoint readiness;
                 // only treat Unity as absent if neither source has positive proof.
-                bool socketIsLive = await IsSocketReadyAsync(2, cancellationToken);
+                socketIsLive = await IsSocketReadyAsync(2, cancellationToken);
                 if (!socketIsLive && !IsUnityRunning(out _))
                 {
                     if (File.Exists(_pathResolver.LogFile))
@@ -915,7 +977,7 @@ public class UnityProcessManager : IUnityProcessManager
             // 3. Check socket connection
             if (File.Exists(_pathResolver.PortFile))
             {
-                if (await IsSocketReadyAsync(2, cancellationToken))
+                if (socketIsLive || await IsSocketReadyAsync(2, cancellationToken))
                 {
                     // Check if server is settled
                     string? refreshState = await ProbeSocketCommandAsync("POLL_REFRESH", 2, cancellationToken);

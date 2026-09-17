@@ -915,6 +915,179 @@ public class DecomposedComponentsTests
         Assert.Same(dummyProc, pm.ProcessStarter(new System.Diagnostics.ProcessStartInfo()));
     }
 
+    [Fact]
+    public async Task OperationPoller_WhenSocketResponds_DoesNotScanProcesses()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_poller_proc_test_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            var pm = new CountingProcessManager(resolver);
+            var transport = new StubSocketTransport("SUCCESS {\"OperationId\":\"op123\",\"Success\":true,\"Message\":\"Done\"}");
+            var poller = new OperationPoller(pm, resolver, transport);
+
+            var spec = new OperationPollingSpec<UnityOperationResult>
+            {
+                OperationId = "op123",
+                PollCommand = "POLL op123",
+                ResultFilePath = Path.Combine(projectRoot, "result.json"),
+                IsMatch = r => r.OperationId == "op123",
+                PollIntervalMs = 50,
+                RequireDurableResult = false
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Equal(0, pm.IsUnityRunningCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task OperationPoller_WhenSocketFails_ChecksProcessLiveness()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_poller_fail_test_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            var pm = new CountingProcessManager(resolver, isRunning: false);
+            var transport = new StubSocketTransport(null);
+            var poller = new OperationPoller(pm, resolver, transport);
+
+            var spec = new OperationPollingSpec<UnityOperationResult>
+            {
+                OperationId = "op456",
+                PollCommand = "POLL op456",
+                ResultFilePath = Path.Combine(projectRoot, "result.json"),
+                IsMatch = r => r.OperationId == "op456",
+                PollIntervalMs = 50,
+                RequireDurableResult = false
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Contains("exited unexpectedly", result.Message);
+            Assert.True(pm.IsUnityRunningCallCount >= 1);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task OperationPoller_CustomResponseHandler_ReturnsResultImmediatelyAndCleansUp()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_poller_custom_test_" + Guid.NewGuid().ToString("N"));
+        string resultFile = Path.Combine(projectRoot, "unity_refresh_op789.json");
+        Directory.CreateDirectory(projectRoot);
+        try
+        {
+            File.WriteAllText(resultFile, "{\"OperationId\":\"op789\",\"Success\":true,\"Message\":\"Settled\"}");
+            var resolver = new UnityPathResolver(projectRoot);
+            var pm = new StubProcessManager(resolver);
+            var transport = new StubSocketTransport("READY");
+            var poller = new OperationPoller(pm, resolver, transport);
+
+            bool onResultFoundCalled = false;
+            var spec = new OperationPollingSpec<UnityRefreshResult>
+            {
+                OperationId = "op789",
+                PollCommand = "POLL_REFRESH op789",
+                ResultFilePath = resultFile,
+                IsMatch = r => r.OperationId == "op789",
+                PollIntervalMs = 500,
+                CustomResponseHandler = (resp, ct) =>
+                {
+                    if (resp == "READY")
+                    {
+                        var read = OperationPoller.TryReadJsonFile<UnityRefreshResult>(resultFile, r => r.OperationId == "op789");
+                        return Task.FromResult(read);
+                    }
+                    return Task.FromResult<UnityRefreshResult?>(null);
+                },
+                OnResultFound = r =>
+                {
+                    onResultFoundCalled = true;
+                    return r;
+                }
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.True(onResultFoundCalled);
+            Assert.False(File.Exists(resultFile)); // Operation-scoped file was deleted
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void UnityProcessManager_CommandLineTargetsProject_MatchesRelativeProjectPath()
+    {
+        string projectRoot = Directory.GetCurrentDirectory();
+        var resolver = new UnityPathResolver(projectRoot);
+        var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+
+        // Standard absolute matching
+        Assert.True(pm.CommandLineTargetsProject($"Unity.exe -projectPath \"{projectRoot}\" -batchmode"));
+
+        // Relative matching with . and ./
+        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath . -batchmode"));
+        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath ./ -batchmode"));
+        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath=\".\" -batchmode"));
+
+        // Unrelated project
+        Assert.False(pm.CommandLineTargetsProject("Unity.exe -projectPath \"C:/Other/Project\" -batchmode"));
+    }
+
+    [Fact]
+    public void UnityProcessManager_TryExtractProjectPathArgument_ParsesVariousFormats()
+    {
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath /foo/bar -nographics", out var path1));
+        Assert.Equal("/foo/bar", path1);
+
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=\"/foo/bar\" -nographics", out var path2));
+        Assert.Equal("/foo/bar", path2);
+
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("Unity\0-batchmode\0-projectPath\0.\0-nographics", out var path3));
+        Assert.Equal(".", path3);
+
+        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -nographics", out _));
+    }
+
+    private sealed class CountingProcessManager : IUnityProcessManager
+    {
+        private readonly bool _isRunning;
+        public int IsUnityRunningCallCount { get; private set; }
+        public IUnityPathResolver PathResolver { get; }
+        public IUnityExecutableLocator ExecutableLocator => throw new NotImplementedException();
+        public CountingProcessManager(IUnityPathResolver pathResolver, bool isRunning = true)
+        {
+            PathResolver = pathResolver;
+            _isRunning = isRunning;
+        }
+        public bool IsUnityRunning(out int? processId)
+        {
+            IsUnityRunningCallCount++;
+            processId = _isRunning ? 1234 : null;
+            return _isRunning;
+        }
+        public string GetUnityMode(int? pid = null) => "Batchmode";
+        public int ReadPortFile() => 12345;
+        public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public void PurgeOperationState() { }
+    }
+
     private sealed class StubSocketTransport : IUnitySocketTransport
     {
         private readonly string? _response;

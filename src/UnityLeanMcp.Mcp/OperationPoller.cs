@@ -139,34 +139,12 @@ public class OperationPoller : IOperationPoller
                 }
 
                 // 2. Authoritative check: terminal result file
-                var result = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                if (result != null)
+                if (TryConsumeTerminalResult(spec, out var result))
                 {
-                    DeleteResultFileSilently(spec);
-                    return spec.OnResultFound != null ? spec.OnResultFound(result) : result;
+                    return result!;
                 }
 
-                // 3. Process liveness check
-                if (!_processManager.IsUnityRunning(out _))
-                {
-                    // Brief grace period in case result was written as process exited
-                    await Task.Delay(300, cancellationToken);
-                    var finalCheck = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                    if (finalCheck != null)
-                    {
-                        DeleteResultFileSilently(spec);
-                        return spec.OnResultFound != null ? spec.OnResultFound(finalCheck) : finalCheck;
-                    }
-
-                    return new TResult
-                    {
-                        OperationId = spec.OperationId,
-                        Success = false,
-                        Message = $"Unity background process exited unexpectedly during {spec.OperationDisplayName}."
-                    };
-                }
-
-                // 4. Operation store check for interruption
+                // 3. Operation store check for interruption
                 if (spec.CheckOperationStoreForInterruption)
                 {
                     var opState = TryReadJsonFile<UnityLeanMcpOperationState>(_pathResolver.OperationFile, o => o.OperationId == spec.OperationId);
@@ -182,17 +160,41 @@ public class OperationPoller : IOperationPoller
                     }
                 }
 
-                // 5. Poll socket
+                // 4. Poll socket
                 int port = _processManager.ReadPortFile();
-                string? pollResp = await _socketTransport.SendCommandAsync(port, spec.PollCommand, spec.PollTimeoutSeconds, cancellationToken);
-                if (pollResp != null)
+                string? pollResp = port > 0
+                    ? await _socketTransport.SendCommandAsync(port, spec.PollCommand, spec.PollTimeoutSeconds, cancellationToken)
+                    : null;
+
+                if (pollResp == null)
+                {
+                    // Socket communication failed or port file is missing. Check if Unity process has died.
+                    if (!_processManager.IsUnityRunning(out _))
+                    {
+                        // Brief grace period in case result was written as process exited
+                        await Task.Delay(300, cancellationToken);
+                        if (TryConsumeTerminalResult(spec, out var finalCheck))
+                        {
+                            return finalCheck!;
+                        }
+
+                        return new TResult
+                        {
+                            OperationId = spec.OperationId,
+                            Success = false,
+                            Message = $"Unity background process exited unexpectedly during {spec.OperationDisplayName}."
+                        };
+                    }
+                }
+                else
                 {
                     if (spec.CustomResponseHandler != null)
                     {
                         var custom = await spec.CustomResponseHandler(pollResp, cancellationToken);
                         if (custom != null)
                         {
-                            return custom;
+                            DeleteResultFileSilently(spec);
+                            return spec.OnResultFound != null ? spec.OnResultFound(custom) : custom;
                         }
                     }
 
@@ -217,11 +219,9 @@ public class OperationPoller : IOperationPoller
                         }
                         else
                         {
-                            var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                            if (fileRes != null)
+                            if (TryConsumeTerminalResult(spec, out var fileRes))
                             {
-                                DeleteResultFileSilently(spec);
-                                return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+                                return fileRes!;
                             }
 
                             return new TResult
@@ -239,11 +239,9 @@ public class OperationPoller : IOperationPoller
                         // On Windows NTFS, allow a brief grace period for directory entry settlement if the Editor completed the operation.
                         for (int attempt = 0; attempt < 5; attempt++)
                         {
-                            var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                            if (fileRes != null)
+                            if (TryConsumeTerminalResult(spec, out var fileRes))
                             {
-                                DeleteResultFileSilently(spec);
-                                return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+                                return fileRes!;
                             }
 
                             if (attempt < 4)
@@ -262,11 +260,9 @@ public class OperationPoller : IOperationPoller
 
                     if (pollResp.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
                     {
-                        var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                        if (fileRes != null)
+                        if (TryConsumeTerminalResult(spec, out var fileRes))
                         {
-                            DeleteResultFileSilently(spec);
-                            return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+                            return fileRes!;
                         }
 
                         string msg = pollResp.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
@@ -283,11 +279,9 @@ public class OperationPoller : IOperationPoller
 
                     if (pollResp.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
                     {
-                        var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                        if (fileRes != null)
+                        if (TryConsumeTerminalResult(spec, out var fileRes))
                         {
-                            DeleteResultFileSilently(spec);
-                            return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+                            return fileRes!;
                         }
 
                         string msg = pollResp.Length > 7 ? pollResp[7..].Trim() : "Operation failed.";
@@ -301,11 +295,9 @@ public class OperationPoller : IOperationPoller
 
                     if (pollResp.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
                     {
-                        var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
-                        if (fileRes != null)
+                        if (TryConsumeTerminalResult(spec, out var fileRes))
                         {
-                            DeleteResultFileSilently(spec);
-                            return spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+                            return fileRes!;
                         }
 
                         if (spec.RequireDurableResult)
@@ -373,6 +365,22 @@ public class OperationPoller : IOperationPoller
         };
 
         return PollOperationUntilTerminalAsync(spec, cancellationToken);
+    }
+
+    private static bool TryConsumeTerminalResult<TResult>(
+        OperationPollingSpec<TResult> spec,
+        out TResult? result) where TResult : class, IOperationResult, new()
+    {
+        var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
+        if (fileRes != null)
+        {
+            DeleteResultFileSilently(spec);
+            result = spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+            return true;
+        }
+
+        result = null;
+        return false;
     }
 
     private static void DeleteResultFileSilently<TResult>(OperationPollingSpec<TResult> spec) where TResult : class, IOperationResult, new()

@@ -450,11 +450,7 @@ public class UnityClient : IUnityClient
                     var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId);
                     if (result != null)
                     {
-                        // Let the poller's next iteration consume the
-                        // operation-scoped file through OnResultFound. That
-                        // keeps terminal cleanup and completion reporting on
-                        // the normal authoritative-result path.
-                        return null;
+                        return result;
                     }
 
                     if (!acceptCurrentCompilationState || !currentCompilationWasProven)
@@ -478,11 +474,7 @@ public class UnityClient : IUnityClient
                     var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId);
                     if (result != null)
                     {
-                        // Let the poller's next iteration consume the
-                        // operation-scoped file through OnResultFound. That
-                        // keeps terminal cleanup and completion reporting on
-                        // the normal authoritative-result path.
-                        return null;
+                        return result;
                     }
 
                     if (!acceptCurrentCompilationState || !currentCompilationWasProven)

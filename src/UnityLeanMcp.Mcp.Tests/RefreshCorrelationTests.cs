@@ -104,11 +104,10 @@ public sealed class RefreshCorrelationTests
                 File.WriteAllText(spec.ResultFilePath, System.Text.Json.JsonSerializer.Serialize(currentResult));
 
                 var customResult = await spec.CustomResponseHandler!("READY", cancellationToken);
-                Assert.Null(customResult);
+                Assert.NotNull(customResult);
+                Assert.Equal(spec.OperationId, customResult.OperationId);
 
-                var durableResult = OperationPoller.TryReadJsonFile<UnityRefreshResult>(spec.ResultFilePath, spec.IsMatch);
-                Assert.NotNull(durableResult);
-                var completedResult = spec.OnResultFound!(durableResult!);
+                var completedResult = spec.OnResultFound!(customResult!);
                 Assert.Equal(spec.OperationId, completedResult.OperationId);
                 return completedResult;
             });

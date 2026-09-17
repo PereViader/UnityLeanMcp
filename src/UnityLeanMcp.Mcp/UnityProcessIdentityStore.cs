@@ -280,7 +280,7 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         return null;
     }
 
-    private static bool PathsEqual(string? left, string? right)
+    internal static bool PathsEqual(string? left, string? right)
     {
         if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
         {

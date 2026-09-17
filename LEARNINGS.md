@@ -410,4 +410,10 @@ Unity Package Manager downloads packages into `Library/PackageCache/` with versi
 
 Under Win32 command line rules (MSVCRT `CommandLineToArgvW`), a trailing backslash immediately preceding a double quote (`\"`) is treated as an escaped literal quotation mark. If `ProjectRoot` or `LogFile` ends with a trailing backslash, `$"\"{ProjectRoot}\""` creates an unclosed quote that swallows subsequent arguments. All paths passed to `ProcessStartInfo.Arguments` must trim trailing directory separators prior to quoting.
 
+### Decoupling Process Liveness from Active Polling Loops
 
+Scanning the OS process table (`Process.GetProcessesByName`) on every 500ms tick of an operation polling loop introduces measurable CPU spikes, lock contention, and kernel mode transitions while the target process is actively processing requests. When the TCP loopback socket returns valid responses (`RUNNING`, `BUSY`, `COMPILING`, etc.), the Unity process is undeniably alive. Process liveness probing should only execute on socket communication failure (`pollResp == null`).
+
+### Relative `-projectPath` Arguments in Process Command Lines
+
+When Unity is launched via scripts or terminal commands, `-projectPath` is often passed as a relative path (such as `.`, `./`, or relative directory names) rather than an absolute path. Substring or boundary matching against an absolute `ProjectRoot` fails unless the argument tokenizer explicitly extracts `-projectPath <arg>` and `-projectPath=<arg>` and resolves the path relative to the process's working directory or canonical full path.

@@ -176,7 +176,7 @@ namespace UnityLeanMcp
             string msg = (rawMessage ?? "").Trim();
             if (string.IsNullOrEmpty(msg)) return null;
 
-            if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"^([a-zA-Z]:)?[a-zA-Z0-9_./\\ -]+\([0-9]+,[0-9]+\):\s*(error|warning)\s+[a-zA-Z0-9]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"^.+?\([0-9]+,[0-9]+\):\s*(error|warning)\s+[a-zA-Z0-9]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             {
                 int newlineIdx = msg.IndexOfAny(new[] { '\r', '\n' });
                 if (newlineIdx >= 0)
