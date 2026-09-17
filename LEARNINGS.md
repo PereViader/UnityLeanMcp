@@ -372,8 +372,42 @@ Calling `UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.CancelTestRun(jobGui
 
 In `ExitHandler.ExitUnity()`, the Editor process is terminated explicitly via `EditorApplication.Exit(0)` after stopping the socket server. When `EditorApplication.Exit(0)` is called programmatically, `EditorApplication.quitting` callbacks may execute after socket shutdown or not at all before OS termination begins. Explicitly invoking `OperationLifecycleRegistry.NotifyQuitting(operation)` before stopping the server and calling `Exit(0)` ensures that active test runs, AssetDatabase refreshes, and recompilations persist terminal interrupted results to disk before the process shuts down.
 
-### External Termination of Stdio MCP Server Child Processes
+### Darwin Kernel `KERN_PROCARGS2` Buffer Layout
 
-When Antigravity or similar IDE hosts spawn an MCP server over stdio transport (`command: dotnet`, `args: ["UnityLeanMcp.Mcp.dll"]`), terminating the child process externally (e.g. via `Stop-Process` or `kill`) permanently breaks the IDE host's stdio transport pipe for that session. Antigravity's Language Server host does not automatically respawn killed stdio subprocesses mid-session, causing subsequent MCP tool calls to block waiting for JSON-RPC messages on the dead pipe until hitting the 3-minute client context deadline timeout (`context deadline exceeded`). To update the binary or restart the MCP server, the Antigravity window or session must be reloaded (or reloaded via MCP settings), never forcibly terminated from the terminal.
+On macOS, inspecting process command lines via `sysctl(KERN_PROCARGS2)` yields a binary buffer formatted as:
+`[argc (int32)] [exec_path\0] [null padding bytes] [argv[0]\0] [argv[1]\0] ... [argv[argc-1]\0] [envp[0]\0] ...`
+- The string immediately following `argc` is the kernel-resolved executable path (`exec_path`), *not* `argv[0]`.
+- Null padding bytes align `argv[0]` after `exec_path`.
+- The actual argument strings begin at `argv[0]` and run through `argv[argc - 1]`.
+- Assuming `exec_path` is `argv[0]` and looping only `argc - 1` times drops the final argument (`argv[argc - 1]`, commonly `-projectPath <path>`). Parsers must skip `exec_path` and padding, then read all `argc` null-terminated argument strings.
+
+### Linux `fcntl` vs. .NET `flock` Lock Domain Separation
+
+On Linux:
+- Unity Editor locks `Temp/UnityLockfile` using POSIX `fcntl(fd, F_SETLK, ...)`.
+- .NET `FileStream` with `FileShare.None` uses BSD `flock(fd, LOCK_EX)`.
+- The Linux kernel maintains `fcntl` record locks and `flock` file locks in completely separate, non-interacting lock domains. A held `fcntl` lock does *not* prevent a `.NET` `File.Open(..., FileShare.None)` from succeeding.
+- Consequently, probing `FileShare.None` on Linux returns `false` (not locked) even while Unity is running and holding the lockfile. Deleting `UnityLockfile` on a failed lock probe unlinks Unity's active lockfile while the Editor is running. `UnityLockfile` belongs to Unity and must never be deleted by external hosts.
+
+### macOS Case-Insensitivity in Path Comparisons
+
+Default APFS and HFS+ filesystems on macOS are case-preserving but case-insensitive.
+- In .NET, `RuntimeInformation.IsOSPlatform(OSPlatform.OSX)` returns `true` on macOS.
+- Using `StringComparison.Ordinal` for path equality on macOS causes false-negative matches when paths differ in casing (e.g. `/Users/...` vs `/users/...`, `/Applications/Unity/...` vs `/applications/unity/...`). Both Windows and macOS must use `StringComparison.OrdinalIgnoreCase` for filesystem path equality.
+
+### Symlink Target Resolution in Process Ownership Verification
+
+When Unity is launched via a symlink (e.g. `/usr/local/bin/unity` pointing to `/opt/unity/.../Editor/Unity`):
+- `Path.GetFullPath` does not resolve symlink targets.
+- The operating system (e.g. Linux `/proc/{pid}/exe` or macOS `MainModule.FileName`) reports the resolved canonical binary path.
+- Comparing the raw launch path against the running process executable fails unless symlinks are resolved via `File.ResolveLinkTarget(..., returnFinalTarget: true)`.
+
+### Package Cache Paths (`@`) and Unicode in Compiler Error Regexes
+
+Unity Package Manager downloads packages into `Library/PackageCache/` with version strings containing `@` (e.g., `com.unity.test-framework@1.1.33/`). Additionally, user home directories and project paths frequently contain non-ASCII Unicode characters (e.g., accented characters, Cyrillic, CJK) or `+` (e.g., C++ project directories). Regexes scanning compiler output for file paths must not restrict paths to `[a-zA-Z0-9_./\\ -]+`: doing so silently ignores compilation errors from packages and international paths.
+
+### Windows ProcessStartInfo Trailing Backslash Escaping
+
+Under Win32 command line rules (MSVCRT `CommandLineToArgvW`), a trailing backslash immediately preceding a double quote (`\"`) is treated as an escaped literal quotation mark. If `ProjectRoot` or `LogFile` ends with a trailing backslash, `$"\"{ProjectRoot}\""` creates an unclosed quote that swallows subsequent arguments. All paths passed to `ProcessStartInfo.Arguments` must trim trailing directory separators prior to quoting.
 
 

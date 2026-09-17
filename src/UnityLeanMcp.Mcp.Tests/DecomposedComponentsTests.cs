@@ -43,10 +43,14 @@ public class DecomposedComponentsTests
         var scanner = new UnityLogScanner();
 
         string logWithError = "Random info line\r\nAssets/Scripts/Test.cs(10,5): error CS0103: The name 'x' does not exist in the current context\r\nAnother line";
+        string logWithPackageError = "Library/PackageCache/com.unity.test-framework@1.1.33/Folder/Test.cs(42,10): error CS0246: The type or namespace name could not be found";
+        string logWithUnicodeError = @"C:\Users\José\Projetos\Script.cs(15,20): error CS1002: ; expected";
         string logWithWarningOnly = "Random info line\r\nAssets/Scripts/Test.cs(10,5): warning CS0168: The variable 'x' is declared but never used\r\nAnother line";
         string cleanLog = "Compilation succeeded.\r\nAsset database refreshed.";
 
         Assert.True(scanner.HasCompilationErrors(logWithError));
+        Assert.True(scanner.HasCompilationErrors(logWithPackageError));
+        Assert.True(scanner.HasCompilationErrors(logWithUnicodeError));
         Assert.False(scanner.HasCompilationErrors(logWithWarningOnly));
         Assert.False(scanner.HasCompilationErrors(cleanLog));
         Assert.False(scanner.HasCompilationErrors(""));

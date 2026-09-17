@@ -902,8 +902,12 @@ public class UnityProcessManagerTests
     [Fact]
     public void MacOsCommandLineReader_DoesNotConsumeEnvironmentAfterArgv()
     {
+        // KERN_PROCARGS2 layout:
+        // [exec_path\0] [null-padding] [argv[0]\0] [argv[1]\0] [argv[2]\0] [envp\0]
         byte[] bytes = Encoding.UTF8.GetBytes(
-            "/Applications/Unity.app/Contents/MacOS/Unity\0-projectPath\0/Users/example/Project\0SHOULD_NOT_BE_USED\0");
+            "/Applications/Unity.app/Contents/MacOS/Unity\0\0\0\0" +
+            "/Applications/Unity.app/Contents/MacOS/Unity\0-projectPath\0/Users/example/Project\0" +
+            "SHOULD_NOT_BE_USED=true\0");
 
         Assert.True(
             UnityProcessCommandLineReader.TryBuildMacOsCommandLine(
@@ -914,6 +918,31 @@ public class UnityProcessManagerTests
             "/Applications/Unity.app/Contents/MacOS/Unity\0-projectPath\0/Users/example/Project",
             commandLine);
         Assert.DoesNotContain("SHOULD_NOT_BE_USED", commandLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MacOsCommandLineReader_PreservesAllArgcArgumentsIncludingLast()
+    {
+        // 5 arguments: argv[0..4]
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            "/Applications/Unity.app/Contents/MacOS/Unity\0\0\0\0" +
+            "/Applications/Unity.app/Contents/MacOS/Unity\0-batchmode\0-nographics\0-projectPath\0/Users/example/FinalArgPath\0" +
+            "PATH=/usr/bin\0USER=alice\0");
+
+        Assert.True(
+            UnityProcessCommandLineReader.TryBuildMacOsCommandLine(
+                bytes,
+                argc: 5,
+                out string commandLine));
+
+        string[] args = commandLine.Split('\0');
+        Assert.Equal(5, args.Length);
+        Assert.Equal("/Applications/Unity.app/Contents/MacOS/Unity", args[0]);
+        Assert.Equal("-batchmode", args[1]);
+        Assert.Equal("-nographics", args[2]);
+        Assert.Equal("-projectPath", args[3]);
+        Assert.Equal("/Users/example/FinalArgPath", args[4]);
+        Assert.DoesNotContain("PATH=/usr/bin", commandLine, StringComparison.Ordinal);
     }
 
     [Fact]

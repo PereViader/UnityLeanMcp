@@ -114,16 +114,25 @@ internal static class UnityProcessCommandLineReader
         }
 
         int offset = 0;
+        // KERN_PROCARGS2 layout:
+        // [argc (int)] [exec_path\0] [null-pad] [argv[0]\0] ... [argv[argc-1]\0] [envp[0]\0] ...
         string? executable = ReadNullTerminatedUtf8(bytes, ref offset);
         if (string.IsNullOrEmpty(executable))
         {
             return false;
         }
 
-        var arguments = new StringBuilder(executable);
-        // argv[0] is represented by the executable value above. Consume only
-        // argv[1..argc-1]; the following strings are environment entries.
-        for (int index = 1; index < argc; index++)
+        // Skip null padding between exec_path and argv[0]
+        while (offset < bytes.Length && bytes[offset] == 0)
+        {
+            offset++;
+        }
+
+        var arguments = new StringBuilder();
+        int parsedArgs = 0;
+
+        // Read all argc arguments from argv[0] through argv[argc-1]
+        for (int index = 0; index < argc; index++)
         {
             while (offset < bytes.Length && bytes[offset] == 0)
             {
@@ -136,7 +145,21 @@ internal static class UnityProcessCommandLineReader
                 break;
             }
 
-            arguments.Append('\0').Append(argument);
+            if (arguments.Length > 0)
+            {
+                arguments.Append('\0');
+            }
+
+            arguments.Append(argument);
+            parsedArgs++;
+        }
+
+        // Fallback: if no argv entries were available (e.g. truncated buffer),
+        // use the executable path from the header.
+        if (parsedArgs == 0)
+        {
+            commandLine = executable;
+            return true;
         }
 
         commandLine = arguments.ToString();

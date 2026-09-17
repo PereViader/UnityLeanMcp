@@ -207,34 +207,36 @@ public class UnityProcessManager : IUnityProcessManager
                     }
 
                     // For GUI instances (which do not have a .identity.json record),
-                    // verify the lockfile is actively locked by an OS handle and the process is alive.
-                    if (IsFileLocked(lockFilePath))
+                    // verify the candidate process is alive and is a Unity instance.
+                    try
                     {
-                        try
+                        using var proc = Process.GetProcessById(lockPid);
+                        if (!proc.HasExited && (proc.ProcessName.Contains("Unity", StringComparison.OrdinalIgnoreCase) ||
+                                                proc.ProcessName.Contains("unity-editor", StringComparison.OrdinalIgnoreCase)))
                         {
-                            using var proc = Process.GetProcessById(lockPid);
-                            if (!proc.HasExited && (proc.ProcessName.Contains("Unity", StringComparison.OrdinalIgnoreCase) ||
-                                                    proc.ProcessName.Contains("unity-editor", StringComparison.OrdinalIgnoreCase)))
+                            if (TryGetProcessCommandLine(proc, out string commandLine))
+                            {
+                                if (CommandLineTargetsProject(commandLine))
+                                {
+                                    processId = lockPid;
+                                    return true;
+                                }
+                            }
+                            else if (IsFileLocked(lockFilePath) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                             {
                                 processId = lockPid;
                                 return true;
                             }
                         }
-                        catch { }
                     }
+                    catch { }
                 }
             }
             catch { }
 
             // Check if file is actively locked by an operating system handle
             bool isLocked = IsFileLocked(lockFilePath);
-            if (!isLocked)
-            {
-                // Lockfile exists but is not locked and has no proven live
-                // process. It is safe to remove this stale supporting marker.
-                try { File.Delete(lockFilePath); } catch { }
-            }
-            else
+            if (isLocked)
             {
                 int? projectPid = FindProjectUnityPid();
                 if (projectPid.HasValue)
@@ -742,11 +744,14 @@ public class UnityProcessManager : IUnityProcessManager
             }
         }
 
+        string projectRootArg = _pathResolver.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string logFileArg = _pathResolver.LogFile.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
         var psi = new ProcessStartInfo
         {
             FileName = unityExe,
-            Arguments = $"-batchmode -nographics -projectPath \"{_pathResolver.ProjectRoot}\" -logFile \"{_pathResolver.LogFile}\"",
-            WorkingDirectory = _pathResolver.ProjectRoot,
+            Arguments = $"-batchmode -nographics -projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\"",
+            WorkingDirectory = projectRootArg,
             UseShellExecute = false,
             CreateNoWindow = true
         };

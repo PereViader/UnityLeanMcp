@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace UnityLeanMcp
 {
@@ -186,7 +187,8 @@ namespace UnityLeanMcp
         private static bool PathsEqual(string left, string right)
         {
             StringComparison comparison =
-                Environment.OSVersion.Platform == PlatformID.Win32NT
+                Environment.OSVersion.Platform == PlatformID.Win32NT ||
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
                     ? StringComparison.OrdinalIgnoreCase
                     : StringComparison.Ordinal;
             return string.Equals(

@@ -195,7 +195,8 @@ namespace UnityLeanMcp
 
             string normalizedPath = configPath.Replace('\\', '/');
             string effectiveRootKey = rootKey;
-            if (normalizedPath.EndsWith("/.vscode/mcp.json"))
+            if (normalizedPath.EndsWith("/.vscode/mcp.json", StringComparison.OrdinalIgnoreCase) ||
+                normalizedPath.Equals(".vscode/mcp.json", StringComparison.OrdinalIgnoreCase))
             {
                 effectiveRootKey = "servers";
             }

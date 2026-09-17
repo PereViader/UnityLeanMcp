@@ -77,6 +77,40 @@ public sealed class UnityProcessIdentityStoreTests
         }
     }
 
+    [Fact]
+    public void Matches_WithCasingDifferenceOnCaseInsensitiveOS_MatchesSuccessfully()
+    {
+        string projectRoot = CreateProjectRoot();
+        using Process process = Process.GetCurrentProcess();
+        string executablePath = process.MainModule?.FileName ?? throw new InvalidOperationException();
+        var store = CreateStore(projectRoot);
+
+        try
+        {
+            store.Write(process, executablePath, projectRoot);
+            Assert.True(store.TryRead(out UnityProcessIdentityRecord identity));
+
+            var casedIdentity = new UnityProcessIdentityRecord
+            {
+                ProcessId = identity.ProcessId,
+                StartTimeUtcTicks = identity.StartTimeUtcTicks,
+                ExecutablePath = identity.ExecutablePath.ToUpperInvariant(),
+                ProjectRoot = identity.ProjectRoot.ToUpperInvariant()
+            };
+
+            bool matches = store.Matches(process, casedIdentity, projectRoot);
+            if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows) ||
+                System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                Assert.True(matches);
+            }
+        }
+        finally
+        {
+            DeleteProjectRoot(projectRoot);
+        }
+    }
+
     private static FileUnityProcessIdentityStore CreateStore(string projectRoot) =>
         new(Path.Combine(projectRoot, "Temp", "unity_lean_mcp_process.pid"));
 

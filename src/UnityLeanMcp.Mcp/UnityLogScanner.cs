@@ -15,11 +15,11 @@ public interface IUnityLogScanner
 public class UnityLogScanner : IUnityLogScanner
 {
     private static readonly Regex s_CompileErrorRegex = new(
-        @"^([a-zA-Z]:)?[a-zA-Z0-9_./\\ -]+\([0-9]+,[0-9]+\): error [a-zA-Z0-9]+:",
+        @"^.+?\([0-9]+,[0-9]+\):\s*error\s+[a-zA-Z0-9]+:",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     private static readonly Regex s_CompileDiagRegex = new(
-        @"^([a-zA-Z]:)?[a-zA-Z0-9_./\\ -]+\([0-9]+,[0-9]+\): (error|warning) [a-zA-Z0-9]+:.*$",
+        @"^.+?\([0-9]+,[0-9]+\):\s*(error|warning)\s+[a-zA-Z0-9]+:.*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     public static Regex CompileErrorRegex => s_CompileErrorRegex;

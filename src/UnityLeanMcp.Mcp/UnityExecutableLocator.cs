@@ -312,6 +312,7 @@ public class UnityExecutableLocator : IUnityExecutableLocator
             if (!string.IsNullOrWhiteSpace(home))
             {
                 paths.Add(Path.Combine(home, "Unity", "Hub", "Editor", version, "Editor", "Unity"));
+                paths.Add(Path.Combine(home, ".local", "share", "unity3d", "Hub", "Editor", version, "Editor", "Unity"));
             }
             paths.Add($"/opt/unity/Editor/{version}/Editor/Unity");
             paths.Add($"/opt/Unity/Editor/{version}/Editor/Unity");

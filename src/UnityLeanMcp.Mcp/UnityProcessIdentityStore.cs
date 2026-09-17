@@ -70,11 +70,13 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
                 $"Could not read the start time for Unity process {process.Id}; durable startup ownership cannot be recorded.");
         }
 
+        string fullExecutablePath = Path.GetFullPath(executablePath);
+        string resolvedExecutablePath = TryResolveFinalTarget(fullExecutablePath) ?? fullExecutablePath;
         var identity = new UnityProcessIdentityRecord
         {
             ProcessId = process.Id,
             StartTimeUtcTicks = startTimeTicks,
-            ExecutablePath = Path.GetFullPath(executablePath),
+            ExecutablePath = resolvedExecutablePath,
             ProjectRoot = projectRoot
         };
 
@@ -287,17 +289,46 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
 
         try
         {
-            StringComparison comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            StringComparison comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ||
+                                          RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal;
-            return string.Equals(
-                Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                comparison);
+
+            string fullLeft = Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string fullRight = Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            if (string.Equals(fullLeft, fullRight, comparison))
+            {
+                return true;
+            }
+
+            string resolvedLeft = TryResolveFinalTarget(fullLeft) ?? fullLeft;
+            string resolvedRight = TryResolveFinalTarget(fullRight) ?? fullRight;
+            return string.Equals(resolvedLeft, resolvedRight, comparison);
         }
         catch
         {
             return false;
         }
+    }
+
+    private static string? TryResolveFinalTarget(string path)
+    {
+        try
+        {
+            if (File.Exists(path) || Directory.Exists(path))
+            {
+                var target = File.ResolveLinkTarget(path, returnFinalTarget: true);
+                if (target != null && !string.IsNullOrWhiteSpace(target.FullName))
+                {
+                    return target.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 }
