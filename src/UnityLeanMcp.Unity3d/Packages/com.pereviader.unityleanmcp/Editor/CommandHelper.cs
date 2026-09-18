@@ -114,5 +114,35 @@ namespace UnityLeanMcp
                 return reader.ReadToEnd();
             }
         }
+
+        public static bool DeleteFileWithRetry(string path, int maxRetries = 5, int delayMs = 10)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return true;
+            for (int i = 0; i < maxRetries; i++)
+            {
+                try
+                {
+                    File.Delete(path);
+                    return true;
+                }
+                catch (IOException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+                catch (UnauthorizedAccessException) when (i < maxRetries - 1)
+                {
+                    Thread.Sleep(delayMs);
+                }
+            }
+            try
+            {
+                File.Delete(path);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
     }
 }

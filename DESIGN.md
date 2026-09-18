@@ -59,7 +59,7 @@ The client must cancel an operation even when its caller token is canceled after
 
 ### Resilient Inter-Process File I/O Retries
 Files accessed across process boundaries (such as PID files, port discovery files, operation journals, lockfiles, and Editor logs) are subject to transient filesystem contention, atomic replacements, and external scanner interference:
-- File read and write retry helpers (`ReadFileWithRetry`, `WriteAtomic`) must catch both `IOException` and `UnauthorizedAccessException` across intermediate retry attempts.
+- File read, write, and delete retry helpers (`ReadFileWithRetry`, `WriteAtomic`, `DeleteFileWithRetry`) must catch both `IOException` and `UnauthorizedAccessException` across intermediate retry attempts.
 - On Windows NTFS, file access contention frequently manifests as Win32 `ERROR_ACCESS_DENIED` (surfaced as `UnauthorizedAccessException`) rather than `ERROR_SHARING_VIOLATION` (surfaced as `IOException`). Treating both exceptions as transient retry conditions ensures deterministic inter-process communication across platforms.
 
 ### Hierarchical Polling Precedence & IDLE Race Prevention

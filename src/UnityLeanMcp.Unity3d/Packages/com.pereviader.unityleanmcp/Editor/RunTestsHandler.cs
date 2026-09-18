@@ -40,27 +40,42 @@ namespace UnityLeanMcp
             }
         }
 
-        internal static void MarkTransportInterruption(string status)
+        private static bool TryUpdateRunningState(string runId, Action<UnityTestRunState> update, string actionDesc)
         {
-            var state = ReadRunningState();
-            if (state == null || string.IsNullOrEmpty(state.runId) || !UnityLeanMcpOperationStore.IsOwnedBy(state.runId, OperationKinds.Test))
-            {
-                return;
-            }
+            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+                return false;
 
-            state.status = status;
+            var state = ReadRunningState();
+            if (state == null || state.runId != runId)
+                return false;
+
+            update(state);
             lock (s_RunStateLock)
             {
                 s_CachedRunState = state;
             }
+
             try
             {
-                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), state.runId);
+                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
+                return true;
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"UnityLeanMcp: Failed to mark test run interruption: {ex.Message}");
+                Debug.LogWarning($"UnityLeanMcp: Failed to {actionDesc}: {ex.Message}");
+                return false;
             }
+        }
+
+        internal static void MarkTransportInterruption(string status)
+        {
+            var state = ReadRunningState();
+            if (state == null || string.IsNullOrEmpty(state.runId))
+            {
+                return;
+            }
+
+            TryUpdateRunningState(state.runId, s => s.status = status, "mark test run interruption");
         }
 
         public static void RegisterCallbacks()
@@ -387,6 +402,8 @@ namespace UnityLeanMcp
             }
         }
 
+        private static string[] NonEmptyOrNull(string[] array) => array != null && array.Length > 0 ? array : null;
+
         private static void RunTests(TestMode mode, RunTestsArgs args, string runId, string[] explicitTestNames = null)
         {
             try
@@ -396,17 +413,15 @@ namespace UnityLeanMcp
                     RegisterCallbacks();
                 }
 
-                string[] effectiveTestNames = explicitTestNames != null && explicitTestNames.Length > 0
-                    ? explicitTestNames
-                    : (args.testNames != null && args.testNames.Length > 0 ? args.testNames : null);
+                string[] effectiveTestNames = NonEmptyOrNull(explicitTestNames) ?? NonEmptyOrNull(args.testNames);
 
                 var filter = new Filter
                 {
                     testMode = mode,
                     testNames = effectiveTestNames,
-                    groupNames = args.groupNames != null && args.groupNames.Length > 0 ? args.groupNames : null,
-                    categoryNames = args.categoryNames != null && args.categoryNames.Length > 0 ? args.categoryNames : null,
-                    assemblyNames = args.assemblyNames != null && args.assemblyNames.Length > 0 ? args.assemblyNames : null
+                    groupNames = NonEmptyOrNull(args.groupNames),
+                    categoryNames = NonEmptyOrNull(args.categoryNames),
+                    assemblyNames = NonEmptyOrNull(args.assemblyNames)
                 };
 
                 UpdateTestRunStatus(runId, OperationStatus.Running);
@@ -498,71 +513,27 @@ namespace UnityLeanMcp
 
         internal static void UpdateTestRunStatus(string runId, string status)
         {
-            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
-            {
-                return;
-            }
-
-            var state = ReadRunningState();
-            if (state == null || state.runId != runId)
-            {
-                return;
-            }
-
-            state.status = status;
-            lock (s_RunStateLock)
-            {
-                s_CachedRunState = state;
-            }
-            try
-            {
-                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"UnityLeanMcp: Failed to update test run state: {ex.Message}");
-            }
+            TryUpdateRunningState(runId, s => s.status = status, "update test run state");
         }
 
         internal static void UpdateTestRunProgress(string runId, int totalTests, int completedTests, int passCount, int failCount, int skipCount, string currentTestName, string status = null)
         {
-            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            TryUpdateRunningState(runId, s =>
             {
-                return;
-            }
-
-            var state = ReadRunningState();
-            if (state == null || state.runId != runId)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(status))
-            {
-                state.status = status;
-            }
-            state.totalTests = totalTests;
-            state.completedTests = completedTests;
-            state.passCount = passCount;
-            state.failCount = failCount;
-            state.skipCount = skipCount;
-            if (currentTestName != null)
-            {
-                state.currentTestName = currentTestName;
-            }
-            lock (s_RunStateLock)
-            {
-                s_CachedRunState = state;
-            }
-
-            try
-            {
-                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"UnityLeanMcp: Failed to update test run progress: {ex.Message}");
-            }
+                if (!string.IsNullOrEmpty(status))
+                {
+                    s.status = status;
+                }
+                s.totalTests = totalTests;
+                s.completedTests = completedTests;
+                s.passCount = passCount;
+                s.failCount = failCount;
+                s.skipCount = skipCount;
+                if (currentTestName != null)
+                {
+                    s.currentTestName = currentTestName;
+                }
+            }, "update test run progress");
         }
 
 
@@ -762,27 +733,7 @@ namespace UnityLeanMcp
 
         private static void UpdateTestRunJobGuid(string runId, string jobGuid)
         {
-            var state = ReadRunningState();
-            if (state == null || state.runId != runId ||
-                !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
-            {
-                return;
-            }
-
-            state.jobGuid = jobGuid;
-            lock (s_RunStateLock)
-            {
-                s_CachedRunState = state;
-            }
-
-            try
-            {
-                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"UnityLeanMcp: Failed to persist test job identity: {ex.Message}");
-            }
+            TryUpdateRunningState(runId, s => s.jobGuid = jobGuid, "persist test job identity");
         }
 
         private static void BeginCancellationMonitoring(string runId)
@@ -880,29 +831,7 @@ namespace UnityLeanMcp
                         }
                     }
 
-                    if (File.Exists(RunningFilePath))
-                    {
-                        for (int i = 0; i < 5; i++)
-                        {
-                            try
-                            {
-                                if (File.Exists(RunningFilePath))
-                                {
-                                    File.Delete(RunningFilePath);
-                                }
-                                break;
-                            }
-                            catch (IOException) when (i < 4)
-                            {
-                                System.Threading.Thread.Sleep(10);
-                            }
-                            catch (UnauthorizedAccessException) when (i < 4)
-                            {
-                                System.Threading.Thread.Sleep(10);
-                            }
-                        }
-                    }
-                    return true;
+                    return CommandHelper.DeleteFileWithRetry(RunningFilePath);
                 }
                 return false;
             }
