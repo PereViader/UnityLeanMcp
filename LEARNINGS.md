@@ -417,3 +417,7 @@ Scanning the OS process table (`Process.GetProcessesByName`) on every 500ms tick
 ### Relative `-projectPath` Arguments in Process Command Lines
 
 When Unity is launched via scripts or terminal commands, `-projectPath` is often passed as a relative path (such as `.`, `./`, or relative directory names) rather than an absolute path. Substring or boundary matching against an absolute `ProjectRoot` fails unless the argument tokenizer explicitly extracts `-projectPath <arg>` and `-projectPath=<arg>` and resolves the path relative to the process's working directory or canonical full path.
+
+### Unity Project Root Cleanliness & Batchmode Log Placement
+
+When auto-starting Unity in batchmode (`-batchmode -nographics -projectPath ... -logFile ...`), configuring `-logFile` to point to a file directly under `ProjectRoot` (such as `unity_background_log.txt`) pollutes the repository root, creating git status noise and risking accidental commits. Placing `-logFile` under Unity's `Temp/` directory (`Temp/unity_background_log.txt`) ensures it resides in Unity's standard transient directory alongside all other UnityLeanMcp IPC and marker files, where it is automatically ignored by standard Unity `.gitignore` rules (`[Tt]emp/`) and safely wiped by Unity lifecycle cleans.

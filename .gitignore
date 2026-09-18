@@ -113,9 +113,6 @@ ServerData/
 # Auto-generated cache in Assets folder
 [Aa]ssets/[Ss]ceneDependencyCache*
 
-# UnityLeanMcp background log
-unity_background_log.txt
-
 # Non-portable MCP configuration files (contain user/machine-specific absolute paths)
 .agents/plugins/*/mcp_config.json
 .cursor/mcp.json

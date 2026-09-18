@@ -372,7 +372,7 @@ public class UnityProcessManagerTests
 
             // Write historical compilation error to unity_background_log.txt
             string historicalErrorLog = "Assets/Scripts/Broken.cs(10,5): error CS0103: The name 'foo' does not exist in the current context\n";
-            await File.WriteAllTextAsync(Path.Combine(tempDir, "unity_background_log.txt"), historicalErrorLog);
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_background_log.txt"), historicalErrorLog);
 
             var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
             {
@@ -464,7 +464,7 @@ public class UnityProcessManagerTests
 
             // Write historical compilation error to unity_background_log.txt
             string historicalErrorLog = "Assets/Scripts/Broken.cs(10,5): error CS0103: The name 'foo' does not exist in the current context\n";
-            await File.WriteAllTextAsync(Path.Combine(tempDir, "unity_background_log.txt"), historicalErrorLog);
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_background_log.txt"), historicalErrorLog);
 
             var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
             {
@@ -527,7 +527,7 @@ public class UnityProcessManagerTests
             await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
 
             // Write historical error BEFORE offset
-            string logFile = Path.Combine(tempDir, "unity_background_log.txt");
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
             await File.WriteAllTextAsync(logFile, "Assets/Scripts/OldBroken.cs(10,5): error CS0103: The name 'old' does not exist\n");
             long initialOffset = new FileInfo(logFile).Length;
 
@@ -558,7 +558,7 @@ public class UnityProcessManagerTests
 
         try
         {
-            string logFile = Path.Combine(tempDir, "unity_background_log.txt");
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
             await File.WriteAllTextAsync(logFile, "Some clean startup log line\n");
             long initialOffset = new FileInfo(logFile).Length;
 
@@ -1231,7 +1231,7 @@ public class UnityProcessManagerTests
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_operation.json"), resolver.OperationFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_compilation_errors.txt"), resolver.CompilationErrorsFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_port.txt"), resolver.PortFile);
-        Assert.Equal(Path.Combine(resolver.ProjectRoot, "unity_background_log.txt"), resolver.LogFile);
+        Assert.Equal(Path.Combine(resolver.TempDir, "unity_background_log.txt"), resolver.LogFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_process.pid"), resolver.PidFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_startup.lock"), resolver.StartupLockFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_refresh_result.json"), resolver.GetResultFilePath(UnityOperationKind.Refresh));

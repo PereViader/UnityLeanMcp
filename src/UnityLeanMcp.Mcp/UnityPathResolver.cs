@@ -10,7 +10,7 @@ public class UnityPathResolver : IUnityPathResolver
     public string OperationFile => Path.Combine(TempDir, "unity_lean_mcp_operation.json");
     public string CompilationErrorsFile => Path.Combine(TempDir, "unity_compilation_errors.txt");
     public string PortFile => Path.Combine(TempDir, "unity_lean_mcp_port.txt");
-    public string LogFile => Path.Combine(ProjectRoot, "unity_background_log.txt");
+    public string LogFile => Path.Combine(TempDir, "unity_background_log.txt");
     public string PidFile => Path.Combine(TempDir, "unity_lean_mcp_process.pid");
     public string StartupLockFile => Path.Combine(TempDir, "unity_lean_mcp_startup.lock");
     public string TestRunningFile => Path.Combine(TempDir, "unity_test_running.txt");
