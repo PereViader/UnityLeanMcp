@@ -109,6 +109,27 @@ namespace UnityLeanMcp
         public static string GetTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
 
+        public static string GetResultFilePath(string kind, string operationId = null)
+        {
+            if (string.Equals(kind, OperationKinds.Refresh, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(kind, OperationKinds.Recompile, StringComparison.OrdinalIgnoreCase))
+            {
+                return GetRefreshResultFile(operationId);
+            }
+
+            if (string.Equals(kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
+            {
+                return GetTestResultsFile(operationId);
+            }
+
+            if (string.Equals(kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
+            {
+                return GetEvalResultFile(operationId);
+            }
+
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, $"Unknown operation kind: {kind}");
+        }
+
         public static string LogFile
         {
             get

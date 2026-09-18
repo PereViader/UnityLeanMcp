@@ -278,32 +278,7 @@ namespace UnityLeanMcp
                     return FileReadStatus.Unavailable;
                 }
             }
-
-            try
-            {
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream, Encoding.UTF8))
-                {
-                    content = reader.ReadToEnd();
-                    return FileReadStatus.Success;
-                }
-            }
-            catch (FileNotFoundException)
-            {
-                return FileReadStatus.Missing;
-            }
-            catch (DirectoryNotFoundException)
-            {
-                return FileReadStatus.Missing;
-            }
-            catch (IOException)
-            {
-                return FileReadStatus.Unavailable;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return FileReadStatus.Unavailable;
-            }
+            return FileReadStatus.Unavailable;
         }
 
         internal static bool TryReadTestCancellationRequest(string path, string runId)

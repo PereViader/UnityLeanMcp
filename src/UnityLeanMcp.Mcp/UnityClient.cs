@@ -557,13 +557,23 @@ public class UnityClient : IUnityClient
             commandFactory: opId => $"EVAL {opId} {escapedCode}",
             resultFilePathFactory: opId => _pathResolver.GetResultFilePath(UnityOperationKind.Eval, opId),
             resultMatcher: (r, opId) => r.OperationId == opId,
-            pollExecutor: (opId, resultFile, ct) => PollOperationResultAsync<UnityEvalResult>(
-                opId: opId,
-                kind: "eval",
-                operationDisplayName: "evaluation",
-                resultFilePath: resultFile,
-                pollCommand: $"POLL_EVAL {opId}",
-                cancellationToken: ct),
+            pollExecutor: (opId, resultFile, ct) =>
+            {
+                var spec = new OperationPollingSpec<UnityEvalResult>
+                {
+                    OperationId = opId,
+                    Kind = "eval",
+                    OperationDisplayName = "Eval",
+                    ResultFilePath = resultFile,
+                    IsMatch = r => r.OperationId == opId,
+                    PollCommand = $"POLL_EVAL {opId}",
+                    PollTimeoutSeconds = 5,
+                    PollIntervalMs = 500,
+                    RequireDurableResult = true
+                };
+
+                return _operationPoller.PollOperationUntilTerminalAsync(spec, ct);
+            },
             progress: progress,
             initialProgressMessage: null,
             onImmediateResult: null,
@@ -737,24 +747,6 @@ public class UnityClient : IUnityClient
         OperationPollingSpec<TResult> spec,
         CancellationToken cancellationToken) where TResult : class, IOperationResult, new() =>
         _operationPoller.PollOperationUntilTerminalAsync(spec, cancellationToken);
-
-    private Task<TResult> PollOperationResultAsync<TResult>(
-        string opId,
-        string kind,
-        string operationDisplayName,
-        string resultFilePath,
-        string pollCommand,
-        Func<TResult, TResult>? onResultFound = null,
-        CancellationToken cancellationToken = default) where TResult : UnityOperationResult, new() =>
-        _operationPoller.PollOperationResultAsync(
-            opId,
-            kind,
-            operationDisplayName,
-            resultFilePath,
-            pollCommand,
-            PollIntervalMs,
-            onResultFound,
-            cancellationToken);
 
     private async Task<TResult> DispatchMutatingCommandAsync<TResult>(
         string operationKind,

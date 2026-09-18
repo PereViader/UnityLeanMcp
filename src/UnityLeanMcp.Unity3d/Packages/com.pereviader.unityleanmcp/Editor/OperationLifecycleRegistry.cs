@@ -29,8 +29,8 @@ namespace UnityLeanMcp
         {
             RegisterDefault(new TestLifecycleHandler());
             RegisterDefault(new EvalLifecycleHandler());
-            RegisterDefault(new RefreshLifecycleHandler());
-            RegisterDefault(new RecompileLifecycleHandler());
+            RegisterDefault(new CompilationLifecycleHandler(OperationKinds.Refresh));
+            RegisterDefault(new CompilationLifecycleHandler(OperationKinds.Recompile));
         }
 
         private static void RegisterDefault(IOperationLifecycleHandler handler)
@@ -175,34 +175,14 @@ namespace UnityLeanMcp
         }
     }
 
-    internal class RefreshLifecycleHandler : IOperationLifecycleHandler
+    internal class CompilationLifecycleHandler : IOperationLifecycleHandler
     {
-        public string OperationKind => OperationKinds.Refresh;
+        public string OperationKind { get; }
 
-        public OperationCancelResult TryCancel(string operationId)
+        public CompilationLifecycleHandler(string operationKind)
         {
-            return OperationCancelResult.NotCancelable;
+            OperationKind = operationKind;
         }
-
-        public void OnEditorRestarted(string operationId, string message)
-        {
-            UnityLeanMcpCompilationTracker.WriteInterruptedRefreshResult(operationId, message);
-        }
-
-        public void OnDomainReloaded(string operationId, string message)
-        {
-            UnityLeanMcpCompilationTracker.ObserveOperationUntilSettled();
-        }
-
-        public void OnEditorQuitting(string operationId)
-        {
-            UnityLeanMcpCompilationTracker.WriteInterruptedRefreshResult(operationId, "Command interrupted by Unity editor shutdown.");
-        }
-    }
-
-    internal class RecompileLifecycleHandler : IOperationLifecycleHandler
-    {
-        public string OperationKind => OperationKinds.Recompile;
 
         public OperationCancelResult TryCancel(string operationId)
         {

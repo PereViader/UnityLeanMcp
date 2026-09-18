@@ -77,17 +77,6 @@ internal sealed class RecordingOperationPoller : IOperationPoller
         return await Task.FromException<TResult>(new InvalidOperationException("Polling should not begin."));
     }
 
-    public Task<TResult> PollOperationResultAsync<TResult>(
-        string opId,
-        string kind,
-        string operationDisplayName,
-        string resultFilePath,
-        string pollCommand,
-        int pollIntervalMs = 500,
-        Func<TResult, TResult>? onResultFound = null,
-        CancellationToken cancellationToken = default) where TResult : UnityOperationResult, new() =>
-        Task.FromException<TResult>(new InvalidOperationException("Polling should not begin."));
-
     public Task CancelOperationAsync(string opId, string kind)
     {
         CancellationCount++;

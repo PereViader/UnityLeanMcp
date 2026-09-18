@@ -45,16 +45,6 @@ public interface IOperationPoller
         OperationPollingSpec<TResult> spec,
         CancellationToken cancellationToken) where TResult : class, IOperationResult, new();
 
-    Task<TResult> PollOperationResultAsync<TResult>(
-        string opId,
-        string kind,
-        string operationDisplayName,
-        string resultFilePath,
-        string pollCommand,
-        int pollIntervalMs = 500,
-        Func<TResult, TResult>? onResultFound = null,
-        CancellationToken cancellationToken = default) where TResult : UnityOperationResult, new();
-
     Task CancelOperationAsync(string opId, string kind);
 }
 
@@ -255,33 +245,6 @@ public class OperationPoller : IOperationPoller
             }
             throw;
         }
-    }
-
-    public Task<TResult> PollOperationResultAsync<TResult>(
-        string opId,
-        string kind,
-        string operationDisplayName,
-        string resultFilePath,
-        string pollCommand,
-        int pollIntervalMs = 500,
-        Func<TResult, TResult>? onResultFound = null,
-        CancellationToken cancellationToken = default) where TResult : UnityOperationResult, new()
-    {
-        var spec = new OperationPollingSpec<TResult>
-        {
-            OperationId = opId,
-            Kind = kind,
-            OperationDisplayName = operationDisplayName,
-            ResultFilePath = resultFilePath,
-            IsMatch = r => r.OperationId == opId,
-            PollCommand = pollCommand,
-            PollTimeoutSeconds = 5,
-            PollIntervalMs = pollIntervalMs,
-            RequireDurableResult = true,
-            OnResultFound = onResultFound
-        };
-
-        return PollOperationUntilTerminalAsync(spec, cancellationToken);
     }
 
     private static async Task<TResult?> ResolveTerminalStateAsync<TResult>(
