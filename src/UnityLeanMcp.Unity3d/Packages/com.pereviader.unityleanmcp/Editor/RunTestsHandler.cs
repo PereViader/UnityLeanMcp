@@ -26,12 +26,6 @@ namespace UnityLeanMcp
         private static string s_CancellationMonitorRunId;
         private static bool s_CancellationMonitorRegistered;
 
-        internal static string TempDirectory => UnityLeanMcpPaths.TempDir;
-        internal static string RunningFilePath => UnityLeanMcpPaths.TestRunningFile;
-        internal static string CancellationFilePath => UnityLeanMcpPaths.TestCancellationFile;
-        internal static string ResultsFilePath => UnityLeanMcpPaths.TestResultsFile;
-        internal static string GetResultsFilePath(string runId) => UnityLeanMcpPaths.GetTestResultsFile(runId);
-
         internal static void ClearCachedRunState()
         {
             lock (s_RunStateLock)
@@ -57,7 +51,7 @@ namespace UnityLeanMcp
 
             try
             {
-                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
+                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
                 return true;
             }
             catch (Exception ex)
@@ -238,7 +232,7 @@ namespace UnityLeanMcp
                             resultState = "Passed",
                             failedTests = new List<FailedTestInfo>()
                         };
-                        WriteAtomic(GetResultsFilePath(operationId), JsonUtility.ToJson(emptyResult, true), operationId);
+                        UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(operationId), JsonUtility.ToJson(emptyResult, true), operationId);
                         UnityLeanMcpOperationStore.Complete(operationId);
                         writer.WriteLine("SUCCESS No previously failed tests found.");
                         writer.Flush();
@@ -315,13 +309,13 @@ namespace UnityLeanMcp
 
         private static List<string> GetPreviouslyFailedTestNames()
         {
-            var failedNames = new List<string>();
+            var failedNames = new HashSet<string>(StringComparer.Ordinal);
             try
             {
-                string path = ResultsFilePath;
-                if (!File.Exists(path) && Directory.Exists(TempDirectory))
+                string path = UnityLeanMcpPaths.TestResultsFile;
+                if (!File.Exists(path) && Directory.Exists(UnityLeanMcpPaths.TempDir))
                 {
-                    var files = new DirectoryInfo(TempDirectory).GetFiles("unity_test_*.json");
+                    var files = new DirectoryInfo(UnityLeanMcpPaths.TempDir).GetFiles("unity_test_*.json");
                     if (files.Length > 0)
                     {
                         Array.Sort(files, (a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
@@ -338,7 +332,7 @@ namespace UnityLeanMcp
                         foreach (var fail in result.failedTests)
                         {
                             string name = !string.IsNullOrEmpty(fail.fullName) ? fail.fullName : fail.name;
-                            if (!string.IsNullOrEmpty(name) && !failedNames.Contains(name))
+                            if (!string.IsNullOrEmpty(name))
                             {
                                 failedNames.Add(name);
                             }
@@ -350,7 +344,7 @@ namespace UnityLeanMcp
             {
                 Debug.LogWarning($"UnityLeanMcp: Failed to read previous test results: {ex.Message}");
             }
-            return failedNames;
+            return new List<string>(failedNames);
         }
 
         private static string WriteTestRunningState(string runId, TestMode mode, RunTestsArgs args)
@@ -362,9 +356,9 @@ namespace UnityLeanMcp
 
             try
             {
-                if (!Directory.Exists(TempDirectory))
+                if (!Directory.Exists(UnityLeanMcpPaths.TempDir))
                 {
-                    Directory.CreateDirectory(TempDirectory);
+                    Directory.CreateDirectory(UnityLeanMcpPaths.TempDir);
                 }
 
                 var state = new UnityTestRunState
@@ -388,7 +382,7 @@ namespace UnityLeanMcp
                 {
                     s_CachedRunState = state;
                 }
-                WriteAtomic(RunningFilePath, JsonUtility.ToJson(state, true), runId);
+                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
                 return runId;
             }
             catch (Exception ex)
@@ -466,12 +460,12 @@ namespace UnityLeanMcp
             }
             try
             {
-                if (!File.Exists(RunningFilePath))
+                if (!File.Exists(UnityLeanMcpPaths.TestRunningFile))
                 {
                     return null;
                 }
 
-                string text = CommandHelper.ReadFileWithRetry(RunningFilePath, maxRetries: 3, delayMs: 10);
+                string text = CommandHelper.ReadFileWithRetry(UnityLeanMcpPaths.TestRunningFile, maxRetries: 3, delayMs: 10);
                 if (string.IsNullOrEmpty(text))
                 {
                     return null;
@@ -557,7 +551,7 @@ namespace UnityLeanMcp
 
             try
             {
-                WriteAtomic(GetResultsFilePath(runId), JsonUtility.ToJson(result, true), runId);
+                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(runId), JsonUtility.ToJson(result, true), runId);
                 CleanupTestRun(runId);
             }
             catch (Exception ex)
@@ -611,7 +605,7 @@ namespace UnityLeanMcp
             // 1. If neither operation store nor running state is active
             if (operation == null && runningState == null)
             {
-                string resPath = GetResultsFilePath(operationId);
+                string resPath = UnityLeanMcpPaths.GetTestResultsFile(operationId);
                 if (!string.IsNullOrEmpty(operationId) && File.Exists(resPath))
                 {
                     try
@@ -645,7 +639,7 @@ namespace UnityLeanMcp
                 activeRunId = runningState?.RunId ?? operation?.OperationId;
             }
 
-            if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(CancellationFilePath, activeRunId))
+            if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, activeRunId))
             {
                 return OperationCancelResult.NotCancelable;
             }
@@ -681,7 +675,7 @@ namespace UnityLeanMcp
 
             try
             {
-                WriteAtomic(GetResultsFilePath(runId), JsonUtility.ToJson(result, true), runId);
+                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(runId), JsonUtility.ToJson(result, true), runId);
                 CleanupTestRun(runId);
             }
             catch (Exception ex)
@@ -706,7 +700,7 @@ namespace UnityLeanMcp
 
         private static void PrepareCancellationRequest(string runId)
         {
-            string path = CancellationFilePath;
+            string path = UnityLeanMcpPaths.TestCancellationFile;
             if (!File.Exists(path))
             {
                 return;
@@ -728,7 +722,7 @@ namespace UnityLeanMcp
 
             var state = ReadRunningState();
             return (state != null && state.runId == runId && state.status == OperationStatus.Cancelling) ||
-                WorkerThreadSnapshots.TryReadTestCancellationRequest(CancellationFilePath, runId);
+                WorkerThreadSnapshots.TryReadTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId);
         }
 
         private static void UpdateTestRunJobGuid(string runId, string jobGuid)
@@ -783,12 +777,12 @@ namespace UnityLeanMcp
         internal static void ClearCancellationRequest(string runId)
         {
             if (string.IsNullOrEmpty(runId) ||
-                !WorkerThreadSnapshots.TryReadTestCancellationRequest(CancellationFilePath, runId))
+                !WorkerThreadSnapshots.TryReadTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId))
             {
                 return;
             }
 
-            try { File.Delete(CancellationFilePath); } catch { }
+            try { File.Delete(UnityLeanMcpPaths.TestCancellationFile); } catch { }
         }
 
         internal static void StopCancellationMonitoring(string runId)
@@ -831,7 +825,7 @@ namespace UnityLeanMcp
                         }
                     }
 
-                    return CommandHelper.DeleteFileWithRetry(RunningFilePath);
+                    return CommandHelper.DeleteFileWithRetry(UnityLeanMcpPaths.TestRunningFile);
                 }
                 return false;
             }
@@ -840,16 +834,6 @@ namespace UnityLeanMcp
                 Debug.LogWarning($"UnityLeanMcp: Failed to delete running state: {ex.Message}");
                 return false;
             }
-        }
-
-        internal static void WriteAtomic(string path, string content, string runId)
-        {
-            UnityLeanMcpOperationStore.WriteAtomic(path, content, runId);
-        }
-
-        internal static bool TryWriteStaticHistory(string path, string content, string runId)
-        {
-            return UnityLeanMcpOperationStore.TryWriteStaticHistory(path, content, runId);
         }
     }
 }

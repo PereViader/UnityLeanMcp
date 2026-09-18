@@ -18,7 +18,7 @@ namespace UnityLeanMcp
         private int m_SkipCount = 0;
         private string m_CurrentTestName = "";
 
-        public bool IsRunning => m_IsRunning || File.Exists(RunTestsHandler.RunningFilePath);
+        public bool IsRunning => m_IsRunning || File.Exists(UnityLeanMcpPaths.TestRunningFile);
 
         internal void Reset()
         {
@@ -135,10 +135,10 @@ namespace UnityLeanMcp
             string runId = null;
             try
             {
-                string runningPath = RunTestsHandler.RunningFilePath;
+                string runningPath = UnityLeanMcpPaths.TestRunningFile;
                 var state = RunTestsHandler.ReadRunningState();
                 runId = m_RunId ?? state?.runId;
-                string resultsPath = RunTestsHandler.GetResultsFilePath(runId);
+                string resultsPath = UnityLeanMcpPaths.GetTestResultsFile(runId);
 
                 if (state == null || string.IsNullOrEmpty(runId) || state.runId != runId ||
                     !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
@@ -182,9 +182,9 @@ namespace UnityLeanMcp
                 };
 
                 string json = JsonUtility.ToJson(runResult, true);
-                RunTestsHandler.WriteAtomic(resultsPath, json, runResult.runId);
-                RunTestsHandler.TryWriteStaticHistory(
-                    RunTestsHandler.ResultsFilePath,
+                UnityLeanMcpOperationStore.WriteAtomic(resultsPath, json, runResult.runId);
+                UnityLeanMcpOperationStore.TryWriteStaticHistory(
+                    UnityLeanMcpPaths.TestResultsFile,
                     json,
                     runResult.runId);
                 RunTestsHandler.CleanupTestRun(runResult.runId);

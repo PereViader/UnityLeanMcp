@@ -52,6 +52,51 @@ namespace UnityLeanMcp
         private static bool s_Initialized;
         private static readonly object s_InitLock = new object();
 
+        private static Type s_LogEntriesType;
+        private static Type s_LogEntryType;
+        private static MethodInfo s_GetCountMethod;
+        private static MethodInfo s_GetEntryInternalMethod;
+        private static MethodInfo s_StartGettingEntriesMethod;
+        private static MethodInfo s_EndGettingEntriesMethod;
+        private static MethodInfo s_ClearMethod;
+        private static FieldInfo s_ConditionField;
+        private static FieldInfo s_ErrorNumField;
+        private static FieldInfo s_FileField;
+        private static FieldInfo s_LineField;
+        private static FieldInfo s_ColumnField;
+        private static FieldInfo s_ModeField;
+        private static bool s_LogReflectionInitialized;
+
+        private static void EnsureLogReflectionCached()
+        {
+            if (s_LogReflectionInitialized) return;
+
+            s_LogEntriesType = CommandHelper.FindType("UnityEditor.LogEntries") ?? CommandHelper.FindType("UnityEditorInternal.LogEntries");
+            s_LogEntryType = CommandHelper.FindType("UnityEditor.LogEntry") ?? CommandHelper.FindType("UnityEditorInternal.LogEntry");
+
+            if (s_LogEntriesType != null)
+            {
+                s_GetCountMethod = s_LogEntriesType.GetMethod("GetCount", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                s_GetEntryInternalMethod = s_LogEntriesType.GetMethod("GetEntryInternal", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                s_StartGettingEntriesMethod = s_LogEntriesType.GetMethod("StartGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                s_EndGettingEntriesMethod = s_LogEntriesType.GetMethod("EndGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                s_ClearMethod = s_LogEntriesType.GetMethod("Clear", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            if (s_LogEntryType != null)
+            {
+                s_ConditionField = s_LogEntryType.GetField("condition", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                                ?? s_LogEntryType.GetField("message", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                s_ErrorNumField = s_LogEntryType.GetField("errorNum", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                s_FileField = s_LogEntryType.GetField("file", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                s_LineField = s_LogEntryType.GetField("line", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                s_ColumnField = s_LogEntryType.GetField("column", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                s_ModeField = s_LogEntryType.GetField("mode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            s_LogReflectionInitialized = true;
+        }
+
         public static void EnsureInitialized()
         {
             if (s_Initialized) return;
@@ -67,6 +112,7 @@ namespace UnityLeanMcp
         {
             UnityLeanMcpPaths.EnsureInitialized();
             UnityLeanMcpOperationStore.EnsureInitialized();
+            EnsureLogReflectionCached();
             UpdateCompilationState();
             var operation = UnityLeanMcpOperationStore.Read();
             bool resumingCompilation = operation != null &&
@@ -153,17 +199,25 @@ namespace UnityLeanMcp
             WriteCapturedDiagnosticsSnapshot();
         }
 
-        private static void WriteCapturedDiagnosticsSnapshot()
+        private static List<string> GetCapturedDiagnosticsSnapshot()
         {
             var diagnostics = new List<string>();
             lock (s_DiagnosticsLock)
             {
                 foreach (var list in s_AssemblyDiagnostics.Values)
                 {
-                    if (list != null) diagnostics.AddRange(list);
+                    if (list != null && list.Count > 0)
+                    {
+                        diagnostics.AddRange(list);
+                    }
                 }
             }
+            return diagnostics;
+        }
 
+        private static void WriteCapturedDiagnosticsSnapshot()
+        {
+            var diagnostics = GetCapturedDiagnosticsSnapshot();
             if (diagnostics.Count > 0)
             {
                 WriteDiagnosticsFileAtomically(UnityLeanMcpPaths.DiagnosticsFile, diagnostics);
@@ -312,31 +366,6 @@ namespace UnityLeanMcp
             s_SettledUpdateCount = 0;
         }
 
-        internal static bool TryReadRefreshResult(string operationId, out UnityRefreshResult result)
-        {
-            result = null;
-            if (string.IsNullOrEmpty(operationId)) return false;
-
-            string path = UnityLeanMcpPaths.GetRefreshResultFile(operationId);
-            if (!File.Exists(path)) return false;
-
-            try
-            {
-                string json = CommandHelper.ReadFileWithRetry(path, maxRetries: 3, delayMs: 10);
-                if (!string.IsNullOrEmpty(json))
-                {
-                    result = JsonUtility.FromJson<UnityRefreshResult>(json);
-                    return result != null && result.operationId == operationId;
-                }
-            }
-            catch
-            {
-                // Ignored - transient read error
-            }
-
-            return false;
-        }
-
         internal static bool TryReadRefreshResultThreadSafe(string operationId, out WorkerRefreshResultSnapshot result)
         {
             if (string.IsNullOrEmpty(operationId))
@@ -381,9 +410,8 @@ namespace UnityLeanMcp
         {
             try
             {
-                var logEntriesType = CommandHelper.FindType("UnityEditor.LogEntries") ?? CommandHelper.FindType("UnityEditorInternal.LogEntries");
-                var clearMethod = logEntriesType?.GetMethod("Clear", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                clearMethod?.Invoke(null, null);
+                EnsureLogReflectionCached();
+                s_ClearMethod?.Invoke(null, null);
             }
             catch(Exception e)
             {
@@ -420,61 +448,37 @@ namespace UnityLeanMcp
             try
             {
                 string errorsPath = UnityLeanMcpPaths.DiagnosticsFile;
-                var diagnostics = new List<string>();
-
-                lock (s_DiagnosticsLock)
-                {
-                    foreach (var list in s_AssemblyDiagnostics.Values)
-                    {
-                        if (list != null && list.Count > 0)
-                        {
-                            diagnostics.AddRange(list);
-                        }
-                    }
-                }
+                var diagnostics = GetCapturedDiagnosticsSnapshot();
 
                 if (diagnostics.Count == 0)
                 {
-                    var logEntriesType = CommandHelper.FindType("UnityEditor.LogEntries") ?? CommandHelper.FindType("UnityEditorInternal.LogEntries");
-                    var logEntryType = CommandHelper.FindType("UnityEditor.LogEntry") ?? CommandHelper.FindType("UnityEditorInternal.LogEntry");
+                    EnsureLogReflectionCached();
 
-                    var getCountMethod = logEntriesType?.GetMethod("GetCount", BindingFlags.Static | BindingFlags.Public);
-                    var getEntryMethod = logEntriesType?.GetMethod("GetEntryInternal", BindingFlags.Static | BindingFlags.Public);
-                    var startGettingEntriesMethod = logEntriesType?.GetMethod("StartGettingEntries", BindingFlags.Static | BindingFlags.Public);
-                    var endGettingEntriesMethod = logEntriesType?.GetMethod("EndGettingEntries", BindingFlags.Static | BindingFlags.Public);
-
-                    var messageField = logEntryType?.GetField("message", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                                    ?? logEntryType?.GetField("condition", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    var fileField = logEntryType?.GetField("file", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    var lineField = logEntryType?.GetField("line", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    var columnField = logEntryType?.GetField("column", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    var modeField = logEntryType?.GetField("mode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-                    if (logEntriesType != null && logEntryType != null && getCountMethod != null && getEntryMethod != null && messageField != null && modeField != null)
+                    if (s_LogEntriesType != null && s_LogEntryType != null && s_GetCountMethod != null && s_GetEntryInternalMethod != null && s_ConditionField != null && s_ModeField != null)
                     {
-                        startGettingEntriesMethod?.Invoke(null, null);
+                        s_StartGettingEntriesMethod?.Invoke(null, null);
                         try
                         {
-                            int count = (int) getCountMethod.Invoke(null, null);
-                            var logEntry = Activator.CreateInstance(logEntryType);
+                            int count = (int) s_GetCountMethod.Invoke(null, null);
+                            var logEntry = Activator.CreateInstance(s_LogEntryType);
                             var parameters = new object[] { 0, logEntry };
 
                             for (int i = 0; i < count; i++)
                             {
                                 parameters[0] = i;
-                                getEntryMethod.Invoke(null, parameters);
+                                s_GetEntryInternalMethod.Invoke(null, parameters);
                                 var currentEntry = parameters[1];
 
-                                string message = (string) messageField.GetValue(currentEntry);
-                                int mode = (int) modeField.GetValue(currentEntry);
+                                string message = (string) s_ConditionField.GetValue(currentEntry);
+                                int mode = (int) s_ModeField.GetValue(currentEntry);
                                 bool isCompileError = (mode & (1 << 11)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("error CS"));
                                 bool isCompileWarning = (mode & (1 << 12)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("warning CS"));
 
                                 if (isCompileError || isCompileWarning)
                                 {
-                                    string file = fileField != null ? (string) fileField.GetValue(currentEntry) : "";
-                                    int line = lineField != null ? (int) lineField.GetValue(currentEntry) : 0;
-                                    int column = columnField != null ? (int) columnField.GetValue(currentEntry) : 0;
+                                    string file = s_FileField != null ? (string) s_FileField.GetValue(currentEntry) : "";
+                                    int line = s_LineField != null ? (int) s_LineField.GetValue(currentEntry) : 0;
+                                    int column = s_ColumnField != null ? (int) s_ColumnField.GetValue(currentEntry) : 0;
 
                                     string formatted = FormatCompilerDiagnostic(message, file, line, column, isCompileError);
                                     if (!string.IsNullOrEmpty(formatted))
@@ -486,7 +490,7 @@ namespace UnityLeanMcp
                         }
                         finally
                         {
-                            endGettingEntriesMethod?.Invoke(null, null);
+                            s_EndGettingEntriesMethod?.Invoke(null, null);
                         }
                     }
                 }

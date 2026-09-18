@@ -451,5 +451,13 @@ During socket server teardown (`StopServer`) or port file deletion (`DeletePortF
 
 When parsing wire status responses (`SUCCESS:payload`, `ERROR:message`, `FAILURE:message`), fixed-length substring slicing (e.g. `[7..]`) on 8-character tokens like `SUCCESS:` leaves an unintended leading colon (`:payload`) in payloads. Standardizing status prefix stripping through `ProtocolCodec.StripStatusPrefix` ensures uniform handling of both colon-separated (`STATUS:`) and space-separated (`STATUS `) wire responses without slicing bugs.
 
+### Pre-Caching Editor LogEntries Reflection Across Error Sweeps
+
+`UnityEditor.LogEntries` and `LogEntry` internal APIs are queried to extract active compiler diagnostics when compilation errors are detected without compiler callback messages. Re-reflecting type definitions, method infos (`GetCount`, `GetEntryInternal`, `StartGettingEntries`, `EndGettingEntries`, `Clear`), and field infos (`condition`, `errorNum`, `file`, `line`, `column`, `mode`) on every error sweep causes unnecessary reflection overhead. Pre-caching these reflection members during main-thread initialization (`InitializeMainThread`) or on first demand guarantees safe single-time resolution per domain reload without risk of background-thread type poisoning.
+
+### Deduplicating Test Failures with Ordinal Comparers
+
+When collecting previously failed test names for re-execution (such as `--failed-only`), accumulating failed names in a `List<string>` and performing `!failedNames.Contains(name)` scales quadratically $O(N^2)$ with large test suites. Accumulating names in a `HashSet<string>(StringComparer.Ordinal)` ensures $O(1)$ lookups and deduplication while preserving the exact case-sensitive full test names expected by test framework filters.
+
 
 

@@ -180,6 +180,17 @@ public class UnityClient : IUnityClient
         return $"Unity is busy executing '{kindStr}'{idStr}. If this operation is hung, call unity_stop to recover.";
     }
 
+    private static bool IsForeignOperationActive(
+        string? targetKind,
+        string? targetOpId,
+        (bool isBusy, bool isCompilation, string? kind, string? opId) busy)
+    {
+        if (!busy.isBusy || busy.isCompilation) return false;
+        bool matchesKind = string.IsNullOrEmpty(targetKind) || string.Equals(busy.kind, targetKind, StringComparison.OrdinalIgnoreCase);
+        bool matchesOpId = string.IsNullOrEmpty(targetOpId) || string.Equals(busy.opId, targetOpId, StringComparison.OrdinalIgnoreCase);
+        return matchesKind && matchesOpId;
+    }
+
     private async Task<bool> WaitForActiveOperationGracePeriodAsync(
         string? kind,
         string? opId,
@@ -204,7 +215,7 @@ public class UnityClient : IUnityClient
             if (check != null)
             {
                 var busy = ParseBusyResponse(check);
-                if (!busy.isBusy || busy.isCompilation || (busy.kind != null && !busy.kind.Equals(kind, StringComparison.OrdinalIgnoreCase)) || (busy.opId != null && !busy.opId.Equals(opId, StringComparison.OrdinalIgnoreCase)))
+                if (!IsForeignOperationActive(kind, opId, busy))
                 {
                     return true;
                 }
@@ -212,7 +223,9 @@ public class UnityClient : IUnityClient
             else
             {
                 var activeOp = TryReadJsonFile<UnityLeanMcpOperationState>(_pathResolver.OperationFile, _ => true);
-                if (activeOp == null || !string.Equals(activeOp.Kind, kind, StringComparison.OrdinalIgnoreCase) || (!string.IsNullOrEmpty(opId) && !string.Equals(activeOp.OperationId, opId, StringComparison.OrdinalIgnoreCase)))
+                bool matchesKind = string.IsNullOrEmpty(kind) || string.Equals(activeOp?.Kind, kind, StringComparison.OrdinalIgnoreCase);
+                bool matchesOpId = string.IsNullOrEmpty(opId) || string.Equals(activeOp?.OperationId, opId, StringComparison.OrdinalIgnoreCase);
+                if (activeOp == null || !matchesKind || !matchesOpId)
                 {
                     return true;
                 }
