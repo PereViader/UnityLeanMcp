@@ -45,7 +45,7 @@ public interface IOperationPoller
         OperationPollingSpec<TResult> spec,
         CancellationToken cancellationToken) where TResult : class, IOperationResult, new();
 
-    Task CancelOperationAsync(string opId, string kind);
+    Task CancelOperationAsync(string opId, string kind, CancellationToken cancellationToken = default);
 }
 
 public class OperationPoller : IOperationPoller
@@ -97,14 +97,13 @@ public class OperationPoller : IOperationPoller
         return null;
     }
 
-    public async Task CancelOperationAsync(string opId, string kind)
+    public async Task CancelOperationAsync(string opId, string kind, CancellationToken cancellationToken = default)
     {
         _logger?.LogInformation("Cancellation requested. Sending CANCEL_OPERATION for {OpId} ({Kind})...", opId, kind);
         try
         {
-            using var cancelCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             int port = _processManager.ReadPortFile();
-            await _socketTransport.SendCommandAsync(port, $"CANCEL_OPERATION {opId}", 3, cancelCts.Token);
+            await _socketTransport.SendCommandAsync(port, $"CANCEL_OPERATION {opId}", 3, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -241,7 +240,7 @@ public class OperationPoller : IOperationPoller
         {
             if (spec.ShouldCancelOnAborted && !string.IsNullOrEmpty(spec.Kind))
             {
-                await CancelOperationAsync(spec.OperationId, spec.Kind);
+                await CancelOperationAsync(spec.OperationId, spec.Kind, CancellationToken.None);
             }
             throw;
         }

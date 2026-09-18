@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
@@ -315,7 +316,7 @@ namespace UnityLeanMcp
             if (operation == null || (operation.kind != OperationKinds.Refresh && operation.kind != OperationKinds.Recompile))
             {
                 s_ObservedOperationId = null;
-                s_SettledUpdateCount = 0;
+                Interlocked.Exchange(ref s_SettledUpdateCount, 0);
                 return;
             }
 
@@ -327,18 +328,17 @@ namespace UnityLeanMcp
             if (s_ObservedOperationId != operation.operationId)
             {
                 s_ObservedOperationId = operation.operationId;
-                s_SettledUpdateCount = 0;
+                Interlocked.Exchange(ref s_SettledUpdateCount, 0);
             }
 
             if (s_RefreshPending || s_CompilationRequested || EditorApplication.isCompiling || EditorApplication.isUpdating)
             {
-                s_SettledUpdateCount = 0;
+                Interlocked.Exchange(ref s_SettledUpdateCount, 0);
                 UnityLeanMcpOperationStore.Update(operation.operationId, OperationStatus.WaitingForUnity);
                 return;
             }
 
-            s_SettledUpdateCount++;
-            if (s_SettledUpdateCount < 2)
+            if (Interlocked.Increment(ref s_SettledUpdateCount) < 2)
             {
                 return;
             }
@@ -363,7 +363,7 @@ namespace UnityLeanMcp
             s_RefreshRequired = false;
             UnityLeanMcpOperationStore.Complete(operation.operationId);
             s_ObservedOperationId = null;
-            s_SettledUpdateCount = 0;
+            Interlocked.Exchange(ref s_SettledUpdateCount, 0);
         }
 
         internal static bool TryReadRefreshResultThreadSafe(string operationId, out WorkerRefreshResultSnapshot result)

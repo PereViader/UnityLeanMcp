@@ -48,6 +48,7 @@ internal sealed class RecordingOperationPoller : IOperationPoller
     public int CancellationCount { get; private set; }
     public string? LastOperationId { get; private set; }
     public string? LastKind { get; private set; }
+    public CancellationToken LastCancellationToken { get; private set; }
     public string? OperationId { get; private set; }
     public string? ResultFilePath { get; private set; }
 
@@ -77,11 +78,12 @@ internal sealed class RecordingOperationPoller : IOperationPoller
         return await Task.FromException<TResult>(new InvalidOperationException("Polling should not begin."));
     }
 
-    public Task CancelOperationAsync(string opId, string kind)
+    public Task CancelOperationAsync(string opId, string kind, CancellationToken cancellationToken = default)
     {
         CancellationCount++;
         LastOperationId = opId;
         LastKind = kind;
+        LastCancellationToken = cancellationToken;
         return Task.CompletedTask;
     }
 }

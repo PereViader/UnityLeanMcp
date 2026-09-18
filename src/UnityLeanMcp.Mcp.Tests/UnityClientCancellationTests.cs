@@ -36,6 +36,7 @@ public sealed class UnityClientCancellationTests
         Assert.Equal(1, poller.CancellationCount);
         Assert.Equal("eval", poller.LastKind);
         Assert.Equal(transport.OperationId, poller.LastOperationId);
+        Assert.Equal(CancellationToken.None, poller.LastCancellationToken);
     }
 
     [Fact]
@@ -73,6 +74,7 @@ public sealed class UnityClientCancellationTests
         Assert.Equal(1, poller.CancellationCount);
         Assert.Equal("test", poller.LastKind);
         Assert.Equal(transport.OperationId, poller.LastOperationId);
+        Assert.Equal(CancellationToken.None, poller.LastCancellationToken);
     }
 
     [Fact]
@@ -102,6 +104,7 @@ public sealed class UnityClientCancellationTests
         Assert.Equal(1, poller.CancellationCount);
         Assert.Equal("refresh", poller.LastKind);
         Assert.Equal(transport.OperationId, poller.LastOperationId);
+        Assert.Equal(CancellationToken.None, poller.LastCancellationToken);
     }
 
     private sealed class DispatchCancellationTransport : IUnitySocketTransport

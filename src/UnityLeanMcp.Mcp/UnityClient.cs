@@ -237,8 +237,8 @@ public class UnityClient : IUnityClient
         return false;
     }
 
-    private Task CancelOperationAsync(string opId, string kind) =>
-        _operationPoller.CancelOperationAsync(opId, kind);
+    private Task CancelOperationAsync(string opId, string kind, CancellationToken cancellationToken = default) =>
+        _operationPoller.CancelOperationAsync(opId, kind, cancellationToken);
 
     public Task<UnityRefreshResult> RefreshAsync(bool isRecompile, CancellationToken cancellationToken) =>
         RefreshAsync(isRecompile, null, cancellationToken);
@@ -302,7 +302,7 @@ public class UnityClient : IUnityClient
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                await CancelOperationAsync(opId, isRecompile ? "recompile" : "refresh");
+                await CancelOperationAsync(opId, isRecompile ? "recompile" : "refresh", CancellationToken.None);
                 throw;
             }
             var initialTerminalResult = ProtocolCodec.TryCreateImmediateTerminalResult<UnityRefreshResult>(initialResponse, opId);
@@ -794,7 +794,7 @@ public class UnityClient : IUnityClient
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                await CancelOperationAsync(opId, operationKind);
+                await CancelOperationAsync(opId, operationKind, CancellationToken.None);
                 throw;
             }
 

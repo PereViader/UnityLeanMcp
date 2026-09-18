@@ -1104,11 +1104,65 @@ public class DecomposedComponentsTests
         public void PurgeOperationState() { }
     }
 
+    [Fact]
+    public async Task OperationPoller_CancelOperationAsync_PassesCancellationTokenToTransport()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "poller_cancel_test_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(tempDir);
+        var mockPm = new StubProcessManager(pathResolver);
+        var mockTransport = new StubSocketTransport("ACK");
+        var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
+
+        using var cts = new CancellationTokenSource();
+        await poller.CancelOperationAsync("op_test_cancel", "test", cts.Token);
+
+        Assert.Equal("CANCEL_OPERATION op_test_cancel", mockTransport.LastCommand);
+        Assert.Equal(cts.Token, mockTransport.LastCancellationToken);
+    }
+
+    [Fact]
+    public async Task OperationPoller_PollOperationUntilTerminalAsync_WhenCanceled_PassesCancellationTokenNoneToCancel()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "poller_cancel_on_abort_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(tempDir);
+        var mockPm = new StubProcessManager(pathResolver);
+        var mockTransport = new StubSocketTransport("BUSY");
+        var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
+
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op_abort_1",
+            Kind = "test",
+            ResultFilePath = Path.Combine(tempDir, "nonexistent.json"),
+            IsMatch = r => r.OperationId == "op_abort_1",
+            PollCommand = "POLL op_abort_1",
+            PollIntervalMs = 10,
+            CheckOperationStoreForInterruption = false
+        };
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => poller.PollOperationUntilTerminalAsync(spec, cts.Token));
+
+        Assert.Equal("CANCEL_OPERATION op_abort_1", mockTransport.LastCommand);
+        Assert.Equal(CancellationToken.None, mockTransport.LastCancellationToken);
+    }
+
     private sealed class StubSocketTransport : IUnitySocketTransport
     {
         private readonly string? _response;
+        public string? LastCommand { get; private set; }
+        public CancellationToken LastCancellationToken { get; private set; }
+
         public StubSocketTransport(string? response) => _response = response;
-        public Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default) => Task.FromResult(_response);
+        public Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
+        {
+            LastCommand = command;
+            LastCancellationToken = cancellationToken;
+            return Task.FromResult(_response);
+        }
         public Task<bool> IsSocketReadyAsync(int port, int timeoutSeconds = 2, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 }
