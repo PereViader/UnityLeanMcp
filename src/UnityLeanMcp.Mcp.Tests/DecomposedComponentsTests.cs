@@ -495,7 +495,7 @@ public class DecomposedComponentsTests
     [InlineData("SUCCESS", "")]
     public void UnityClient_StripStatusPrefix_StripsAllPrefixVariants(string input, string expected)
     {
-        string actual = UnityClient.StripStatusPrefix(input);
+        string actual = ProtocolCodec.StripStatusPrefix(input);
         Assert.Equal(expected, actual);
     }
 

@@ -443,5 +443,13 @@ When polling for compilation settlement in `WaitForCompilationToSettleAsync`, th
 
 Pre-flight status probes (such as sending `POLL_REFRESH` before `REFRESH` in `UnityClient.RefreshAsync`) add an extra socket roundtrip to every operation. Because the socket worker thread performs early rejection based on thread-safe in-memory and durable operation store snapshots, sending the mutating command (`REFRESH` / `RECOMPILE`) directly returns `BUSY` immediately if another operation or compilation is active. The command dispatch loop already handles `isBusy` responses by autowaiting on ongoing compilation or foreign locks, making the initial probe completely redundant.
 
+### Server Teardown Logging Safety During Unload
+
+During socket server teardown (`StopServer`) or port file deletion (`DeletePortFile`), Unity may already be unmanaged-unloading or domain-reloading. Calling `UnityEngine.Debug.Log` or `Debug.LogWarning` in these paths can throw or corrupt logging state because Unity engine subsystems may be shutting down. Using `WorkerDiagnosticsLogger.Info` and `WorkerDiagnosticsLogger.Warning` ensures safe, thread-agnostic file logging that never throws or depends on Unity main-thread engine availability.
+
+### Protocol Status Slicing and Colon-Delimited Tokens
+
+When parsing wire status responses (`SUCCESS:payload`, `ERROR:message`, `FAILURE:message`), fixed-length substring slicing (e.g. `[7..]`) on 8-character tokens like `SUCCESS:` leaves an unintended leading colon (`:payload`) in payloads. Standardizing status prefix stripping through `ProtocolCodec.StripStatusPrefix` ensures uniform handling of both colon-separated (`STATUS:`) and space-separated (`STATUS `) wire responses without slicing bugs.
+
 
 

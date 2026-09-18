@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
+using PereViader.UnityLeanMcp.Editor;
 
 namespace UnityLeanMcp
 {
@@ -254,7 +255,7 @@ namespace UnityLeanMcp
             // a racing startup path from recreating the endpoint metadata.
             DeletePortFile();
 
-            Debug.Log("UnityLeanMcp: Socket server stopped.");
+            WorkerDiagnosticsLogger.Info(UnityLeanMcpPaths.LogFile, "Socket server stopped.");
         }
 
         private static void ServerLoop()
@@ -597,7 +598,7 @@ namespace UnityLeanMcp
             }
             catch(Exception e)
             {
-                Debug.LogWarning($"UnityLeanMcp: Failed to remove port file: {e}");
+                WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile, $"Failed to remove port file: {e}");
             }
         }
 

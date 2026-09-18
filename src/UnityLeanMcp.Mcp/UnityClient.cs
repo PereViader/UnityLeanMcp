@@ -292,7 +292,7 @@ public class UnityClient : IUnityClient
                 await CancelOperationAsync(opId, isRecompile ? "recompile" : "refresh");
                 throw;
             }
-            var initialTerminalResult = TryCreateImmediateTerminalResult<UnityRefreshResult>(initialResponse, opId);
+            var initialTerminalResult = ProtocolCodec.TryCreateImmediateTerminalResult<UnityRefreshResult>(initialResponse, opId);
             if (initialTerminalResult != null)
             {
                 return initialTerminalResult;
@@ -487,40 +487,6 @@ public class UnityClient : IUnityClient
         };
 
         return await PollOperationUntilTerminalAsync(spec, cancellationToken);
-    }
-
-    internal static TResult? TryCreateImmediateTerminalResult<TResult>(string? response, string operationId) where TResult : class, IOperationResult, new()
-    {
-        if (string.IsNullOrWhiteSpace(response))
-        {
-            return null;
-        }
-
-        string trimmed = response.Trim();
-        if (trimmed.StartsWith("INTERRUPTION", StringComparison.OrdinalIgnoreCase))
-        {
-            string message = trimmed.Length > 12 ? trimmed[12..].Trim() : "Operation interrupted.";
-            return new TResult
-            {
-                OperationId = operationId,
-                Success = false,
-                Interrupted = true,
-                Message = ProtocolCodec.UnescapeLine(message)
-            };
-        }
-
-        if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
-        {
-            return new TResult
-            {
-                OperationId = operationId,
-                Success = false,
-                Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(trimmed))
-            };
-        }
-
-        return null;
     }
 
     public Task<UnityEvalResult> EvalAsync(string code, CancellationToken cancellationToken) =>
@@ -882,7 +848,7 @@ public class UnityClient : IUnityClient
                 }
             }
 
-            var terminal = TryCreateImmediateTerminalResult<TResult>(initialResponse, opId);
+            var terminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(initialResponse, opId);
             if (terminal != null)
             {
                 return terminal;
@@ -951,39 +917,6 @@ public class UnityClient : IUnityClient
                 result.Success = false;
             }
         }
-    }
-
-    internal static string StripStatusPrefix(string response)
-    {
-        if (response.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
-        {
-            return response[6..].Trim();
-        }
-
-        if (response.StartsWith("FAILURE:", StringComparison.OrdinalIgnoreCase))
-        {
-            return response[8..].Trim();
-        }
-
-        if (response.StartsWith("SUCCESS:", StringComparison.OrdinalIgnoreCase))
-        {
-            return response[8..].Trim();
-        }
-
-        int spaceIdx = response.IndexOf(' ');
-        if (spaceIdx > 0)
-        {
-            return response[(spaceIdx + 1)..].Trim();
-        }
-
-        if (response.Equals("ERROR", StringComparison.OrdinalIgnoreCase) ||
-            response.Equals("FAILURE", StringComparison.OrdinalIgnoreCase) ||
-            response.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Empty;
-        }
-
-        return response;
     }
 
     private static T? TryReadJsonFile<T>(string filePath, Func<T, bool> predicate) where T : class =>

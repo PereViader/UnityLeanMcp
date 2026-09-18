@@ -198,16 +198,11 @@ public class OperationPoller : IOperationPoller
                         }
                     }
 
-                    if (pollResp.StartsWith("INTERRUPTION", StringComparison.OrdinalIgnoreCase))
+                    var immediateTerminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(pollResp, spec.OperationId);
+                    if (immediateTerminal != null && immediateTerminal.Interrupted)
                     {
-                        string msg = pollResp.Length > 12 ? pollResp[12..].Trim() : "Operation interrupted.";
-                        return new TResult
-                        {
-                            OperationId = spec.OperationId,
-                            Success = false,
-                            Interrupted = true,
-                            Message = ProtocolCodec.UnescapeLine(msg)
-                        };
+                        spec.OnResultFound?.Invoke(immediateTerminal);
+                        return immediateTerminal;
                     }
 
                     if (pollResp.StartsWith("BUSY", StringComparison.OrdinalIgnoreCase))
@@ -324,29 +319,10 @@ public class OperationPoller : IOperationPoller
             return terminalRes!;
         }
 
-        if (pollResp.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+        var terminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(pollResp, spec.OperationId);
+        if (terminal != null)
         {
-            string msg = pollResp.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
-                ? (pollResp.Length > 6 ? pollResp[6..].Trim() : "")
-                : (pollResp.Length > 5 ? pollResp[5..].Trim() : "");
-
-            return new TResult
-            {
-                OperationId = spec.OperationId,
-                Success = false,
-                Message = ProtocolCodec.UnescapeLine(msg)
-            };
-        }
-
-        if (pollResp.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
-        {
-            string msg = pollResp.Length > 7 ? pollResp[7..].Trim() : "Operation failed.";
-            return new TResult
-            {
-                OperationId = spec.OperationId,
-                Success = false,
-                Message = ProtocolCodec.UnescapeLine(msg)
-            };
+            return terminal;
         }
 
         if (pollResp.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
@@ -356,7 +332,7 @@ public class OperationPoller : IOperationPoller
                 return null;
             }
 
-            string payload = pollResp.Length > 7 ? pollResp[7..].Trim() : "";
+            string payload = ProtocolCodec.StripStatusPrefix(pollResp);
             var successRes = new TResult
             {
                 OperationId = spec.OperationId,

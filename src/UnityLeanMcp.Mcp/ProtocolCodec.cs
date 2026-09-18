@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace UnityLeanMcp.Mcp;
@@ -135,5 +135,85 @@ public static class ProtocolCodec
             }
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Strips protocol status prefixes (ERROR:, FAILURE:, SUCCESS:, or word followed by space)
+    /// from response strings.
+    /// </summary>
+    public static string StripStatusPrefix(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        string trimmed = text.Trim();
+        if (trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed[6..].Trim();
+        }
+
+        if (trimmed.StartsWith("FAILURE:", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed[8..].Trim();
+        }
+
+        if (trimmed.StartsWith("SUCCESS:", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmed[8..].Trim();
+        }
+
+        int spaceIdx = trimmed.IndexOf(' ');
+        if (spaceIdx > 0)
+        {
+            return trimmed[(spaceIdx + 1)..].Trim();
+        }
+
+        if (trimmed.Equals("ERROR", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("FAILURE", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return trimmed;
+    }
+
+    /// <summary>
+    /// Attempts to parse an immediate terminal result (INTERRUPTION, ERROR, FAILURE) from a socket response.
+    /// </summary>
+    public static TResult? TryCreateImmediateTerminalResult<TResult>(string? response, string operationId) where TResult : class, IOperationResult, new()
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        string trimmed = response.Trim();
+        if (trimmed.StartsWith("INTERRUPTION", StringComparison.OrdinalIgnoreCase))
+        {
+            string message = trimmed.Length > 12 ? trimmed[12..].Trim() : "Operation interrupted.";
+            return new TResult
+            {
+                OperationId = operationId,
+                Success = false,
+                Interrupted = true,
+                Message = UnescapeLine(message)
+            };
+        }
+
+        if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
+        {
+            return new TResult
+            {
+                OperationId = operationId,
+                Success = false,
+                Message = UnescapeLine(StripStatusPrefix(trimmed))
+            };
+        }
+
+        return null;
     }
 }
