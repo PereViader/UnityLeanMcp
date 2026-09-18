@@ -1496,7 +1496,7 @@ public class ToolFormattingTests
             };
 
             Assert.True(result.IsError);
-            Assert.Contains($"Invalid test filter '{filterName}'", GetResultText(result));
+            Assert.Contains($"Invalid test filter '{filterName}[0]'", GetResultText(result));
             Assert.Equal(0, client.RunTestsCallCount);
         }
         finally
@@ -1525,7 +1525,7 @@ public class ToolFormattingTests
             };
 
             Assert.True(result.IsError);
-            Assert.Contains($"Invalid test filter '{filterName}'", GetResultText(result));
+            Assert.Contains($"Invalid test filter '{filterName}[1]'", GetResultText(result));
             Assert.Equal(0, client.RunTestsCallCount);
         }
         finally

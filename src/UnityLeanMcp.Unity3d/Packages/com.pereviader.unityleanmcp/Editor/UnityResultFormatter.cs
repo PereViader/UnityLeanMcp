@@ -945,7 +945,7 @@ namespace UnityLeanMcp
                 foreach (var item in enumerable)
                 {
                     count++;
-                    if (count > UnityResultFormatter.DefaultMaxItems)
+                    if (count > UnityResultFormatter.MaxItems)
                     {
                         items.Add(UnityResultFormatter.ItemTruncationMarker);
                         break;

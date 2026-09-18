@@ -101,6 +101,10 @@ namespace UnityLeanMcp
                 {
                     handler.OnDomainReloaded(operation.operationId, message);
                 }
+                else
+                {
+                    UnityLeanMcpOperationStore.Complete(operation.operationId);
+                }
             }
         }
 

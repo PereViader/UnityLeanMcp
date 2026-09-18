@@ -251,10 +251,7 @@ public class UnityTools
                 return Result(TestModeParser.InvalidModeMessage, isError: true);
             }
 
-            if (!TestFilterValidation.TryValidate("testNames", testNames, out string filterError) ||
-                !TestFilterValidation.TryValidate("groupNames", groupNames, out filterError) ||
-                !TestFilterValidation.TryValidate("categoryNames", categoryNames, out filterError) ||
-                !TestFilterValidation.TryValidate("assemblyNames", assemblyNames, out filterError))
+            if (!TestFilterValidation.TryValidate(testNames, groupNames, categoryNames, assemblyNames, out string filterError))
             {
                 return Result(filterError, isError: true);
             }

@@ -74,6 +74,7 @@ Operation-specific mechanics (cancellation, domain-reload recovery, Editor resta
 - Each command kind registers its own handler conforming to the Open-Closed Principle (OCP).
 - Handlers sharing identical lifecycle semantics (such as `Refresh` and `Recompile`) are consolidated into parameterized handlers (`CompilationLifecycleHandler`) taking the operation kind rather than duplicating identical class definitions.
 - New operation types implement lifecycle hooks without modifying server dispatchers or switch statements.
+- On domain reload, if an active operation in the durable journal has no registered handler (e.g. unknown, unregistered, or corrupted operation kind), `OperationLifecycleRegistry.RecoverOnDomainLoad` safely completes the operation record, ensuring orphaned records never permanently lock the journal in `Running` state.
 
 ### Polymorphic Operation Result Symmetry (`IOperationResult`)
 All command execution results implement `IOperationResult` (`OperationId`, `Success`, `Interrupted`, `Message`). Concrete results that map boolean interface flags to underlying domain status strings (such as `UnityTestRunResult.Interrupted` mapping to `ResultState` / `resultState`) must provide symmetric getters and setters: setting `Interrupted = false` when an operation was previously marked interrupted must restore the underlying state cleanly based on outcome (`Success` / `FailCount`), preventing sticky flag bugs across polymorphic consumers.
