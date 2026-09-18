@@ -97,30 +97,21 @@ namespace UnityLeanMcp
         public static string GetTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
 
-        // Worker-thread readers may only use paths captured during explicit
-        // main-thread initialization. These accessors never initialize paths
-        // and therefore cannot reach Application.dataPath indirectly.
-        internal static string WorkerOperationFile => s_OperationFile;
-        internal static string WorkerDiagnosticsFile => s_DiagnosticsFile;
-        internal static string WorkerRefreshResultFile => s_RefreshResultFile;
-        internal static string WorkerPortFile => s_PortFile;
-        internal static string WorkerLogFile => s_WorkerLogFile;
-
-        internal static string GetWorkerRefreshResultFile(string operationId) =>
-            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_RefreshResultFile : Path.Combine(s_TempDir, $"unity_refresh_{operationId}.json"));
-        internal static string WorkerTestRunningFile => s_TestRunningFile;
-        internal static string WorkerTestCancellationFile => s_TestCancellationFile;
-
-        internal static string GetWorkerEvalResultFile(string operationId) =>
-            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_EvalResultFile : Path.Combine(s_TempDir, $"unity_eval_{operationId}.json"));
-
-        internal static string GetWorkerTestResultsFile(string operationId) =>
-            string.IsNullOrEmpty(s_TempDir) ? null : (string.IsNullOrEmpty(operationId) ? s_TestResultsFile : Path.Combine(s_TempDir, $"unity_test_{operationId}.json"));
+        public static string LogFile
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(s_WorkerLogFile)) EnsureInitialized();
+                return s_WorkerLogFile;
+            }
+        }
 
         public static void EnsureInitialized()
         {
+            if (!string.IsNullOrEmpty(s_TempDir)) return;
             CommandHelper.EnsureInitialized();
             string root = CommandHelper.ProjectRoot;
+            if (string.IsNullOrEmpty(root)) return;
             s_TempDir = Path.Combine(root, "Temp");
             s_PortFile = Path.Combine(s_TempDir, "unity_lean_mcp_port.txt");
             s_OperationFile = Path.Combine(s_TempDir, "unity_lean_mcp_operation.json");

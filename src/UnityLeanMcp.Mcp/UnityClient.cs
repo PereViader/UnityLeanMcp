@@ -608,92 +608,23 @@ public class UnityClient : IUnityClient
 
         string escapedCode = ProtocolCodec.EscapeLine(code);
 
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            string opId = Guid.NewGuid().ToString("N");
-            string resultFile = _pathResolver.GetResultFilePath(UnityOperationKind.Eval, opId);
-            string command = $"EVAL {opId} {escapedCode}";
-
-            _logger.LogInformation("Sending EVAL operation {OpId}...", opId);
-            string? initialResponse;
-            try
-            {
-                initialResponse = await SendCommandAsync(command, 10, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // The command may have reached Unity before its RUNNING
-                // acknowledgement was returned. Ensure that an accepted
-                // operation is cancelled even though polling never began.
-                await CancelOperationAsync(opId, "eval");
-                throw;
-            }
-
-            // Check if result already available
-            var immediateResult = TryReadJsonFile<UnityEvalResult>(resultFile, r => r.OperationId == opId);
-            if (immediateResult != null)
-            {
-                try { File.Delete(resultFile); } catch { }
-                return immediateResult;
-            }
-
-            var busyInfo = ParseBusyResponse(initialResponse);
-            if (busyInfo.isBusy)
-            {
-                if (busyInfo.isCompilation)
-                {
-                    progress?.Report(new ProgressNotificationValue
-                    {
-                        Progress = 0,
-                        Message = "Unity is compiling script assemblies. Waiting for compilation to complete..."
-                    });
-
-                    var compResult = await RefreshBeforeUsingCompiledAssembliesAsync(refreshProgress, cancellationToken);
-                    if (!compResult.Success)
-                    {
-                        return new UnityEvalResult
-                        {
-                            OperationId = opId,
-                            Success = false,
-                            Interrupted = compResult.Interrupted,
-                            Message = compResult.Message
-                        };
-                    }
-
-                    continue;
-                }
-                else
-                {
-                    bool cleared = await WaitForActiveOperationGracePeriodAsync(busyInfo.kind, busyInfo.opId, progress, BusyGracePeriod, cancellationToken);
-                    if (!cleared)
-                    {
-                        return new UnityEvalResult
-                        {
-                            OperationId = opId,
-                            Success = false,
-                            Message = FormatBusyExecutingMessage(busyInfo.kind, busyInfo.opId)
-                        };
-                    }
-
-                    continue;
-                }
-            }
-
-            if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
-            {
-                return new UnityEvalResult { OperationId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
-            }
-
-            return await PollOperationResultAsync<UnityEvalResult>(
+        return await DispatchMutatingCommandAsync<UnityEvalResult>(
+            operationKind: "eval",
+            operationDisplayName: "evaluation",
+            commandFactory: opId => $"EVAL {opId} {escapedCode}",
+            resultFilePathFactory: opId => _pathResolver.GetResultFilePath(UnityOperationKind.Eval, opId),
+            resultMatcher: (r, opId) => r.OperationId == opId,
+            pollExecutor: (opId, resultFile, ct) => PollOperationResultAsync<UnityEvalResult>(
                 opId: opId,
                 kind: "eval",
                 operationDisplayName: "evaluation",
                 resultFilePath: resultFile,
                 pollCommand: $"POLL_EVAL {opId}",
-                cancellationToken: cancellationToken);
-        }
+                cancellationToken: ct),
+            progress: progress,
+            initialProgressMessage: null,
+            onImmediateResult: null,
+            cancellationToken: cancellationToken);
     }
 
     public virtual async Task<UnityTestRunResult> RunTestsAsync(
@@ -766,164 +697,97 @@ public class UnityClient : IUnityClient
             };
         }
 
-        while (true)
+        var runArgs = new RunTestsArgs
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            string opId = Guid.NewGuid().ToString("N");
-            string resultFile = _pathResolver.GetResultFilePath(UnityOperationKind.Test, opId);
-
-            var runArgs = new RunTestsArgs
-            {
-                Mode = testMode,
-                TestNames = testNames != null && testNames.Length > 0 ? testNames : null,
-                GroupNames = groupNames != null && groupNames.Length > 0 ? groupNames : null,
-                CategoryNames = categoryNames != null && categoryNames.Length > 0 ? categoryNames : null,
-                AssemblyNames = assemblyNames != null && assemblyNames.Length > 0 ? assemblyNames : null,
-                FailedOnly = failedOnly
-            };
-
-            string json = JsonSerializer.Serialize(runArgs, s_RunArgsJsonOptions);
-            string command = $"RUN_TESTS {opId} {ProtocolCodec.EscapeLine(json)}";
-
-            progress?.Report(new ProgressNotificationValue
-            {
-                Progress = 0,
-                Message = $"Initializing {testMode} test run..."
-            });
-
-            _logger.LogInformation("Sending RUN_TESTS operation {OpId} (mode: {Mode})...", opId, testMode);
-            string? initialResponse;
-            try
-            {
-                initialResponse = await SendCommandAsync(command, 10, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                await CancelOperationAsync(opId, "test");
-                throw;
-            }
-
-            var immediateResult = TryReadJsonFile<UnityTestRunResult>(resultFile, r => r.RunId == opId);
-            if (immediateResult != null)
-            {
-                try { File.Delete(resultFile); } catch { }
-                ReportFinalProgress(progress, immediateResult);
-                return immediateResult;
-            }
-
-            var busyInfo = ParseBusyResponse(initialResponse);
-            if (busyInfo.isBusy)
-            {
-                if (busyInfo.isCompilation)
-                {
-                    progress?.Report(new ProgressNotificationValue
-                    {
-                        Progress = 0,
-                        Message = "Unity is compiling script assemblies. Waiting for compilation to complete..."
-                    });
-
-                    var compResult = await RefreshBeforeUsingCompiledAssembliesAsync(refreshProgress, cancellationToken);
-                    if (!compResult.Success)
-                    {
-                        return new UnityTestRunResult
-                        {
-                            RunId = opId,
-                            Success = false,
-                            ResultState = compResult.Interrupted ? "Interrupted" : "CompileError",
-                            Message = compResult.Message
-                        };
-                    }
-
-                    continue;
-                }
-                else
-                {
-                    bool cleared = await WaitForActiveOperationGracePeriodAsync(busyInfo.kind, busyInfo.opId, progress, BusyGracePeriod, cancellationToken);
-                    if (!cleared)
-                    {
-                        return new UnityTestRunResult
-                        {
-                            RunId = opId,
-                            Success = false,
-                            Message = FormatBusyExecutingMessage(busyInfo.kind, busyInfo.opId)
-                        };
-                    }
-
-                    continue;
-                }
-            }
-
-            if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
-            {
-                return new UnityTestRunResult { RunId = opId, Success = false, Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse)) };
-            }
-        int lastCompleted = -1;
-        string? lastTestName = null;
-        string? lastStatus = null;
-
-        var spec = new OperationPollingSpec<UnityTestRunResult>
-        {
-            OperationId = opId,
-            Kind = "test",
-            OperationDisplayName = "test run",
-            ResultFilePath = resultFile,
-            IsMatch = r => r.RunId == opId,
-            PollCommand = $"POLL_TESTS {opId}",
-            PollTimeoutSeconds = 5,
-            PollIntervalMs = PollIntervalMs,
-            RequireDurableResult = true,
-            OnResultFound = res =>
-            {
-                ReportFinalProgress(progress, res);
-                return res;
-            },
-            OnPollTick = _ =>
-            {
-                var runningState = TryReadJsonFile<UnityTestRunState>(_pathResolver.TestRunningFile, s => s.RunId == opId);
-                if (runningState != null && progress != null)
-                {
-                    if (runningState.CompletedTests != lastCompleted ||
-                        runningState.CurrentTestName != lastTestName ||
-                        runningState.Status != lastStatus)
-                    {
-                        lastCompleted = runningState.CompletedTests;
-                        lastTestName = runningState.CurrentTestName;
-                        lastStatus = runningState.Status;
-
-                        string msg;
-                        if (runningState.TotalTests > 0)
-                        {
-                            if (!string.IsNullOrEmpty(runningState.CurrentTestName))
-                            {
-                                msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running {runningState.CurrentTestName} (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
-                            }
-                            else
-                            {
-                                msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running tests... (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
-                            }
-                        }
-                        else
-                        {
-                            msg = !string.IsNullOrEmpty(runningState.CurrentTestName)
-                                ? $"Running {runningState.CurrentTestName}..."
-                                : "Running tests...";
-                        }
-
-                        progress.Report(new ProgressNotificationValue
-                        {
-                            Progress = runningState.CompletedTests,
-                            Total = runningState.TotalTests > 0 ? runningState.TotalTests : null,
-                            Message = msg
-                        });
-                    }
-                }
-                return Task.CompletedTask;
-            }
+            Mode = testMode,
+            TestNames = testNames != null && testNames.Length > 0 ? testNames : null,
+            GroupNames = groupNames != null && groupNames.Length > 0 ? groupNames : null,
+            CategoryNames = categoryNames != null && categoryNames.Length > 0 ? categoryNames : null,
+            AssemblyNames = assemblyNames != null && assemblyNames.Length > 0 ? assemblyNames : null,
+            FailedOnly = failedOnly
         };
 
-        return await PollOperationUntilTerminalAsync(spec, cancellationToken);
-        }
+        string json = JsonSerializer.Serialize(runArgs, s_RunArgsJsonOptions);
+        string escapedJson = ProtocolCodec.EscapeLine(json);
+
+        return await DispatchMutatingCommandAsync<UnityTestRunResult>(
+            operationKind: "test",
+            operationDisplayName: "test run",
+            commandFactory: opId => $"RUN_TESTS {opId} {escapedJson}",
+            resultFilePathFactory: opId => _pathResolver.GetResultFilePath(UnityOperationKind.Test, opId),
+            resultMatcher: (r, opId) => r.RunId == opId,
+            pollExecutor: (opId, resultFile, ct) =>
+            {
+                int lastCompleted = -1;
+                string? lastTestName = null;
+                string? lastStatus = null;
+
+                var spec = new OperationPollingSpec<UnityTestRunResult>
+                {
+                    OperationId = opId,
+                    Kind = "test",
+                    OperationDisplayName = "test run",
+                    ResultFilePath = resultFile,
+                    IsMatch = r => r.RunId == opId,
+                    PollCommand = $"POLL_TESTS {opId}",
+                    PollTimeoutSeconds = 5,
+                    PollIntervalMs = PollIntervalMs,
+                    RequireDurableResult = true,
+                    OnResultFound = res =>
+                    {
+                        ReportFinalProgress(progress, res);
+                        return res;
+                    },
+                    OnPollTick = _ =>
+                    {
+                        var runningState = TryReadJsonFile<UnityTestRunState>(_pathResolver.TestRunningFile, s => s.RunId == opId);
+                        if (runningState != null && progress != null)
+                        {
+                            if (runningState.CompletedTests != lastCompleted ||
+                                runningState.CurrentTestName != lastTestName ||
+                                runningState.Status != lastStatus)
+                            {
+                                lastCompleted = runningState.CompletedTests;
+                                lastTestName = runningState.CurrentTestName;
+                                lastStatus = runningState.Status;
+
+                                string msg;
+                                if (runningState.TotalTests > 0)
+                                {
+                                    if (!string.IsNullOrEmpty(runningState.CurrentTestName))
+                                    {
+                                        msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running {runningState.CurrentTestName} (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
+                                    }
+                                    else
+                                    {
+                                        msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running tests... (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
+                                    }
+                                }
+                                else
+                                {
+                                    msg = !string.IsNullOrEmpty(runningState.CurrentTestName)
+                                        ? $"Running {runningState.CurrentTestName}..."
+                                        : "Running tests...";
+                                }
+
+                                progress.Report(new ProgressNotificationValue
+                                {
+                                    Progress = runningState.CompletedTests,
+                                    Total = runningState.TotalTests > 0 ? runningState.TotalTests : null,
+                                    Message = msg
+                                });
+                            }
+                        }
+                        return Task.CompletedTask;
+                    }
+                };
+
+                return PollOperationUntilTerminalAsync(spec, ct);
+            },
+            progress: progress,
+            initialProgressMessage: $"Initializing {testMode} test run...",
+            onImmediateResult: res => ReportFinalProgress(progress, res),
+            cancellationToken: cancellationToken);
     }
 
     private Task<TResult> PollOperationUntilTerminalAsync<TResult>(
@@ -948,6 +812,125 @@ public class UnityClient : IUnityClient
             PollIntervalMs,
             onResultFound,
             cancellationToken);
+
+    private async Task<TResult> DispatchMutatingCommandAsync<TResult>(
+        string operationKind,
+        string operationDisplayName,
+        Func<string, string> commandFactory,
+        Func<string, string> resultFilePathFactory,
+        Func<TResult, string, bool> resultMatcher,
+        Func<string, string, CancellationToken, Task<TResult>> pollExecutor,
+        IProgress<ProgressNotificationValue>? progress,
+        string? initialProgressMessage,
+        Action<TResult>? onImmediateResult,
+        CancellationToken cancellationToken) where TResult : class, IOperationResult, new()
+    {
+        IProgress<ProgressNotificationValue>? refreshProgress = progress == null
+            ? null
+            : new ProgressRelay(p => progress.Report(new ProgressNotificationValue
+            {
+                Progress = p.Progress,
+                Total = p.Total,
+                Message = p.Message
+            }));
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            string opId = Guid.NewGuid().ToString("N");
+            string resultFile = resultFilePathFactory(opId);
+            string command = commandFactory(opId);
+
+            if (!string.IsNullOrEmpty(initialProgressMessage))
+            {
+                progress?.Report(new ProgressNotificationValue
+                {
+                    Progress = 0,
+                    Message = initialProgressMessage
+                });
+            }
+
+            _logger.LogInformation("Sending {Kind} operation {OpId}...", command.Split(' ')[0], opId);
+            string? initialResponse;
+            try
+            {
+                initialResponse = await SendCommandAsync(command, 10, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await CancelOperationAsync(opId, operationKind);
+                throw;
+            }
+
+            var immediateResult = TryReadJsonFile<TResult>(resultFile, r => resultMatcher(r, opId));
+            if (immediateResult != null)
+            {
+                try { File.Delete(resultFile); } catch { }
+                onImmediateResult?.Invoke(immediateResult);
+                return immediateResult;
+            }
+
+            var busyInfo = ParseBusyResponse(initialResponse);
+            if (busyInfo.isBusy)
+            {
+                if (busyInfo.isCompilation)
+                {
+                    progress?.Report(new ProgressNotificationValue
+                    {
+                        Progress = 0,
+                        Message = "Unity is compiling script assemblies. Waiting for compilation to complete..."
+                    });
+
+                    var compResult = await RefreshBeforeUsingCompiledAssembliesAsync(refreshProgress, cancellationToken);
+                    if (!compResult.Success)
+                    {
+                        var failure = new TResult
+                        {
+                            OperationId = opId,
+                            Success = false,
+                            Interrupted = compResult.Interrupted,
+                            Message = compResult.Message
+                        };
+                        if (failure is UnityTestRunResult testRes)
+                        {
+                            testRes.ResultState = compResult.Interrupted ? "Interrupted" : "CompileError";
+                        }
+                        return failure;
+                    }
+
+                    continue;
+                }
+                else
+                {
+                    bool cleared = await WaitForActiveOperationGracePeriodAsync(busyInfo.kind, busyInfo.opId, progress, BusyGracePeriod, cancellationToken);
+                    if (!cleared)
+                    {
+                        return new TResult
+                        {
+                            OperationId = opId,
+                            Success = false,
+                            Message = FormatBusyExecutingMessage(busyInfo.kind, busyInfo.opId)
+                        };
+                    }
+
+                    continue;
+                }
+            }
+
+            if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
+            {
+                return new TResult
+                {
+                    OperationId = opId,
+                    Success = false,
+                    Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse))
+                };
+            }
+
+            return await pollExecutor(opId, resultFile, cancellationToken);
+        }
+    }
 
     private static void ReportFinalProgress(IProgress<ProgressNotificationValue>? progress, UnityTestRunResult result)
     {

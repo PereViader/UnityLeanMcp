@@ -233,91 +233,13 @@ public class OperationPoller : IOperationPoller
                         }
                     }
 
-                    if (string.Equals(pollResp, "IDLE", StringComparison.OrdinalIgnoreCase))
+                    else
                     {
-                        // Always re-check terminal result file before declaring idle failure (Rule 26 & Issue #71).
-                        // On Windows NTFS, allow a brief grace period for directory entry settlement if the Editor completed the operation.
-                        for (int attempt = 0; attempt < 5; attempt++)
+                        var resolved = await ResolveTerminalStateAsync(spec, pollResp, cancellationToken);
+                        if (resolved != null)
                         {
-                            if (TryConsumeTerminalResult(spec, out var fileRes))
-                            {
-                                return fileRes!;
-                            }
-
-                            if (attempt < 4)
-                            {
-                                await Task.Delay(50, cancellationToken);
-                            }
+                            return resolved;
                         }
-
-                        return new TResult
-                        {
-                            OperationId = spec.OperationId,
-                            Success = false,
-                            Message = $"{spec.OperationDisplayName} is no longer recognized by the Editor (Editor is idle)."
-                        };
-                    }
-
-                    if (pollResp.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (TryConsumeTerminalResult(spec, out var fileRes))
-                        {
-                            return fileRes!;
-                        }
-
-                        string msg = pollResp.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
-                            ? (pollResp.Length > 6 ? pollResp[6..].Trim() : "")
-                            : (pollResp.Length > 5 ? pollResp[5..].Trim() : "");
-
-                        return new TResult
-                        {
-                            OperationId = spec.OperationId,
-                            Success = false,
-                            Message = ProtocolCodec.UnescapeLine(msg)
-                        };
-                    }
-
-                    if (pollResp.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (TryConsumeTerminalResult(spec, out var fileRes))
-                        {
-                            return fileRes!;
-                        }
-
-                        string msg = pollResp.Length > 7 ? pollResp[7..].Trim() : "Operation failed.";
-                        return new TResult
-                        {
-                            OperationId = spec.OperationId,
-                            Success = false,
-                            Message = ProtocolCodec.UnescapeLine(msg)
-                        };
-                    }
-
-                    if (pollResp.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (TryConsumeTerminalResult(spec, out var fileRes))
-                        {
-                            return fileRes!;
-                        }
-
-                        if (spec.RequireDurableResult)
-                        {
-                            continue;
-                        }
-
-                        string payload = pollResp.Length > 7 ? pollResp[7..].Trim() : "";
-                        var successRes = new TResult
-                        {
-                            OperationId = spec.OperationId,
-                            Success = true,
-                            Message = pollResp
-                        };
-                        if (successRes is UnityOperationResult opRes)
-                        {
-                            opRes.Payload = ProtocolCodec.UnescapeLine(payload);
-                        }
-                        DeleteResultFileSilently(spec);
-                        return spec.OnResultFound != null ? spec.OnResultFound(successRes) : successRes;
                     }
                 }
 
@@ -365,6 +287,91 @@ public class OperationPoller : IOperationPoller
         };
 
         return PollOperationUntilTerminalAsync(spec, cancellationToken);
+    }
+
+    private static async Task<TResult?> ResolveTerminalStateAsync<TResult>(
+        OperationPollingSpec<TResult> spec,
+        string pollResp,
+        CancellationToken cancellationToken) where TResult : class, IOperationResult, new()
+    {
+        if (string.Equals(pollResp, "IDLE", StringComparison.OrdinalIgnoreCase))
+        {
+            // Always re-check terminal result file before declaring idle failure (Rule 26 & Issue #71).
+            // On Windows NTFS, allow a brief grace period for directory entry settlement if the Editor completed the operation.
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                if (TryConsumeTerminalResult(spec, out var fileRes))
+                {
+                    return fileRes!;
+                }
+
+                if (attempt < 4)
+                {
+                    await Task.Delay(50, cancellationToken);
+                }
+            }
+
+            return new TResult
+            {
+                OperationId = spec.OperationId,
+                Success = false,
+                Message = $"{spec.OperationDisplayName} is no longer recognized by the Editor (Editor is idle)."
+            };
+        }
+
+        if (TryConsumeTerminalResult(spec, out var terminalRes))
+        {
+            return terminalRes!;
+        }
+
+        if (pollResp.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+        {
+            string msg = pollResp.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
+                ? (pollResp.Length > 6 ? pollResp[6..].Trim() : "")
+                : (pollResp.Length > 5 ? pollResp[5..].Trim() : "");
+
+            return new TResult
+            {
+                OperationId = spec.OperationId,
+                Success = false,
+                Message = ProtocolCodec.UnescapeLine(msg)
+            };
+        }
+
+        if (pollResp.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
+        {
+            string msg = pollResp.Length > 7 ? pollResp[7..].Trim() : "Operation failed.";
+            return new TResult
+            {
+                OperationId = spec.OperationId,
+                Success = false,
+                Message = ProtocolCodec.UnescapeLine(msg)
+            };
+        }
+
+        if (pollResp.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            if (spec.RequireDurableResult)
+            {
+                return null;
+            }
+
+            string payload = pollResp.Length > 7 ? pollResp[7..].Trim() : "";
+            var successRes = new TResult
+            {
+                OperationId = spec.OperationId,
+                Success = true,
+                Message = pollResp
+            };
+            if (successRes is UnityOperationResult opRes)
+            {
+                opRes.Payload = ProtocolCodec.UnescapeLine(payload);
+            }
+            DeleteResultFileSilently(spec);
+            return spec.OnResultFound != null ? spec.OnResultFound(successRes) : successRes;
+        }
+
+        return null;
     }
 
     private static bool TryConsumeTerminalResult<TResult>(

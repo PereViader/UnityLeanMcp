@@ -69,7 +69,7 @@ namespace UnityLeanMcp
                     return "IDLE";
                 }
 
-                string diagnosticsPath = UnityLeanMcpPaths.WorkerDiagnosticsFile;
+                string diagnosticsPath = UnityLeanMcpPaths.DiagnosticsFile;
                 if (File.Exists(diagnosticsPath) && new FileInfo(diagnosticsPath).Length > 0)
                 {
                     return "COMPILATION_ERROR";

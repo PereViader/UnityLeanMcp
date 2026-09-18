@@ -36,7 +36,6 @@ namespace UnityLeanMcp
         private static string s_EditorSessionId;
 
         internal static string OperationFilePath => UnityLeanMcpPaths.OperationFile;
-        private static string WorkerOperationFilePath => UnityLeanMcpPaths.WorkerOperationFile;
 
         internal static string EditorSessionId
         {
@@ -148,7 +147,7 @@ namespace UnityLeanMcp
 
         internal static WorkerOperationStateSnapshot ReadThreadSafeSnapshot()
         {
-            s_CachedState.Read(WorkerOperationFilePath, out var snapshot);
+            s_CachedState.Read(OperationFilePath, out var snapshot);
             return snapshot;
         }
 

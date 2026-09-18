@@ -22,9 +22,9 @@ namespace UnityLeanMcp
             if (operation == null)
             {
                 if (!string.IsNullOrEmpty(operationId)
-                    && (IsTerminalInterruptedResult(UnityLeanMcpPaths.GetWorkerTestResultsFile(operationId), operationId)
-                        || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetWorkerEvalResultFile(operationId), operationId)
-                        || IsTerminalInterruptedRefreshResult(UnityLeanMcpPaths.GetWorkerRefreshResultFile(operationId), operationId)))
+                    && (IsTerminalInterruptedResult(UnityLeanMcpPaths.GetTestResultsFile(operationId), operationId)
+                        || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetEvalResultFile(operationId), operationId)
+                        || IsTerminalInterruptedRefreshResult(UnityLeanMcpPaths.GetRefreshResultFile(operationId), operationId)))
                 {
                     writer.WriteLine("CANCELLED");
                     writer.Flush();

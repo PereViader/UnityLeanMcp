@@ -187,13 +187,8 @@ namespace UnityLeanMcp
                     RunTestsHandler.ResultsFilePath,
                     json,
                     runResult.runId);
-                RunTestsHandler.ClearCancellationRequest(runResult.runId);
-                RunTestsHandler.StopCancellationMonitoring(runResult.runId);
-                RunTestsHandler.DeleteRunningStateIfOwned(runResult.runId);
-                RunTestsHandler.ClearCachedRunState();
-                UnityLeanMcpOperationStore.Complete(runResult.runId);
+                RunTestsHandler.CleanupTestRun(runResult.runId);
                 m_RunId = null;
-                RunTestsHandler.s_CurrentTestJobGuid = null;
                 Debug.Log($"UnityLeanMcp: Playmode/Editmode tests completed. Success: {runResult.success}, Failed: {runResult.failCount}, Passed: {runResult.passCount}, Skipped: {runResult.skipCount}");
             }
             catch (Exception ex)

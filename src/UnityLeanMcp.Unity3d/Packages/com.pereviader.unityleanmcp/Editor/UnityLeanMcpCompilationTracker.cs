@@ -346,7 +346,7 @@ namespace UnityLeanMcp
                 return false;
             }
 
-            string path = UnityLeanMcpPaths.GetWorkerRefreshResultFile(operationId);
+            string path = UnityLeanMcpPaths.GetRefreshResultFile(operationId);
             if (WorkerThreadSnapshots.TryReadRefreshResult(path, out var persisted) && persisted.OperationId == operationId)
             {
                 result = persisted;

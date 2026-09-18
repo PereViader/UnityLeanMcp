@@ -421,3 +421,8 @@ When Unity is launched via scripts or terminal commands, `-projectPath` is often
 ### Unity Project Root Cleanliness & Batchmode Log Placement
 
 When auto-starting Unity in batchmode (`-batchmode -nographics -projectPath ... -logFile ...`), configuring `-logFile` to point to a file directly under `ProjectRoot` (such as `unity_background_log.txt`) pollutes the repository root, creating git status noise and risking accidental commits. Placing `-logFile` under Unity's `Temp/` directory (`Temp/unity_background_log.txt`) ensures it resides in Unity's standard transient directory alongside all other UnityLeanMcp IPC and marker files, where it is automatically ignored by standard Unity `.gitignore` rules (`[Tt]emp/`) and safely wiped by Unity lifecycle cleans.
+
+### Safe Path Resolution Across Background Threads via Bootstrap Boundary
+
+Unity APIs like `Application.dataPath` throw an exception (`UnityException: get_dataPath can only be called from the main thread`) if called from a worker thread. Creating duplicate shadow properties (`Worker*`) that read uninitialized static fields risks silent `null` path dereferencing if accessed early. By ensuring that path initialization (`UnityLeanMcpPaths.EnsureInitialized()`) is invoked deterministically during the main thread bootstrap sequence (`[InitializeOnLoadMethod] BootstrapOnMainThread()`), the project path is safely resolved and cached into plain string fields once. Background worker threads can then safely access the canonical path properties without needing duplicate properties or risking background thread Unity API invocation.
+

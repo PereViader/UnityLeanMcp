@@ -284,7 +284,7 @@ namespace UnityLeanMcp
 
                 WritePortFile(port);
                 WorkerDiagnosticsLogger.Info(
-                    UnityLeanMcpPaths.WorkerLogFile,
+                    UnityLeanMcpPaths.LogFile,
                     $"Socket server started on 127.0.0.1:{port}");
 
                 while(_isRunning)
@@ -328,7 +328,7 @@ namespace UnityLeanMcp
                 catch (Exception e)
                 {
                     WorkerDiagnosticsLogger.Warning(
-                        UnityLeanMcpPaths.WorkerLogFile,
+                        UnityLeanMcpPaths.LogFile,
                         $"Failed to stop socket listener: {e}");
                 }
 
@@ -358,7 +358,7 @@ namespace UnityLeanMcp
                 catch(SocketException e)
                 {
                     WorkerDiagnosticsLogger.Warning(
-                        UnityLeanMcpPaths.WorkerLogFile,
+                        UnityLeanMcpPaths.LogFile,
                         $"Sticky port {preferredPort} is unavailable ({e.SocketErrorCode}); selecting a new port.");
                 }
             }
@@ -558,7 +558,7 @@ namespace UnityLeanMcp
         private static void LogUnexpectedException(string context, Exception exception)
         {
             WorkerDiagnosticsLogger.Error(
-                UnityLeanMcpPaths.WorkerLogFile,
+                UnityLeanMcpPaths.LogFile,
                 $"Unexpected {context} exception. " +
                 $"Type={exception.GetType().FullName}, " +
                 $"Thread={Thread.CurrentThread.Name ?? "unnamed"}, " +
@@ -569,7 +569,7 @@ namespace UnityLeanMcp
         {
             try
             {
-                string path = UnityLeanMcpPaths.WorkerPortFile;
+                string path = UnityLeanMcpPaths.PortFile;
                 if (string.IsNullOrEmpty(path))
                 {
                     return;
@@ -585,7 +585,7 @@ namespace UnityLeanMcp
             catch(Exception e)
             {
                 WorkerDiagnosticsLogger.Error(
-                    UnityLeanMcpPaths.WorkerLogFile,
+                    UnityLeanMcpPaths.LogFile,
                     $"Failed to write port file: {e}");
             }
         }
@@ -609,7 +609,7 @@ namespace UnityLeanMcp
         {
             try
             {
-                string path = UnityLeanMcpPaths.WorkerPortFile;
+                string path = UnityLeanMcpPaths.PortFile;
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
                     return AnyAvailablePort;
@@ -623,7 +623,7 @@ namespace UnityLeanMcp
             catch(Exception e)
             {
                 WorkerDiagnosticsLogger.Warning(
-                    UnityLeanMcpPaths.WorkerLogFile,
+                    UnityLeanMcpPaths.LogFile,
                     $"Failed to read port file: {e}");
                 return AnyAvailablePort;
             }

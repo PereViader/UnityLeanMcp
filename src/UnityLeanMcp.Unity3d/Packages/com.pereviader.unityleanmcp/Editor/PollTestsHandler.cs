@@ -13,8 +13,8 @@ namespace UnityLeanMcp
             string operationId = payload?.Trim();
             PollHelper.PollOperationResult(
                 operationId,
-                UnityLeanMcpPaths.GetWorkerTestResultsFile(operationId),
-                UnityLeanMcpPaths.WorkerTestRunningFile,
+                UnityLeanMcpPaths.GetTestResultsFile(operationId),
+                UnityLeanMcpPaths.TestRunningFile,
                 writer,
                 (res, w) =>
                 {

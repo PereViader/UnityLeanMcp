@@ -491,7 +491,7 @@ namespace UnityLeanMcp
                 }
             }
 
-            return WorkerThreadSnapshots.TryReadTestRunState(UnityLeanMcpPaths.WorkerTestRunningFile, out var snapshot)
+            return WorkerThreadSnapshots.TryReadTestRunState(UnityLeanMcpPaths.TestRunningFile, out var snapshot)
                 ? snapshot
                 : null;
         }
@@ -587,11 +587,7 @@ namespace UnityLeanMcp
             try
             {
                 WriteAtomic(GetResultsFilePath(runId), JsonUtility.ToJson(result, true), runId);
-                ClearCancellationRequest(runId);
-                StopCancellationMonitoring(runId);
-                DeleteRunningStateIfOwned(runId);
-                ClearCachedRunState();
-                UnityLeanMcpOperationStore.Complete(runId);
+                CleanupTestRun(runId);
             }
             catch (Exception ex)
             {
@@ -715,20 +711,25 @@ namespace UnityLeanMcp
             try
             {
                 WriteAtomic(GetResultsFilePath(runId), JsonUtility.ToJson(result, true), runId);
-                ClearCancellationRequest(runId);
-                StopCancellationMonitoring(runId);
-                DeleteRunningStateIfOwned(runId);
-                ClearCachedRunState();
-                UnityLeanMcpOperationStore.Complete(runId);
-                s_CurrentTestJobGuid = null;
-                if (s_Callbacks != null)
-                {
-                    s_Callbacks.Reset();
-                }
+                CleanupTestRun(runId);
             }
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Failed to persist cancelled test result. Type={ex.GetType().FullName}, StackTrace={ex.StackTrace}");
+            }
+        }
+
+        internal static void CleanupTestRun(string runId)
+        {
+            ClearCancellationRequest(runId);
+            StopCancellationMonitoring(runId);
+            DeleteRunningStateIfOwned(runId);
+            ClearCachedRunState();
+            UnityLeanMcpOperationStore.Complete(runId);
+            s_CurrentTestJobGuid = null;
+            if (s_Callbacks != null)
+            {
+                s_Callbacks.Reset();
             }
         }
 
