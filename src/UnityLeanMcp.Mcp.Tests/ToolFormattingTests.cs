@@ -61,16 +61,6 @@ public class ToolFormattingTests
             return Task.FromResult(StopSuccess);
         }
 
-        public override Task<bool> StartUnityAsync(CancellationToken cancellationToken = default)
-        {
-            Running = true;
-            return Task.FromResult(true);
-        }
-
-        public override Task<bool> WaitForHealthyAsync(CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(true);
-        }
     }
 
     private sealed class FakeUnityClient : UnityClient
@@ -170,12 +160,19 @@ public class ToolFormattingTests
             };
             int testPid = Environment.ProcessId;
 
-            // When PidFile exists with matching PID -> Batchmode
-            File.WriteAllText(realPm.PathResolver.PidFile, testPid.ToString());
+            // When identity sidecar exists with matching PID -> Batchmode
+            string identityFile = realPm.PathResolver.PidFile + ".identity.json";
+            File.WriteAllText(identityFile, JsonSerializer.Serialize(new
+            {
+                ProcessId = testPid,
+                StartTimeUtcTicks = DateTime.UtcNow.Ticks,
+                ExecutablePath = "Unity",
+                ProjectRoot = tempDir
+            }));
             Assert.Equal("Batchmode", realPm.GetUnityMode(testPid));
 
-            // When PidFile does not exist -> GUI
-            File.Delete(realPm.PathResolver.PidFile);
+            // When identity sidecar does not exist -> GUI
+            File.Delete(identityFile);
             Assert.Equal("GUI", realPm.GetUnityMode(testPid));
         }
         finally

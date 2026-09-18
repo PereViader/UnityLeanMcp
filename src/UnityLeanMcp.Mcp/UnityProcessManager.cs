@@ -178,6 +178,9 @@ public class UnityProcessManager : IUnityProcessManager
             lockFilePath = Path.Combine(_pathResolver.TempDir, "UnityLockFile");
         }
 
+        bool? isLocked = null;
+        bool CheckIsLocked() => isLocked ??= IsFileLocked(lockFilePath);
+
         if (File.Exists(lockFilePath))
         {
             // Try reading PID from lockfile (4-byte binary or text)
@@ -220,7 +223,7 @@ public class UnityProcessManager : IUnityProcessManager
                                     return true;
                                 }
                             }
-                            else if (IsFileLocked(lockFilePath) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                            else if (CheckIsLocked() || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                             {
                                 processId = lockPid;
                                 return true;
@@ -233,8 +236,7 @@ public class UnityProcessManager : IUnityProcessManager
             catch { }
 
             // Check if file is actively locked by an operating system handle
-            bool isLocked = IsFileLocked(lockFilePath);
-            if (isLocked)
+            if (CheckIsLocked())
             {
                 int? projectPid = FindProjectUnityPid();
                 if (projectPid.HasValue)
@@ -251,6 +253,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // Editor. It only makes startup wait for the existing Editor to
                 // republish its socket (or release the lock) instead of racing it
                 // with a conflicting batchmode launch.
+                processId = null;
                 _logger.LogInformation(
                     "Unity project lockfile {LockFile} is held but its process cannot be attributed; waiting for the existing Editor socket.",
                     lockFilePath);
@@ -696,7 +699,7 @@ public class UnityProcessManager : IUnityProcessManager
             return "Unknown";
         }
 
-        if (pid.HasValue && File.Exists(_pathResolver.PidFile) && IsOwnedPid(pid.Value))
+        if (pid.HasValue && _processIdentityStore.TryRead(out var identity) && identity.ProcessId == pid.Value)
         {
             return "Batchmode";
         }
@@ -863,16 +866,6 @@ public class UnityProcessManager : IUnityProcessManager
         }
     }
 
-    public virtual async Task<bool> StartUnityAsync(CancellationToken cancellationToken = default)
-    {
-        await EnsureUnityRunningAsync(cancellationToken);
-        return await IsSocketReadyAsync(2, cancellationToken);
-    }
-
-    public virtual async Task<bool> WaitForHealthyAsync(CancellationToken cancellationToken = default)
-    {
-        return await IsSocketReadyAsync(2, cancellationToken);
-    }
 
     internal virtual async Task WaitForSocketReadinessAsync(Process? startedProcess, CancellationToken cancellationToken, long initialLogOffset = 0)
     {
@@ -880,7 +873,7 @@ public class UnityProcessManager : IUnityProcessManager
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            bool socketIsLive = false;
+            bool? socketIsLive = null;
 
             // 1. Check if the process exited unexpectedly (deterministic check)
             if (startedProcess != null)
@@ -917,7 +910,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // owned PID. PING/PONG is authoritative for endpoint readiness;
                 // only treat Unity as absent if neither source has positive proof.
                 socketIsLive = await IsSocketReadyAsync(2, cancellationToken);
-                if (!socketIsLive && !IsUnityRunning(out _))
+                if (!socketIsLive.Value && !IsUnityRunning(out _))
                 {
                     if (File.Exists(_pathResolver.LogFile))
                     {
@@ -977,7 +970,8 @@ public class UnityProcessManager : IUnityProcessManager
             // 3. Check socket connection
             if (File.Exists(_pathResolver.PortFile))
             {
-                if (socketIsLive || await IsSocketReadyAsync(2, cancellationToken))
+                bool isReady = socketIsLive ?? await IsSocketReadyAsync(2, cancellationToken);
+                if (isReady)
                 {
                     // Check if server is settled
                     string? refreshState = await ProbeSocketCommandAsync("POLL_REFRESH", 2, cancellationToken);
@@ -1173,29 +1167,22 @@ public class UnityProcessManager : IUnityProcessManager
         // null response. Treat that as an explicit failure of the graceful
         // request, not as a reason to wait for an arbitrary deadline.
         cancellationToken.ThrowIfCancellationRequested();
-        if (exitResponse == "EXITING")
+        if (exitResponse != "EXITING")
         {
-            await WaitForUnityExitAsync(cancellationToken);
-            PurgeOperationState();
-            return true;
-        }
-
-        // Re-check before fallback: Unity may have exited while the socket
-        // request was in flight. If it is still running, only a PID backed by
-        // a matching durable identity may be terminated.
-        if (!IsUnityRunning(out int? currentPid))
-        {
-            PurgeOperationState();
-            return true;
-        }
-
-        targetPid ??= currentPid;
-        if (!targetPid.HasValue || targetPid.Value <= 0 || !TryTerminateOwnedProcess(targetPid.Value))
-        {
-            // A false result means Unity may still own and mutate the
-            // operation state. Leave all state intact so callers can recover
-            // or continue polling.
-            return false;
+            // Re-check before fallback: Unity may have exited while the socket
+            // request was in flight. If it is still running, only a PID backed by
+            // a matching durable identity may be terminated.
+            if (IsUnityRunning(out int? currentPid))
+            {
+                targetPid ??= currentPid;
+                if (!targetPid.HasValue || targetPid.Value <= 0 || !TryTerminateOwnedProcess(targetPid.Value))
+                {
+                    // A false result means Unity may still own and mutate the
+                    // operation state. Leave all state intact so callers can recover
+                    // or continue polling.
+                    return false;
+                }
+            }
         }
 
         await WaitForUnityExitAsync(cancellationToken);

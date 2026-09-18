@@ -1185,21 +1185,8 @@ public class UnityProcessManagerTests
         {
             var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
 
-            // The sidecar is the explicit ownership proof for this fixture.
-            // Keep the PID pointer absent so the proven process still follows
-            // the GUI-mode path exercised by this test.
-            File.WriteAllText(
-                procManager.PathResolver.PidFile + ".identity.json",
-                System.Text.Json.JsonSerializer.Serialize(new
-                {
-                    ProcessId = proc.Id,
-                    StartTimeUtcTicks = proc.StartTime.ToUniversalTime().Ticks,
-                    ExecutablePath = proc.MainModule!.FileName,
-                    ProjectRoot = procManager.PathResolver.ProjectRoot
-                }));
-
-            // When running without the PID pointer, the explicitly proven
-            // process is still detected as GUI mode.
+            // An interactive GUI Editor holds UnityLockfile without an identity sidecar.
+            // When running in GUI mode, it is detected as GUI mode.
             Assert.Equal("GUI", procManager.GetUnityMode());
 
             procManager.PurgeOperationState();
