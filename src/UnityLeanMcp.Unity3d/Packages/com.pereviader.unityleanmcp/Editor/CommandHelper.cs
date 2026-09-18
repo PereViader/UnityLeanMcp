@@ -10,38 +10,6 @@ namespace UnityLeanMcp
 {
     internal static class CommandHelper
     {
-        // Capture this once on Unity's main thread. User eval code can
-        // change Environment.CurrentDirectory, which must not redirect protocol
-        // files to an arbitrary directory.
-        private static string s_ProjectRoot;
-
-        internal static string ProjectRoot
-        {
-            get
-            {
-                if (string.IsNullOrEmpty(s_ProjectRoot))
-                {
-                    EnsureInitialized();
-                }
-                return s_ProjectRoot;
-            }
-        }
-
-        internal static void EnsureInitialized()
-        {
-            if (string.IsNullOrEmpty(s_ProjectRoot))
-            {
-                try
-                {
-                    s_ProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"UnityLeanMcp: Failed to initialize ProjectRoot: {ex}");
-                }
-            }
-        }
-
         public static void RunActionAfterStoppingPlaymode(Action action)
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode)

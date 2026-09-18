@@ -1,9 +1,12 @@
+using System;
 using System.IO;
+using UnityEngine;
 
 namespace UnityLeanMcp
 {
     internal static class UnityLeanMcpPaths
     {
+        private static string s_ProjectRoot;
         private static string s_TempDir;
         private static string s_PortFile;
         private static string s_OperationFile;
@@ -14,6 +17,15 @@ namespace UnityLeanMcp
         private static string s_TestResultsFile;
         private static string s_EvalResultFile;
         private static string s_WorkerLogFile;
+
+        public static string ProjectRoot
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(s_ProjectRoot)) EnsureInitialized();
+                return s_ProjectRoot;
+            }
+        }
 
         public static string TempDir
         {
@@ -109,10 +121,16 @@ namespace UnityLeanMcp
         public static void EnsureInitialized()
         {
             if (!string.IsNullOrEmpty(s_TempDir)) return;
-            CommandHelper.EnsureInitialized();
-            string root = CommandHelper.ProjectRoot;
-            if (string.IsNullOrEmpty(root)) return;
-            s_TempDir = Path.Combine(root, "Temp");
+            try
+            {
+                s_ProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"UnityLeanMcp: Failed to initialize ProjectRoot: {ex}");
+            }
+            if (string.IsNullOrEmpty(s_ProjectRoot)) return;
+            s_TempDir = Path.Combine(s_ProjectRoot, "Temp");
             s_PortFile = Path.Combine(s_TempDir, "unity_lean_mcp_port.txt");
             s_OperationFile = Path.Combine(s_TempDir, "unity_lean_mcp_operation.json");
             s_DiagnosticsFile = Path.Combine(s_TempDir, "unity_compilation_errors.txt");

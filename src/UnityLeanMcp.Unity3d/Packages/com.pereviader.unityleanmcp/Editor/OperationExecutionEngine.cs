@@ -162,58 +162,14 @@ namespace UnityLeanMcp
                 return;
             }
 
-            object result = null;
             try
             {
-                result = invoker(cts.Token);
-            }
-            catch (TargetInvocationException tie)
-            {
-                stopwatch.Stop();
-                var inner = tie.InnerException != null ? tie.InnerException : tie;
-                var logs = logCapture.GetLogs();
-                DisposeCapture(logCapture);
-                if (inner is OperationCanceledException)
-                {
-                    string cancelMsg = GetCancellationMessage(operationKind);
-                    Debug.LogWarning($"UnityLeanMcp: {operationKind} execution was canceled: {inner.Message}");
-                    FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: true);
-                    return;
-                }
-                string errorMsg = inner.ToString();
-                FinishOperation(operationId, operationKind, resultFilePath, false, errorMsg, stopwatch.Elapsed.TotalSeconds, null, logs);
-                return;
-            }
-            catch (OperationCanceledException oce)
-            {
-                stopwatch.Stop();
-                string cancelMsg = GetCancellationMessage(operationKind);
-                Debug.LogWarning($"UnityLeanMcp: {operationKind} execution was canceled: {oce.Message}");
-                var logs = logCapture.GetLogs();
-                DisposeCapture(logCapture);
-                FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: true);
-                return;
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                string errorMsg = ex.ToString();
-                var logs = logCapture.GetLogs();
-                DisposeCapture(logCapture);
-                FinishOperation(operationId, operationKind, resultFilePath, false, errorMsg, stopwatch.Elapsed.TotalSeconds, null, logs);
-                return;
-            }
-
-            try
-            {
+                object result = invoker(cts.Token);
                 UnwrapAndFinish(result, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
             }
             catch (Exception ex)
             {
-                stopwatch.Stop();
-                var logs = logCapture.GetLogs();
-                DisposeCapture(logCapture);
-                FinishOperation(operationId, operationKind, resultFilePath, false, ex.ToString(), stopwatch.Elapsed.TotalSeconds, null, logs);
+                FailWithException(ex, operationId, operationKind, resultFilePath, stopwatch, logCapture);
             }
         }
 
@@ -241,13 +197,7 @@ namespace UnityLeanMcp
                         }
                         catch (Exception ex)
                         {
-                            stopwatch.Stop();
-                            var inner = ex is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : ex;
-                            var logs = logCapture.GetLogs();
-                            DisposeCapture(logCapture);
-                            bool isCanceled = inner is OperationCanceledException;
-                            string msg = isCanceled ? GetCancellationMessage(operationKind) : inner.ToString();
-                            FinishOperation(operationId, operationKind, resultFilePath, false, msg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: isCanceled);
+                            FailWithException(ex, operationId, operationKind, resultFilePath, stopwatch, logCapture);
                             return;
                         }
                     }
@@ -267,26 +217,13 @@ namespace UnityLeanMcp
                         }
                         catch (Exception ex)
                         {
-                            stopwatch.Stop();
-                            var logs = logCapture.GetLogs();
-                            DisposeCapture(logCapture);
-                            FinishOperation(operationId, operationKind, resultFilePath, false, ex.ToString(), stopwatch.Elapsed.TotalSeconds, null, logs);
+                            FailWithException(ex, operationId, operationKind, resultFilePath, stopwatch, logCapture);
                         }
                     }));
                     return;
                 }
 
-                try
-                {
-                    UnwrapCompletedTask(innerTask, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
-                }
-                catch (Exception ex)
-                {
-                    stopwatch.Stop();
-                    var logs = logCapture.GetLogs();
-                    DisposeCapture(logCapture);
-                    FinishOperation(operationId, operationKind, resultFilePath, false, ex.ToString(), stopwatch.Elapsed.TotalSeconds, null, logs);
-                }
+                UnwrapCompletedTask(innerTask, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
                 return;
             }
 
@@ -322,34 +259,13 @@ namespace UnityLeanMcp
         {
             if (innerTask.IsFaulted)
             {
-                stopwatch.Stop();
-                double duration = stopwatch.Elapsed.TotalSeconds;
-                var logs = logCapture.GetLogs();
-                DisposeCapture(logCapture);
-                var ex = innerTask.Exception != null
-                    ? (innerTask.Exception.InnerExceptions.Count == 1 ? innerTask.Exception.InnerExceptions[0] : innerTask.Exception)
-                    : new Exception("Unknown task failure");
-                if (ex is OperationCanceledException)
-                {
-                    string cancelMsg = GetCancellationMessage(operationKind);
-                    Debug.LogWarning($"UnityLeanMcp: {operationKind} execution was canceled: {ex.Message}");
-                    FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, duration, null, logs, interrupted: true);
-                    return;
-                }
-                string errorMsg = ex.ToString();
-                FinishOperation(operationId, operationKind, resultFilePath, false, errorMsg, duration, null, logs);
+                FailWithException(innerTask.Exception ?? new Exception("Unknown task failure"), operationId, operationKind, resultFilePath, stopwatch, logCapture);
                 return;
             }
 
             if (innerTask.IsCanceled)
             {
-                stopwatch.Stop();
-                double duration = stopwatch.Elapsed.TotalSeconds;
-                var logs = logCapture.GetLogs();
-                DisposeCapture(logCapture);
-                string cancelMsg = GetCancellationMessage(operationKind);
-                Debug.LogWarning($"UnityLeanMcp: {operationKind} execution was canceled.");
-                FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, duration, null, logs, interrupted: true);
+                FailWithCancellation(operationId, operationKind, resultFilePath, stopwatch, logCapture);
                 return;
             }
 
@@ -475,6 +391,60 @@ namespace UnityLeanMcp
             {
                 Debug.LogWarning($"UnityLeanMcp: Failed to dispose log capture: {ex.Message}");
             }
+        }
+
+        private static void FailWithException(
+            Exception exception,
+            string operationId,
+            string operationKind,
+            string resultFilePath,
+            System.Diagnostics.Stopwatch stopwatch,
+            ConsoleLogCapture logCapture)
+        {
+            stopwatch.Stop();
+            var logs = logCapture?.GetLogs();
+            DisposeCapture(logCapture);
+
+            Exception current = exception;
+            if (current is TargetInvocationException tie && tie.InnerException != null)
+            {
+                current = tie.InnerException;
+            }
+            else if (current is AggregateException ae)
+            {
+                current = ae.InnerExceptions.Count == 1 ? ae.InnerExceptions[0] : ae;
+                if (current is TargetInvocationException nestedTie && nestedTie.InnerException != null)
+                {
+                    current = nestedTie.InnerException;
+                }
+            }
+
+            if (current is OperationCanceledException oce)
+            {
+                string cancelMsg = GetCancellationMessage(operationKind);
+                Debug.LogWarning($"UnityLeanMcp: {operationKind} execution was canceled: {oce.Message}");
+                FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: true);
+                return;
+            }
+
+            string errorMsg = current?.ToString() ?? "Unknown error";
+            FinishOperation(operationId, operationKind, resultFilePath, false, errorMsg, stopwatch.Elapsed.TotalSeconds, null, logs);
+        }
+
+        private static void FailWithCancellation(
+            string operationId,
+            string operationKind,
+            string resultFilePath,
+            System.Diagnostics.Stopwatch stopwatch,
+            ConsoleLogCapture logCapture,
+            string message = null)
+        {
+            stopwatch.Stop();
+            var logs = logCapture?.GetLogs();
+            DisposeCapture(logCapture);
+            string cancelMsg = GetCancellationMessage(operationKind);
+            Debug.LogWarning($"UnityLeanMcp: {operationKind} execution was canceled." + (string.IsNullOrEmpty(message) ? "" : $" {message}"));
+            FinishOperation(operationId, operationKind, resultFilePath, false, cancelMsg, stopwatch.Elapsed.TotalSeconds, null, logs, interrupted: true);
         }
 
         private static string GetCancellationMessage(string operationKind)

@@ -325,7 +325,7 @@ public class UnityClient : IUnityClient
                 await CancelOperationAsync(opId, isRecompile ? "recompile" : "refresh");
                 throw;
             }
-            var initialTerminalResult = TryCreateRefreshTerminalResult(initialResponse, opId);
+            var initialTerminalResult = TryCreateImmediateTerminalResult<UnityRefreshResult>(initialResponse, opId);
             if (initialTerminalResult != null)
             {
                 return initialTerminalResult;
@@ -422,7 +422,8 @@ public class UnityClient : IUnityClient
             return result;
         }
 
-        var spec = new OperationPollingSpec<UnityRefreshResult>
+        OperationPollingSpec<UnityRefreshResult> spec = null!;
+        spec = new OperationPollingSpec<UnityRefreshResult>
         {
             OperationId = opId,
             Kind = null,
@@ -446,8 +447,7 @@ public class UnityClient : IUnityClient
 
                 if (string.Equals(pollResp, "READY", StringComparison.OrdinalIgnoreCase))
                 {
-                    var refreshResultPath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId);
-                    var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId);
+                    var result = TryReadJsonFile<UnityRefreshResult>(spec.ResultFilePath, r => r.OperationId == opId);
                     if (result != null)
                     {
                         return result;
@@ -458,20 +458,17 @@ public class UnityClient : IUnityClient
                         return null;
                     }
 
-                    result = new UnityRefreshResult
+                    return new UnityRefreshResult
                     {
                         OperationId = opId,
                         Success = true,
                         Message = "The already-running compilation completed successfully."
                     };
-
-                    return CompleteRefreshResult(result);
                 }
 
                 if (string.Equals(pollResp, "COMPILATION_ERROR", StringComparison.OrdinalIgnoreCase))
                 {
-                    var refreshResultPath = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId);
-                    var result = TryReadJsonFile<UnityRefreshResult>(refreshResultPath, r => r.OperationId == opId);
+                    var result = TryReadJsonFile<UnityRefreshResult>(spec.ResultFilePath, r => r.OperationId == opId);
                     if (result != null)
                     {
                         return result;
@@ -487,12 +484,12 @@ public class UnityClient : IUnityClient
                     // operation timeout.
                     await Task.Delay(200, ct);
                     string diag = ReadCompilationErrors();
-                    return CompleteRefreshResult(new UnityRefreshResult
+                    return new UnityRefreshResult
                     {
                         OperationId = opId,
                         Success = false,
                         Message = !string.IsNullOrWhiteSpace(diag) ? diag : "Unity script compilation failed."
-                    });
+                    };
                 }
 
                 return null;
@@ -525,7 +522,7 @@ public class UnityClient : IUnityClient
         return await PollOperationUntilTerminalAsync(spec, cancellationToken);
     }
 
-    private static UnityRefreshResult? TryCreateRefreshTerminalResult(string? response, string operationId)
+    internal static TResult? TryCreateImmediateTerminalResult<TResult>(string? response, string operationId) where TResult : class, IOperationResult, new()
     {
         if (string.IsNullOrWhiteSpace(response))
         {
@@ -536,7 +533,7 @@ public class UnityClient : IUnityClient
         if (trimmed.StartsWith("INTERRUPTION", StringComparison.OrdinalIgnoreCase))
         {
             string message = trimmed.Length > 12 ? trimmed[12..].Trim() : "Operation interrupted.";
-            return new UnityRefreshResult
+            return new TResult
             {
                 OperationId = operationId,
                 Success = false,
@@ -548,7 +545,7 @@ public class UnityClient : IUnityClient
         if (trimmed.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) ||
             trimmed.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase))
         {
-            return new UnityRefreshResult
+            return new TResult
             {
                 OperationId = operationId,
                 Success = false,
@@ -918,14 +915,10 @@ public class UnityClient : IUnityClient
                 }
             }
 
-            if (initialResponse != null && (initialResponse.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase) || initialResponse.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase)))
+            var terminal = TryCreateImmediateTerminalResult<TResult>(initialResponse, opId);
+            if (terminal != null)
             {
-                return new TResult
-                {
-                    OperationId = opId,
-                    Success = false,
-                    Message = ProtocolCodec.UnescapeLine(StripStatusPrefix(initialResponse))
-                };
+                return terminal;
             }
 
             return await pollExecutor(opId, resultFile, cancellationToken);

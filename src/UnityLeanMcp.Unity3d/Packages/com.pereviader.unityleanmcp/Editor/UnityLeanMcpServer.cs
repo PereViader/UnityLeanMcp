@@ -123,7 +123,6 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                CommandHelper.EnsureInitialized();
                 UnityLeanMcpPaths.EnsureInitialized();
                 UnityLeanMcpOperationStore.EnsureInitialized();
                 UnityLeanMcpCompilationTracker.EnsureInitialized();

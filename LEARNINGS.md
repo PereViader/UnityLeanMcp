@@ -426,3 +426,12 @@ When auto-starting Unity in batchmode (`-batchmode -nographics -projectPath ... 
 
 Unity APIs like `Application.dataPath` throw an exception (`UnityException: get_dataPath can only be called from the main thread`) if called from a worker thread. Creating duplicate shadow properties (`Worker*`) that read uninitialized static fields risks silent `null` path dereferencing if accessed early. By ensuring that path initialization (`UnityLeanMcpPaths.EnsureInitialized()`) is invoked deterministically during the main thread bootstrap sequence (`[InitializeOnLoadMethod] BootstrapOnMainThread()`), the project path is safely resolved and cached into plain string fields once. Background worker threads can then safely access the canonical path properties without needing duplicate properties or risking background thread Unity API invocation.
 
+### Custom Response Handlers and Automatic Result Completion in Polling
+
+In `OperationPoller.PollOperationUntilTerminalAsync`, when `spec.CustomResponseHandler` returns a non-null terminal result, `OperationPoller` automatically invokes `spec.OnResultFound(customResult)` before returning it. Invoking completion logic (such as `CompleteRefreshResult(result)`) manually inside `CustomResponseHandler` causes duplicate execution of diagnostic enrichment and progress reporting callbacks. Custom response handlers must return synthesized or read results directly without manual completion calls.
+
+### Dynamic Result File Path Lookups for Settlement Polling
+
+When polling for compilation settlement in `WaitForCompilationToSettleAsync`, the operation may represent either a standard `Refresh` or a clean `Recompile`. Hardcoding `UnityOperationKind.Refresh` in `CustomResponseHandler` fails to locate operation results produced by recompilations. Polling handlers must read `spec.ResultFilePath` directly so that they automatically query the path determined by the active operation's kind.
+
+

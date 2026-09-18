@@ -65,7 +65,6 @@ namespace UnityLeanMcp
 
         private static void InitializeMainThread()
         {
-            CommandHelper.EnsureInitialized();
             UnityLeanMcpPaths.EnsureInitialized();
             UnityLeanMcpOperationStore.EnsureInitialized();
             UpdateCompilationState();
