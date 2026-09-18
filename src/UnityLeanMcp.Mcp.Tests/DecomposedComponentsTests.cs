@@ -1111,27 +1111,4 @@ public class DecomposedComponentsTests
         public Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default) => Task.FromResult(_response);
         public Task<bool> IsSocketReadyAsync(int port, int timeoutSeconds = 2, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
-
-    private sealed class StubProcessManager : IUnityProcessManager
-    {
-        private readonly bool _isRunning;
-
-        public IUnityPathResolver PathResolver { get; }
-        public IUnityExecutableLocator ExecutableLocator => throw new NotImplementedException();
-        public StubProcessManager(IUnityPathResolver pathResolver, bool isRunning = true)
-        {
-            PathResolver = pathResolver;
-            _isRunning = isRunning;
-        }
-        public bool IsUnityRunning(out int? processId)
-        {
-            processId = _isRunning ? 1234 : null;
-            return _isRunning;
-        }
-        public string GetUnityMode(int? pid = null) => "Batchmode";
-        public int ReadPortFile() => 12345;
-        public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
-        public void PurgeOperationState() { }
-    }
 }

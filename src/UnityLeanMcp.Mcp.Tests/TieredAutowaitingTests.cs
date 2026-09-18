@@ -57,616 +57,248 @@ public class TieredAutowaitingTests
     [Fact]
     public async Task UnityClient_EvalAsync_WhenBusyCompile_AutowaitsAndSucceeds()
     {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_busy_compile_eval_" + Guid.NewGuid().ToString("N"));
-        string unityTemp = Path.Combine(tempDir, "Temp");
-        Directory.CreateDirectory(unityTemp);
-
-        try
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new Progress<ProgressNotificationValue>(p =>
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
-
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-                .WithTrustedTestProcessProvider();
-            var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
-            {
-                PollIntervalMs = 50
-            };
-
-            var receivedProgress = new List<ProgressNotificationValue>();
-            var progress = new Progress<ProgressNotificationValue>(p =>
-            {
-                lock (receivedProgress)
-                {
-                    receivedProgress.Add(p);
-                }
-            });
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            int evalAttempts = 0;
-            int compilePolls = 0;
-
-            var serverTask = Task.Run(async () =>
-            {
-                while (!cts.IsCancellationRequested)
-                {
-                    TcpClient tcp;
-                    try
-                    {
-                        tcp = await listener.AcceptTcpClientAsync(cts.Token);
-                    }
-                    catch
-                    {
-                        break;
-                    }
-
-                    using (tcp)
-                    using (var stream = tcp.GetStream())
-                    using (var reader = new StreamReader(stream, Encoding.UTF8))
-                    using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
-                    {
-                        string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) continue;
-
-                        if (line == "PING")
-                        {
-                            await writer.WriteLineAsync("PONG");
-                        }
-                        else if (line.StartsWith("POLL_REFRESH"))
-                        {
-                            if (evalAttempts == 1)
-                            {
-                                if (compilePolls++ == 0)
-                                {
-                                    await writer.WriteLineAsync("COMPILING");
-                                }
-                                else
-                                {
-                                    if (TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
-                                    {
-                                        TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                                    }
-
-                                    await writer.WriteLineAsync("READY");
-                                }
-                            }
-                            else
-                            {
-                                await writer.WriteLineAsync("READY");
-                            }
-                        }
-                        else if (line.StartsWith("REFRESH"))
-                        {
-                            string[] parts = line.Split(' ');
-                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
-                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                            await writer.WriteLineAsync("REFRESHING");
-                        }
-                        else if (line.StartsWith("POLL_EVAL"))
-                        {
-                            await writer.WriteLineAsync("READY");
-                        }
-                        else if (line.StartsWith("EVAL"))
-                        {
-                            evalAttempts++;
-                            if (evalAttempts == 1)
-                            {
-                                await writer.WriteLineAsync("BUSY compile");
-                            }
-                            else
-                            {
-                                string[] parts = line.Split(' ', 3);
-                                string opId = parts.Length > 1 ? parts[1] : "eval-op";
-                                var evalResult = new UnityEvalResult
-                                {
-                                    OperationId = opId,
-                                    Success = true,
-                                    Payload = "100"
-                                };
-                                string json = JsonSerializer.Serialize(evalResult);
-                                await File.WriteAllTextAsync(Path.Combine(unityTemp, $"unity_eval_{opId}.json"), json, cts.Token);
-                                await writer.WriteLineAsync($"SUCCESS 100");
-                            }
-                        }
-                    }
-                }
-            });
-
-            var result = await client.EvalAsync("return 50 + 50;", progress, cts.Token);
-
-            Assert.True(result.Success, result.Message);
-            Assert.Equal("100", result.Payload);
-            Assert.Equal(2, evalAttempts);
-
             lock (receivedProgress)
             {
-                Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Unity is compiling script assemblies"));
+                receivedProgress.Add(p);
             }
+        });
 
-            cts.Cancel();
-            listener.Stop();
-            await Task.WhenAny(serverTask, Task.Delay(500));
-        }
-        finally
+        int evalAttempts = 0;
+        int compilePolls = 0;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
         {
-            try { Directory.Delete(tempDir, true); } catch { }
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (evalAttempts == 1)
+                {
+                    if (compilePolls++ == 0)
+                    {
+                        return "COMPILING";
+                    }
+                }
+                return null;
+            }
+            if (line.StartsWith("EVAL"))
+            {
+                evalAttempts++;
+                if (evalAttempts == 1)
+                {
+                    return "BUSY compile";
+                }
+                else
+                {
+                    string[] parts = line.Split(' ', 3);
+                    string opId = parts.Length > 1 ? parts[1] : "eval-op";
+                    srv.WriteEvalResult(opId, "100");
+                    return "SUCCESS 100";
+                }
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.EvalAsync("return 50 + 50;", progress, cts.Token);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("100", result.Payload);
+        Assert.Equal(2, evalAttempts);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Unity is compiling script assemblies"));
         }
     }
 
     [Fact]
     public async Task UnityClient_EvalAsync_WhenBusyForeignOperation_GracePeriodExpires_ReturnsFailFastDiagnostic()
     {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_busy_foreign_eval_" + Guid.NewGuid().ToString("N"));
-        string unityTemp = Path.Combine(tempDir, "Temp");
-        Directory.CreateDirectory(unityTemp);
-
-        try
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new Progress<ProgressNotificationValue>(p =>
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
-
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-                .WithTrustedTestProcessProvider();
-            var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
-            {
-                PollIntervalMs = 20,
-                BusyGracePeriod = TimeSpan.FromMilliseconds(100)
-            };
-
-            var receivedProgress = new List<ProgressNotificationValue>();
-            var progress = new Progress<ProgressNotificationValue>(p =>
-            {
-                lock (receivedProgress)
-                {
-                    receivedProgress.Add(p);
-                }
-            });
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            int evalAttempts = 0;
-
-            var serverTask = Task.Run(async () =>
-            {
-                while (!cts.IsCancellationRequested)
-                {
-                    TcpClient tcp;
-                    try
-                    {
-                        tcp = await listener.AcceptTcpClientAsync(cts.Token);
-                    }
-                    catch
-                    {
-                        break;
-                    }
-
-                    using (tcp)
-                    using (var stream = tcp.GetStream())
-                    using (var reader = new StreamReader(stream, Encoding.UTF8))
-                    using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
-                    {
-                        string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) continue;
-
-                        if (line == "PING")
-                        {
-                            await writer.WriteLineAsync("PONG");
-                        }
-                        else if (line.StartsWith("POLL_REFRESH"))
-                        {
-                            if (evalAttempts >= 1)
-                            {
-                                await writer.WriteLineAsync("BUSY test op_foreign_999");
-                            }
-                            else
-                            {
-                                await writer.WriteLineAsync("READY");
-                            }
-                        }
-                        else if (line.StartsWith("REFRESH"))
-                        {
-                            string[] parts = line.Split(' ');
-                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
-                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                            await writer.WriteLineAsync("REFRESHING");
-                        }
-                        else if (line.StartsWith("EVAL"))
-                        {
-                            evalAttempts++;
-                            await writer.WriteLineAsync("BUSY test op_foreign_999");
-                        }
-                    }
-                }
-            });
-
-            var result = await client.EvalAsync("return 1;", progress, cts.Token);
-
-            Assert.False(result.Success);
-            Assert.Contains("Unity is busy executing 'test' (id: op_foreign_999). If this operation is hung, call unity_stop to recover.", result.Message);
-
             lock (receivedProgress)
             {
-                Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
+                receivedProgress.Add(p);
             }
+        });
 
-            cts.Cancel();
-            listener.Stop();
-            await Task.WhenAny(serverTask, Task.Delay(500));
-        }
-        finally
+        int evalAttempts = 0;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
         {
-            try { Directory.Delete(tempDir, true); } catch { }
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (evalAttempts >= 1)
+                {
+                    return "BUSY test op_foreign_999";
+                }
+                return null;
+            }
+            if (line.StartsWith("EVAL"))
+            {
+                evalAttempts++;
+                return "BUSY test op_foreign_999";
+            }
+            return null;
+        }, new UnityClientOptions(PollIntervalMs: 20, BusyGracePeriod: TimeSpan.FromMilliseconds(100)));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.EvalAsync("return 1;", progress, cts.Token);
+
+        Assert.False(result.Success);
+        Assert.Contains("Unity is busy executing 'test' (id: op_foreign_999). If this operation is hung, call unity_stop to recover.", result.Message);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
         }
     }
 
     [Fact]
     public async Task UnityClient_EvalAsync_WhenBusyForeignOperation_ClearsDuringGracePeriod_Succeeds()
     {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_busy_clears_eval_" + Guid.NewGuid().ToString("N"));
-        string unityTemp = Path.Combine(tempDir, "Temp");
-        Directory.CreateDirectory(unityTemp);
+        int evalAttempts = 0;
+        int gracePolls = 0;
 
-        try
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
-
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-                .WithTrustedTestProcessProvider();
-            var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
+            if (line.StartsWith("POLL_REFRESH"))
             {
-                PollIntervalMs = 50
-            };
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            int evalAttempts = 0;
-            int gracePolls = 0;
-
-            var serverTask = Task.Run(async () =>
-            {
-                while (!cts.IsCancellationRequested)
+                if (evalAttempts == 1)
                 {
-                    TcpClient tcp;
-                    try
+                    if (gracePolls++ < 1)
                     {
-                        tcp = await listener.AcceptTcpClientAsync(cts.Token);
-                    }
-                    catch
-                    {
-                        break;
-                    }
-
-                    using (tcp)
-                    using (var stream = tcp.GetStream())
-                    using (var reader = new StreamReader(stream, Encoding.UTF8))
-                    using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
-                    {
-                        string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) continue;
-
-                        if (line == "PING")
-                        {
-                            await writer.WriteLineAsync("PONG");
-                        }
-                        else if (line.StartsWith("POLL_REFRESH"))
-                        {
-                            if (evalAttempts == 1)
-                            {
-                                if (gracePolls++ < 1)
-                                {
-                                    await writer.WriteLineAsync("BUSY test op_foreign");
-                                }
-                                else
-                                {
-                                    // Cleared during grace period
-                                    await writer.WriteLineAsync("READY");
-                                }
-                            }
-                            else
-                            {
-                                await writer.WriteLineAsync("READY");
-                            }
-                        }
-                        else if (line.StartsWith("REFRESH"))
-                        {
-                            string[] parts = line.Split(' ');
-                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
-                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                            await writer.WriteLineAsync("REFRESHING");
-                        }
-                        else if (line.StartsWith("POLL_EVAL"))
-                        {
-                            await writer.WriteLineAsync("READY");
-                        }
-                        else if (line.StartsWith("EVAL"))
-                        {
-                            evalAttempts++;
-                            if (evalAttempts == 1)
-                            {
-                                await writer.WriteLineAsync("BUSY test op_foreign");
-                            }
-                            else
-                            {
-                                string[] parts = line.Split(' ', 3);
-                                string opId = parts.Length > 1 ? parts[1] : "eval-op";
-                                var evalResult = new UnityEvalResult
-                                {
-                                    OperationId = opId,
-                                    Success = true,
-                                    Payload = "cleared_ok"
-                                };
-                                string json = JsonSerializer.Serialize(evalResult);
-                                await File.WriteAllTextAsync(Path.Combine(unityTemp, $"unity_eval_{opId}.json"), json, cts.Token);
-                                await writer.WriteLineAsync("SUCCESS cleared_ok");
-                            }
-                        }
+                        return "BUSY test op_foreign";
                     }
                 }
-            });
+                return null;
+            }
+            if (line.StartsWith("EVAL"))
+            {
+                evalAttempts++;
+                if (evalAttempts == 1)
+                {
+                    return "BUSY test op_foreign";
+                }
+                else
+                {
+                    string[] parts = line.Split(' ', 3);
+                    string opId = parts.Length > 1 ? parts[1] : "eval-op";
+                    srv.WriteEvalResult(opId, "cleared_ok");
+                    return "SUCCESS cleared_ok";
+                }
+            }
+            return null;
+        });
 
-            var result = await client.EvalAsync("return \"cleared_ok\";", null, cts.Token);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.EvalAsync("return \"cleared_ok\";", null, cts.Token);
 
-            Assert.True(result.Success, result.Message);
-            Assert.Equal("cleared_ok", result.Payload);
-            Assert.Equal(2, evalAttempts);
-
-            cts.Cancel();
-            listener.Stop();
-            await Task.WhenAny(serverTask, Task.Delay(500));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("cleared_ok", result.Payload);
+        Assert.Equal(2, evalAttempts);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenBusyCompile_AutowaitsAndSucceeds()
     {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_busy_compile_test_" + Guid.NewGuid().ToString("N"));
-        string unityTemp = Path.Combine(tempDir, "Temp");
-        Directory.CreateDirectory(unityTemp);
-
-        try
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new Progress<ProgressNotificationValue>(p =>
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
-
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-                .WithTrustedTestProcessProvider();
-            var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
-            {
-                PollIntervalMs = 50
-            };
-
-            var receivedProgress = new List<ProgressNotificationValue>();
-            var progress = new Progress<ProgressNotificationValue>(p =>
-            {
-                lock (receivedProgress)
-                {
-                    receivedProgress.Add(p);
-                }
-            });
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            int runTestsAttempts = 0;
-            int compilePolls = 0;
-
-            var serverTask = Task.Run(async () =>
-            {
-                while (!cts.IsCancellationRequested)
-                {
-                    TcpClient tcp;
-                    try
-                    {
-                        tcp = await listener.AcceptTcpClientAsync(cts.Token);
-                    }
-                    catch
-                    {
-                        break;
-                    }
-
-                    using (tcp)
-                    using (var stream = tcp.GetStream())
-                    using (var reader = new StreamReader(stream, Encoding.UTF8))
-                    using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
-                    {
-                        string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) continue;
-
-                        if (line == "PING")
-                        {
-                            await writer.WriteLineAsync("PONG");
-                        }
-                        else if (line.StartsWith("POLL_REFRESH"))
-                        {
-                            if (runTestsAttempts == 1)
-                            {
-                                if (compilePolls++ == 0)
-                                {
-                                    await writer.WriteLineAsync("COMPILING");
-                                }
-                                else
-                                {
-                                    if (TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
-                                    {
-                                        TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                                    }
-
-                                    await writer.WriteLineAsync("READY");
-                                }
-                            }
-                            else
-                            {
-                                await writer.WriteLineAsync("READY");
-                            }
-                        }
-                        else if (line.StartsWith("REFRESH"))
-                        {
-                            string[] parts = line.Split(' ');
-                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
-                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                            await writer.WriteLineAsync("REFRESHING");
-                        }
-                        else if (line.StartsWith("POLL_TESTS"))
-                        {
-                            await writer.WriteLineAsync("READY");
-                        }
-                        else if (line.StartsWith("RUN_TESTS"))
-                        {
-                            runTestsAttempts++;
-                            if (runTestsAttempts == 1)
-                            {
-                                await writer.WriteLineAsync("BUSY compile");
-                            }
-                            else
-                            {
-                                string[] parts = line.Split(' ');
-                                string opId = parts.Length > 1 ? parts[1] : "test-op";
-                                var testResult = new UnityTestRunResult
-                                {
-                                    RunId = opId,
-                                    Success = true,
-                                    PassCount = 5,
-                                    FailCount = 0
-                                };
-                                string json = JsonSerializer.Serialize(testResult);
-                                await File.WriteAllTextAsync(Path.Combine(unityTemp, $"unity_test_{opId}.json"), json, cts.Token);
-                                await writer.WriteLineAsync($"SUCCESS {opId}");
-                            }
-                        }
-                    }
-                }
-            });
-
-            var result = await client.RunTestsAsync(null, null, null, null, "all", false, progress, cts.Token);
-
-            Assert.True(result.Success, result.Message);
-            Assert.Equal(5, result.PassCount);
-            Assert.Equal(2, runTestsAttempts);
-
             lock (receivedProgress)
             {
-                Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Unity is compiling script assemblies"));
+                receivedProgress.Add(p);
             }
+        });
 
-            cts.Cancel();
-            listener.Stop();
-            await Task.WhenAny(serverTask, Task.Delay(500));
-        }
-        finally
+        int runTestsAttempts = 0;
+        int compilePolls = 0;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
         {
-            try { Directory.Delete(tempDir, true); } catch { }
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (runTestsAttempts == 1)
+                {
+                    if (compilePolls++ == 0)
+                    {
+                        return "COMPILING";
+                    }
+                }
+                return null;
+            }
+            if (line.StartsWith("POLL_TESTS"))
+            {
+                return "READY";
+            }
+            if (line.StartsWith("RUN_TESTS"))
+            {
+                runTestsAttempts++;
+                if (runTestsAttempts == 1)
+                {
+                    return "BUSY compile";
+                }
+                else
+                {
+                    string[] parts = line.Split(' ');
+                    string opId = parts.Length > 1 ? parts[1] : "test-op";
+                    var testResult = new UnityTestRunResult
+                    {
+                        RunId = opId,
+                        Success = true,
+                        PassCount = 5,
+                        FailCount = 0
+                    };
+                    srv.WriteTestResult(opId, testResult);
+                    return $"SUCCESS {opId}";
+                }
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "all", false, progress, cts.Token);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(5, result.PassCount);
+        Assert.Equal(2, runTestsAttempts);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Unity is compiling script assemblies"));
         }
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenBusyForeignOperation_GracePeriodExpires_ReturnsFailFastDiagnostic()
     {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_busy_foreign_test_" + Guid.NewGuid().ToString("N"));
-        string unityTemp = Path.Combine(tempDir, "Temp");
-        Directory.CreateDirectory(unityTemp);
+        int runTestsAttempts = 0;
 
-        try
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-            File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
-
-            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-                .WithTrustedTestProcessProvider();
-            var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance)
+            if (line.StartsWith("POLL_REFRESH"))
             {
-                PollIntervalMs = 20,
-                BusyGracePeriod = TimeSpan.FromMilliseconds(100)
-            };
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            int runTestsAttempts = 0;
-
-            var serverTask = Task.Run(async () =>
-            {
-                while (!cts.IsCancellationRequested)
+                if (runTestsAttempts >= 1)
                 {
-                    TcpClient tcp;
-                    try
-                    {
-                        tcp = await listener.AcceptTcpClientAsync(cts.Token);
-                    }
-                    catch
-                    {
-                        break;
-                    }
-
-                    using (tcp)
-                    using (var stream = tcp.GetStream())
-                    using (var reader = new StreamReader(stream, Encoding.UTF8))
-                    using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
-                    {
-                        string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) continue;
-
-                        if (line == "PING")
-                        {
-                            await writer.WriteLineAsync("PONG");
-                        }
-                        else if (line.StartsWith("POLL_REFRESH"))
-                        {
-                            if (runTestsAttempts >= 1)
-                            {
-                                await writer.WriteLineAsync("BUSY eval op_eval_777");
-                            }
-                            else
-                            {
-                                await writer.WriteLineAsync("READY");
-                            }
-                        }
-                        else if (line.StartsWith("REFRESH"))
-                        {
-                            string[] parts = line.Split(' ');
-                            string operationId = parts.Length > 1 ? parts[1] : "refresh-op";
-                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                            await writer.WriteLineAsync("REFRESHING");
-                        }
-                        else if (line.StartsWith("RUN_TESTS"))
-                        {
-                            runTestsAttempts++;
-                            await writer.WriteLineAsync("BUSY eval op_eval_777");
-                        }
-                    }
+                    return "BUSY eval op_eval_777";
                 }
-            });
+                return null;
+            }
+            if (line.StartsWith("RUN_TESTS"))
+            {
+                runTestsAttempts++;
+                return "BUSY eval op_eval_777";
+            }
+            return null;
+        }, new UnityClientOptions(PollIntervalMs: 20, BusyGracePeriod: TimeSpan.FromMilliseconds(100)));
 
-            var result = await client.RunTestsAsync(null, null, null, null, "all", false, null, cts.Token);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "all", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, call unity_stop to recover.", result.Message);
-
-            cts.Cancel();
-            listener.Stop();
-            await Task.WhenAny(serverTask, Task.Delay(500));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, call unity_stop to recover.", result.Message);
     }
 }

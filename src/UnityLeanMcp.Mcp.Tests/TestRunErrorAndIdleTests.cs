@@ -85,135 +85,51 @@ public class TestRunErrorAndIdleTests
         }
     }
 
-    private static (UnityClient client, UnityProcessManager procManager, TcpListener listener, string tempDir, Task serverTask) StartMockServer(
-        Func<string, string?> handleCommand,
-        CancellationToken cancellationToken)
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_test_err_" + Guid.NewGuid().ToString("N"));
-        string unityTemp = Path.Combine(tempDir, "Temp");
-        Directory.CreateDirectory(unityTemp);
-
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-        File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString());
-        File.WriteAllText(Path.Combine(unityTemp, "unity_lean_mcp_process.pid"), Environment.ProcessId.ToString());
-
-        var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
-            .WithTrustedTestProcessProvider();
-        var client = new UnityClient(procManager, NullLogger<UnityClient>.Instance);
-        bool refreshTriggered = false;
-
-        var serverTask = Task.Run(async () =>
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                TcpClient tcp;
-                try { tcp = await listener.AcceptTcpClientAsync(cancellationToken); }
-                catch { break; }
-
-                using (tcp)
-                using (var stream = tcp.GetStream())
-                using (var reader = new StreamReader(stream, Encoding.UTF8))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
-                {
-                    string? line = await reader.ReadLineAsync(cancellationToken);
-                    if (line == null) continue;
-
-                    string? customResp = handleCommand(line);
-                    if (customResp != null)
-                    {
-                        await writer.WriteLineAsync(customResp);
-                    }
-                    else if (line == "PING")
-                    {
-                        await writer.WriteLineAsync("PONG");
-                    }
-                    else if (line.StartsWith("POLL_REFRESH"))
-                    {
-                        if (refreshTriggered && TestProcessProvider.TryGetRefreshOperationId(line, out string operationId))
-                        {
-                            TestProcessProvider.WriteRefreshResult(procManager.PathResolver, operationId);
-                        }
-
-                        await writer.WriteLineAsync("READY");
-                    }
-                    else if (line.StartsWith("REFRESH"))
-                    {
-                        refreshTriggered = true;
-                        await writer.WriteLineAsync("REFRESHING");
-                    }
-                }
-            }
-        }, cancellationToken);
-
-        return (client, procManager, listener, tempDir, serverTask);
-    }
-
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsError_ReturnsImmediatelyWithoutHanging()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
                 return "ERROR: Missing or invalid operation id";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("ERROR", result.Message);
-            Assert.Equal("Missing or invalid operation id", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.DoesNotContain("ERROR", result.Message);
+        Assert.Equal("Missing or invalid operation id", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsFailure_ReturnsImmediatelyWithoutHanging()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
                 return "FAILURE: Runner failed to start";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("FAILURE", result.Message);
-            Assert.Equal("Runner failed to start", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.DoesNotContain("FAILURE", result.Message);
+        Assert.Equal("Runner failed to start", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenPollResponseIsIdle_TerminatesImmediatelyWithFailure()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
@@ -224,28 +140,19 @@ public class TestRunErrorAndIdleTests
                 return "IDLE";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenPollResponseIsError_TerminatesImmediatelyWithFailure()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
@@ -256,29 +163,20 @@ public class TestRunErrorAndIdleTests
                 return "ERROR: Something went wrong";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("ERROR", result.Message);
-            Assert.Equal("Something went wrong", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.DoesNotContain("ERROR", result.Message);
+        Assert.Equal("Something went wrong", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenPollResponseIsErrorWithoutColon_StripsPrefixAndUnescapes()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
@@ -289,59 +187,40 @@ public class TestRunErrorAndIdleTests
                 return "ERROR Test runner crashed\\nAt frame 42";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("ERROR", result.Message);
-            Assert.Equal("Test runner crashed\nAt frame 42", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.DoesNotContain("ERROR", result.Message);
+        Assert.Equal("Test runner crashed\nAt frame 42", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsEscapedErrorOrFailure_StripsPrefixAndUnescapes()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
                 return "FAILURE: Test execution aborted\\nReason: C:\\\\Temp\\\\failure.log\\t(Code 1)";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("FAILURE", result.Message);
-            Assert.Equal("Test execution aborted\nReason: C:\\Temp\\failure.log\t(Code 1)", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.DoesNotContain("FAILURE", result.Message);
+        Assert.Equal("Test execution aborted\nReason: C:\\Temp\\failure.log\t(Code 1)", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsSuccessWithDurableFile_UsesDurableResult()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        UnityProcessManager procManager = null!;
-        var server = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync((srv, cmd) =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
@@ -355,37 +234,25 @@ public class TestRunErrorAndIdleTests
                     PassCount = 10,
                     Message = "Durable result"
                 };
-                File.WriteAllText(
-                    procManager.PathResolver.GetResultFilePath(UnityOperationKind.Test, operationId),
-                    System.Text.Json.JsonSerializer.Serialize(durableResult));
+                srv.WriteTestResult(operationId, durableResult);
 
                 return "SUCCESS All tests passed\\nTotal: 10";
             }
             return null;
-        }, cts.Token);
-        procManager = server.procManager;
+        });
 
-        try
-        {
-            var result = await server.client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.True(result.Success);
-            Assert.Equal(10, result.PassCount);
-            Assert.Equal("Durable result", result.Message);
-        }
-        finally
-        {
-            server.listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(server.tempDir, true); } catch { }
-        }
+        Assert.True(result.Success);
+        Assert.Equal(10, result.PassCount);
+        Assert.Equal("Durable result", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_RunTestsAsync_WhenPollResponseIsBusy_TerminatesImmediatelyWithFailure()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
@@ -396,28 +263,19 @@ public class TestRunErrorAndIdleTests
                 return "BUSY eval foreign-op";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
-            Assert.False(result.Success);
-            Assert.Contains("Lost ownership of test run: BUSY eval foreign-op", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.Contains("Lost ownership of test run: BUSY eval foreign-op", result.Message);
     }
 
     [Fact]
     public async Task UnityClient_EvalAsync_WhenPollResponseIsIdle_TerminatesWithFailure()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("EVAL"))
             {
@@ -428,21 +286,12 @@ public class TestRunErrorAndIdleTests
                 return "IDLE";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.EvalAsync("return 1 + 1;", cts.Token);
+        var result = await server.Client.EvalAsync("return 1 + 1;", cts.Token);
 
-            Assert.False(result.Success);
-            Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
     }
 
     [Fact]
@@ -450,8 +299,7 @@ public class TestRunErrorAndIdleTests
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         string capturedOpId = "";
-        UnityProcessManager procManager = null!;
-        var server = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync((srv, cmd) =>
         {
             if (cmd.StartsWith("EVAL"))
             {
@@ -465,35 +313,16 @@ public class TestRunErrorAndIdleTests
             if (cmd.StartsWith("POLL_EVAL"))
             {
                 // Simulate race condition: Editor finished evaluation, wrote result file, and returned IDLE
-                var result = new UnityEvalResult
-                {
-                    OperationId = capturedOpId,
-                    Success = true,
-                    Payload = "42"
-                };
-                File.WriteAllText(procManager.PathResolver.GetResultFilePath(UnityOperationKind.Eval, capturedOpId), System.Text.Json.JsonSerializer.Serialize(result));
+                srv.WriteEvalResult(capturedOpId, "42");
                 return "IDLE";
             }
             return null;
-        }, cts.Token);
-        procManager = server.procManager;
-        var client = server.client;
-        var listener = server.listener;
-        var tempDir = server.tempDir;
+        });
 
-        try
-        {
-            var result = await client.EvalAsync("return 1 + 1;", cts.Token);
+        var result = await server.Client.EvalAsync("return 1 + 1;", cts.Token);
 
-            Assert.True(result.Success);
-            Assert.Equal("42", result.Payload);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.Success);
+        Assert.Equal("42", result.Payload);
     }
 
     [Fact]
@@ -501,7 +330,7 @@ public class TestRunErrorAndIdleTests
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         bool evalInvoked = false;
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("POLL_REFRESH"))
             {
@@ -513,89 +342,62 @@ public class TestRunErrorAndIdleTests
                 return "RUNNING";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.EvalAsync("return 1 + 1;", cts.Token);
+        var result = await server.Client.EvalAsync("return 1 + 1;", cts.Token);
 
-            Assert.False(result.Success);
-            Assert.False(evalInvoked, "EVAL should not be invoked when pre-refresh compilation fails.");
-            Assert.Contains("compilation", result.Message, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.False(evalInvoked, "EVAL should not be invoked when pre-refresh compilation fails.");
+        Assert.Contains("compilation", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task UnityClient_EvalAsync_WhenInitialResponseIsFailure_StripsPrefixAndParsesDiagnosticsCorrectly()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("EVAL"))
             {
                 return "FAILURE eval(1,5): error CS0103: The name 'x' does not exist in the current context";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.EvalAsync("return x;", cts.Token);
+        var result = await server.Client.EvalAsync("return x;", cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("FAILURE", result.Message);
-            Assert.StartsWith("eval(1,5): error CS0103:", result.Message);
+        Assert.False(result.Success);
+        Assert.DoesNotContain("FAILURE", result.Message);
+        Assert.StartsWith("eval(1,5): error CS0103:", result.Message);
 
-            var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(result.Message);
-            Assert.Single(diags);
-            Assert.Equal("eval", diags[0].File);
-            Assert.Equal(1, diags[0].Line);
-            Assert.Equal(5, diags[0].Column);
-            Assert.Equal("error", diags[0].Severity);
-            Assert.Equal("CS0103", diags[0].Code);
-            Assert.Equal("The name 'x' does not exist in the current context", diags[0].Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(result.Message);
+        Assert.Single(diags);
+        Assert.Equal("eval", diags[0].File);
+        Assert.Equal(1, diags[0].Line);
+        Assert.Equal(5, diags[0].Column);
+        Assert.Equal("error", diags[0].Severity);
+        Assert.Equal("CS0103", diags[0].Code);
+        Assert.Equal("The name 'x' does not exist in the current context", diags[0].Message);
     }
 
     [Fact]
     public async Task UnityClient_EvalAsync_WhenInitialResponseIsError_StripsPrefixCorrectly()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("EVAL"))
             {
                 return "ERROR: Missing operation id or code snippet";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.EvalAsync("return 1;", cts.Token);
+        var result = await server.Client.EvalAsync("return 1;", cts.Token);
 
-            Assert.False(result.Success);
-            Assert.DoesNotContain("ERROR:", result.Message);
-            Assert.Equal("Missing operation id or code snippet", result.Message);
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.Success);
+        Assert.DoesNotContain("ERROR:", result.Message);
+        Assert.Equal("Missing operation id or code snippet", result.Message);
     }
 
     [Fact]
@@ -603,7 +405,7 @@ public class TestRunErrorAndIdleTests
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         string? receivedCommand = null;
-        var (client, _, listener, tempDir, _) = StartMockServer(cmd =>
+        await using var server = await MockUnityServer.StartAsync(cmd =>
         {
             if (cmd.StartsWith("RUN_TESTS"))
             {
@@ -611,41 +413,31 @@ public class TestRunErrorAndIdleTests
                 return "ERROR: Intended mock stop";
             }
             return null;
-        }, cts.Token);
+        });
 
-        try
-        {
-            var result = await client.RunTestsAsync(
-                testNames: ["TestA", "TestB"],
-                groupNames: ["Grp1.*"],
-                categoryNames: ["Fast"],
-                assemblyNames: ["MyAsm"],
-                mode: "editmode",
-                failedOnly: false,
-                progress: null,
-                cancellationToken: cts.Token);
+        var result = await server.Client.RunTestsAsync(
+            testNames: ["TestA", "TestB"],
+            groupNames: ["Grp1.*"],
+            categoryNames: ["Fast"],
+            assemblyNames: ["MyAsm"],
+            mode: "editmode",
+            failedOnly: false,
+            progress: null,
+            cancellationToken: cts.Token);
 
-            Assert.NotNull(receivedCommand);
-            Assert.StartsWith("RUN_TESTS ", receivedCommand);
-            string[] parts = receivedCommand.Split(' ', 3);
-            Assert.Equal(3, parts.Length);
-            string json = ProtocolCodec.UnescapeLine(parts[2]);
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            Assert.Equal("editmode", root.GetProperty("mode").GetString());
-            Assert.Equal(2, root.GetProperty("testNames").GetArrayLength());
-            Assert.Equal("TestA", root.GetProperty("testNames")[0].GetString());
-            Assert.Equal("Grp1.*", root.GetProperty("groupNames")[0].GetString());
-            Assert.Equal("Fast", root.GetProperty("categoryNames")[0].GetString());
-            Assert.Equal("MyAsm", root.GetProperty("assemblyNames")[0].GetString());
-            Assert.False(root.GetProperty("failedOnly").GetBoolean());
-        }
-        finally
-        {
-            listener.Stop();
-            cts.Cancel();
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.NotNull(receivedCommand);
+        Assert.StartsWith("RUN_TESTS ", receivedCommand);
+        string[] parts = receivedCommand.Split(' ', 3);
+        Assert.Equal(3, parts.Length);
+        string json = ProtocolCodec.UnescapeLine(parts[2]);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal("editmode", root.GetProperty("mode").GetString());
+        Assert.Equal(2, root.GetProperty("testNames").GetArrayLength());
+        Assert.Equal("TestA", root.GetProperty("testNames")[0].GetString());
+        Assert.Equal("Grp1.*", root.GetProperty("groupNames")[0].GetString());
+        Assert.Equal("Fast", root.GetProperty("categoryNames")[0].GetString());
+        Assert.Equal("MyAsm", root.GetProperty("assemblyNames")[0].GetString());
+        Assert.False(root.GetProperty("failedOnly").GetBoolean());
     }
-
 }

@@ -360,46 +360,4 @@ public sealed class RefreshCorrelationTests
             int timeoutSeconds = 2,
             CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
-
-    private sealed class RecordingOperationPoller : IOperationPoller
-    {
-        private readonly Func<OperationPollingSpec<UnityRefreshResult>, CancellationToken, Task<UnityRefreshResult>> _refresh;
-
-        public RecordingOperationPoller(Func<OperationPollingSpec<UnityRefreshResult>, CancellationToken, Task<UnityRefreshResult>> refresh)
-        {
-            _refresh = refresh;
-        }
-
-        public string? OperationId { get; private set; }
-        public string? ResultFilePath { get; private set; }
-
-        public async Task<TResult> PollOperationUntilTerminalAsync<TResult>(
-            OperationPollingSpec<TResult> spec,
-            CancellationToken cancellationToken) where TResult : class, IOperationResult, new()
-        {
-            if (typeof(TResult) != typeof(UnityRefreshResult))
-            {
-                throw new InvalidOperationException("This test poller only supports refresh results.");
-            }
-
-            var refreshSpec = (OperationPollingSpec<UnityRefreshResult>)(object)spec;
-            OperationId = refreshSpec.OperationId;
-            ResultFilePath = refreshSpec.ResultFilePath;
-            Assert.True(refreshSpec.RequireDurableResult);
-            return (TResult)(object)await _refresh(refreshSpec, cancellationToken);
-        }
-
-        public Task<TResult> PollOperationResultAsync<TResult>(
-            string opId,
-            string kind,
-            string operationDisplayName,
-            string resultFilePath,
-            string pollCommand,
-            int pollIntervalMs = 500,
-            Func<TResult, TResult>? onResultFound = null,
-            CancellationToken cancellationToken = default) where TResult : UnityOperationResult, new() =>
-            Task.FromException<TResult>(new NotSupportedException());
-
-        public Task CancelOperationAsync(string opId, string kind) => Task.CompletedTask;
-    }
 }

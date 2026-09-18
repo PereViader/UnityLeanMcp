@@ -459,5 +459,10 @@ When parsing wire status responses (`SUCCESS:payload`, `ERROR:message`, `FAILURE
 
 When collecting previously failed test names for re-execution (such as `--failed-only`), accumulating failed names in a `List<string>` and performing `!failedNames.Contains(name)` scales quadratically $O(N^2)$ with large test suites. Accumulating names in a `HashSet<string>(StringComparer.Ordinal)` ensures $O(1)$ lookups and deduplication while preserving the exact case-sensitive full test names expected by test framework filters.
 
+### Deferring Refresh Result File Generation in Mock Unity Servers
 
+In a real Unity Editor or mock server environment, dispatching a mutating `REFRESH` or `RECOMPILE` command triggers background work and returns `REFRESHING` or `RECOMPILING`. Eagerly writing a success result file (`unity_refresh_<opId>.json`) upon receipt of `REFRESH` causes tests asserting failure in `POLL_REFRESH` (e.g. compilation failures) to be bypassed. This occurs because `OperationPoller.ResolveTerminalStateAsync` and `WaitForCompilationToSettleAsync` check for durable result files on disk prior to evaluating socket status responses. Deferring default result file emission to `POLL_REFRESH` ensures tests can return custom failing socket responses (`FAILURE Script compilation failed`) or simulate in-progress statuses (`COMPILING`) without premature success file pollution.
 
+### Avoiding Premature `READY` in Polling Interceptors
+
+When intercepting polling commands (such as `POLL_REFRESH`) in mock servers, returning `READY` without writing a correlated operation result file causes `WaitForCompilationToSettleAsync` to treat the response as unproven and loop indefinitely until cancellation. Under the correlated refresh contract, newly submitted refresh operations require a durable result file to prove completion unless explicitly waiting on an observed active compilation. Mock handlers that do not supply an explicit terminal result should return `null` to delegate to default mock server completion logic that safely writes the result file and issues `READY`.
