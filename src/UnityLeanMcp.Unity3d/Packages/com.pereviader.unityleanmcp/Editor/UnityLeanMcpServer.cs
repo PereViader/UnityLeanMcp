@@ -490,14 +490,11 @@ namespace UnityLeanMcp
                                     executeAction();
                                 }
                             });
-                            while (WaitHandle.WaitAny(requestWaitHandles, 100) == WaitHandle.WaitTimeout)
+                            int completedIndex = WaitHandle.WaitAny(requestWaitHandles);
+                            if (completedIndex == 1 || s_ShutdownEvent.WaitOne(0) || IsShuttingDown())
                             {
-                                // Keep waiting while Unity is healthy. The
-                                // shutdown event wakes this thread immediately
-                                // when a reload or editor shutdown begins.
-                            }
-                            if (s_ShutdownEvent.WaitOne(0) || IsShuttingDown())
                                 return;
+                            }
                             if (dispatchException != null)
                             {
                                 throw dispatchException;

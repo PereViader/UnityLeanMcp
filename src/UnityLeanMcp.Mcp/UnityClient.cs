@@ -269,39 +269,6 @@ public class UnityClient : IUnityClient
 
         _logger.LogInformation("Triggering {Kind} operation with id {OpId}...", isRecompile ? "recompile" : "refresh", opId);
 
-        // Pre-check if Unity is busy
-        string? busyCheck = await SendCommandAsync($"POLL_REFRESH {opId}", 2, cancellationToken);
-        var busyInfo = ParseBusyResponse(busyCheck);
-        if (busyInfo.isBusy)
-        {
-            if (busyInfo.isCompilation)
-            {
-                var waitResult = await WaitForCompilationToSettleAsync(
-                    opId,
-                    isRecompile,
-                    progress,
-                    acceptCurrentCompilationState: true,
-                    cancellationToken: cancellationToken);
-                if (!waitResult.Success)
-                {
-                    return waitResult;
-                }
-            }
-            else
-            {
-                bool cleared = await WaitForActiveOperationGracePeriodAsync(busyInfo.kind, busyInfo.opId, progress, BusyGracePeriod, cancellationToken);
-                if (!cleared)
-                {
-                    return new UnityRefreshResult
-                    {
-                        OperationId = opId,
-                        Success = false,
-                        Message = FormatBusyExecutingMessage(busyInfo.kind, busyInfo.opId)
-                    };
-                }
-            }
-        }
-
         progress?.Report(new ProgressNotificationValue
         {
             Progress = 10,

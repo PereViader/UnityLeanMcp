@@ -170,8 +170,8 @@ public sealed class RefreshCorrelationTests
             Assert.False(result.Success);
             Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message, StringComparison.Ordinal);
             Assert.True(
-                transport.Commands.FindAll(c => c.StartsWith("POLL_REFRESH", StringComparison.Ordinal)).Count == 2,
-                "Refresh should pre-check once and poll once before returning the idle failure.");
+                transport.Commands.FindAll(c => c.StartsWith("POLL_REFRESH", StringComparison.Ordinal)).Count == 1,
+                "Refresh should poll once before returning the idle failure.");
         }
         finally
         {
@@ -221,7 +221,7 @@ public sealed class RefreshCorrelationTests
             Assert.False(result.Success);
             Assert.Equal(expectedMessage, result.Message);
             Assert.True(
-                transport.Commands.FindAll(c => c.StartsWith("POLL_REFRESH", StringComparison.Ordinal)).Count == 1,
+                transport.Commands.FindAll(c => c.StartsWith("POLL_REFRESH", StringComparison.Ordinal)).Count == 0,
                 "An initial terminal response must not trigger a refresh poll.");
         }
         finally

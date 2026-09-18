@@ -137,11 +137,6 @@ public sealed class AutoRefreshEfficiencyTests
                     return Task.FromResult<string?>("COMPILING");
                 }
 
-                return Task.FromResult<string?>("READY");
-            }
-
-            if (command.StartsWith("REFRESH ", StringComparison.Ordinal))
-            {
                 string operationId = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1];
                 var refreshResult = new UnityRefreshResult
                 {
@@ -152,6 +147,25 @@ public sealed class AutoRefreshEfficiencyTests
                 File.WriteAllText(
                     _resolver.GetResultFilePath(UnityOperationKind.Refresh, operationId),
                     System.Text.Json.JsonSerializer.Serialize(refreshResult));
+
+                return Task.FromResult<string?>("READY");
+            }
+
+            if (command.StartsWith("REFRESH ", StringComparison.Ordinal))
+            {
+                string operationId = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1];
+                if (PendingCompilationPolls == 0)
+                {
+                    var refreshResult = new UnityRefreshResult
+                    {
+                        OperationId = operationId,
+                        Success = true,
+                        Message = ""
+                    };
+                    File.WriteAllText(
+                        _resolver.GetResultFilePath(UnityOperationKind.Refresh, operationId),
+                        System.Text.Json.JsonSerializer.Serialize(refreshResult));
+                }
                 return Task.FromResult<string?>("REFRESHING");
             }
 

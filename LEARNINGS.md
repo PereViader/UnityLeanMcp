@@ -123,6 +123,9 @@ Worker command handlers can run while the Unity main thread is synchronously exe
 
 `UnityEngine.Debug` is not a safe diagnostic sink for the socket listener or client worker threads, including exception handlers: Unity may be reloading or may reject the call because it is not on the main thread. Worker diagnostics must use a managed-only sink with a synchronized, bounded file append and must read only path values captured during explicit main-thread initialization. Logging is best effort and must never mask or replace the transport exception being reported.
 
+### Unbounded Dispatcher Waits via Cooperative Shutdown Handles
+In `UnityLeanMcpServer.ProcessClient`, polling loops with artificial timeouts (e.g. `while (WaitHandle.WaitAny(handles, 100) == WaitHandle.WaitTimeout)`) introduce unnecessary thread context switching and thread wakeups while waiting for main-thread execution. Because `s_ShutdownEvent` is signaled immediately upon domain reload (`beforeAssemblyReload`) or Editor quitting, an unbounded wait `WaitHandle.WaitAny(new WaitHandle[] { finishedEvent, s_ShutdownEvent })` wakes immediately upon either normal dispatcher completion or shutdown signaling. Checking `completedIndex == 1 || s_ShutdownEvent.WaitOne(0) || IsShuttingDown()` guarantees immediate exit during domain unload while avoiding spin-wait overhead.
+
 ---
 
 ## 3. Operating System & Filesystem Quirks
@@ -435,5 +438,10 @@ In `OperationPoller.PollOperationUntilTerminalAsync`, when `spec.CustomResponseH
 ### Dynamic Result File Path Lookups for Settlement Polling
 
 When polling for compilation settlement in `WaitForCompilationToSettleAsync`, the operation may represent either a standard `Refresh` or a clean `Recompile`. Hardcoding `UnityOperationKind.Refresh` in `CustomResponseHandler` fails to locate operation results produced by recompilations. Polling handlers must read `spec.ResultFilePath` directly so that they automatically query the path determined by the active operation's kind.
+
+### Elimination of Redundant Pre-Flight Probing in Mutating Operations
+
+Pre-flight status probes (such as sending `POLL_REFRESH` before `REFRESH` in `UnityClient.RefreshAsync`) add an extra socket roundtrip to every operation. Because the socket worker thread performs early rejection based on thread-safe in-memory and durable operation store snapshots, sending the mutating command (`REFRESH` / `RECOMPILE`) directly returns `BUSY` immediately if another operation or compilation is active. The command dispatch loop already handles `isBusy` responses by autowaiting on ongoing compilation or foreign locks, making the initial probe completely redundant.
+
 
 

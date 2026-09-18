@@ -322,5 +322,8 @@ A lock held at the target project's `Temp/UnityLockfile` or `Temp/UnityLockFile`
   - `IsUnityRunning` caches `IsFileLocked` and avoids duplicate `FindProjectUnityPid` scans across held lockfile detection and system fallback.
   - `GetUnityMode` checks `_processIdentityStore` directly to identify batchmode instances launched by the MCP server without redundant `IsOwnedPid` and process handle re-evaluations.
   - `StopUnityAsync` unifies graceful socket exit, pre-existing process exit, and fallback termination into a single shared completion point (`WaitForUnityExitAsync` -> `PurgeOperationState`).
+- **Unbounded Dispatcher Wait & Elimination of Worker Context Switching**: In `UnityLeanMcpServer.ProcessClient`, the main-thread dispatch wait replaces the artificial 100ms polling loop with an unbounded wait on `{ finishedEvent, s_ShutdownEvent }`. Immediate awakening is preserved when `s_ShutdownEvent` signals domain reload or Editor shutdown, eliminating thread context switching and unnecessary CPU wakeups.
+- **Direct Mutating Refresh Dispatch Without Redundant Pre-Flight Probe**: In `UnityClient.RefreshAsync`, the redundant pre-flight `POLL_REFRESH` check before command dispatch is eliminated. The primary mutating command (`REFRESH` / `RECOMPILE`) is dispatched directly and is early-rejected by the server worker thread with `BUSY` if another operation or compilation is active, saving a full socket roundtrip per refresh call while preserving all autowaiting and grace-period guarantees.
+
 
 
