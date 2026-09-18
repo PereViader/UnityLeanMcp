@@ -232,6 +232,9 @@ When test suites experience large numbers of failures, emitting full stack trace
 ### Concise Test Outcome Summaries & Skipped Test Omission
 Test execution summaries in `unity_run_tests` and progress notifications report pass, fail, and skip metrics cleanly. To optimize token usage and avoid visual clutter for autonomous agents, skipped test counts are omitted entirely when zero (e.g. `Tests Passed: 27 passed.` rather than `Tests Passed: 27 passed, 0 skipped.`, and `Tests Passed: 0 passed (no tests found in suite).`), and included only when tests were actually skipped (`Tests Passed: 27 passed, 1 skipped.`).
 
+### Direct Diagnostic Formatter Separation & MCP Tool Decomposition
+Diagnostic parsing and RFC 8089 URI formatting reside strictly within `IDiagnosticFormatter` / `DiagnosticFormatter.Default`. Redundant forwarding pass-through methods on `UnityTools` are removed, directing internal callers and tests to `DiagnosticFormatter.Default` directly. Tool execution methods (`UnityRefreshAsync`, `UnityEvalAsync`, `UnityRunTestsAsync`, `UnityStopAsync`) use uniform `Result` and `Error` helpers to ensure consistent `CallToolResult` creation and clean error propagation without catching `OperationCanceledException`. Complex tool formatting flows (such as `UnityRunTestsAsync` outcome header and failure sections) are decomposed into focused private helpers adhering strictly to the 16 KiB reserved summary budget, 5 detailed / 25 total failure caps, and surrogate-safe output truncation boundaries.
+
 ### Interactive GUI Editor Termination Protection
 When Unity runs in interactive GUI mode, terminating the Editor risks losing unsaved user work (scene edits, inspector changes). `unity_stop` inspects the target Editor mode:
 - Refuses termination when running in `GUI` mode unless `force: true` is explicitly provided.

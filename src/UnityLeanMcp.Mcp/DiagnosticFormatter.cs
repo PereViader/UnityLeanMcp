@@ -161,6 +161,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         bool preservePathSeparators)
     {
         var builder = new StringBuilder(value.Length);
+        Span<byte> utf8Bytes = stackalloc byte[4];
         for (int i = 0; i < value.Length; i++)
         {
             char character = value[i];
@@ -188,8 +189,8 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
             int characterLength = char.IsHighSurrogate(character) && i + 1 < value.Length &&
                                   char.IsLowSurrogate(value[i + 1]) ? 2 : 1;
-            byte[] utf8Bytes = Encoding.UTF8.GetBytes(value.Substring(i, characterLength));
-            foreach (byte utf8Byte in utf8Bytes)
+            int written = Encoding.UTF8.GetBytes(value.AsSpan(i, characterLength), utf8Bytes);
+            foreach (byte utf8Byte in utf8Bytes[..written])
             {
                 builder.Append('%');
                 builder.Append(GetHexDigit(utf8Byte >> 4));
@@ -405,9 +406,8 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         {
             if (isSuccess)
             {
-                if (string.IsNullOrWhiteSpace(diagnosticText) || IsTrimmedText(
-                        diagnosticText,
-                        "AssetDatabase refresh completed successfully."))
+                if (string.IsNullOrWhiteSpace(diagnosticText) ||
+                    diagnosticText.AsSpan().Trim().SequenceEqual("AssetDatabase refresh completed successfully."))
                 {
                     return BoundOutput(builder => builder.Append(successTrailer));
                 }
@@ -529,23 +529,6 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             appendTrailer: !string.IsNullOrWhiteSpace(trailer));
     }
 
-    private static bool IsTrimmedText(string value, string expected)
-    {
-        int start = 0;
-        int end = value.Length;
-        while (start < end && char.IsWhiteSpace(value[start]))
-        {
-            start++;
-        }
-
-        while (end > start && char.IsWhiteSpace(value[end - 1]))
-        {
-            end--;
-        }
-
-        return end - start == expected.Length && value.AsSpan(start, end - start).SequenceEqual(expected.AsSpan());
-    }
-
     private static string BoundOutput(
         Action<BoundedTextBuilder> appendBody,
         string? trailer = null,
@@ -565,15 +548,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             McpOutputLimits.AggregateOutputTruncationMarker);
         appendBody(body);
 
-        var output = new BoundedTextBuilder(
-            McpOutputLimits.MaxFormattedOutputCharacters,
-            McpOutputLimits.AggregateOutputTruncationMarker);
-        output.Append(body.ToString());
-        if (appendTrailer)
-        {
-            output.Append(suffix);
-        }
-
-        return output.ToString().TrimEnd();
+        string text = appendTrailer ? body.ToString() + suffix : body.ToString();
+        return text.TrimEnd();
     }
 }

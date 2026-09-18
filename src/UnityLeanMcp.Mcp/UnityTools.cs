@@ -35,6 +35,15 @@ public class UnityTools
         _diagnosticFormatter = diagnosticFormatter ?? DiagnosticFormatter.Default;
     }
 
+    private static CallToolResult Result(string text, bool isError = false) => new()
+    {
+        Content = [new TextContentBlock { Text = text }],
+        IsError = isError
+    };
+
+    private static CallToolResult Error(string message) =>
+        Result(message.StartsWith("Error:") ? message : $"Error: {message}", isError: true);
+
     [McpServerTool(Name = "unity_refresh")]
     [Description("Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     public async Task<CallToolResult> UnityRefreshAsync(
@@ -80,25 +89,11 @@ public class UnityTools
                 sb.Append(formatted);
             }
 
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock { Text = sb.ToString().TrimEnd() }
-                ],
-                IsError = !result.Success
-            };
+            return Result(sb.ToString().TrimEnd(), isError: !result.Success);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock { Text = $"Error: {ex.Message}" }
-                ],
-                IsError = true
-            };
+            return Error(ex.Message);
         }
     }
 
@@ -122,26 +117,27 @@ public class UnityTools
                 McpOutputLimits.MaxFormattedOutputCharacters,
                 McpOutputLimits.AggregateOutputTruncationMarker);
 
-            if (result.Success)
+            void AppendSection(string header, string content)
             {
-                bool hasPayload = !string.IsNullOrEmpty(result.Payload);
-                if (hasLogs && hasPayload)
+                if (hasLogs)
                 {
                     output.AppendLine("Logs:");
                     output.AppendLine(logsText);
                     output.AppendLine();
-                    output.AppendLine("Result:");
-                    output.AppendTrimmedBounded(
-                        result.Payload,
-                        McpOutputLimits.MaxFormattedOutputCharacters,
-                        McpOutputLimits.AggregateOutputTruncationMarker);
+                    output.AppendLine(header);
                 }
-                else if (hasPayload)
+
+                output.AppendTrimmedBounded(
+                    content,
+                    McpOutputLimits.MaxFormattedOutputCharacters,
+                    McpOutputLimits.AggregateOutputTruncationMarker);
+            }
+
+            if (result.Success)
+            {
+                if (!string.IsNullOrEmpty(result.Payload))
                 {
-                    output.AppendTrimmedBounded(
-                        result.Payload,
-                        McpOutputLimits.MaxFormattedOutputCharacters,
-                        McpOutputLimits.AggregateOutputTruncationMarker);
+                    AppendSection("Result:", result.Payload);
                 }
                 else if (hasLogs)
                 {
@@ -154,78 +150,43 @@ public class UnityTools
             }
             else
             {
-                string errorMsg;
-                if (result.Interrupted)
-                {
-                    errorMsg = string.IsNullOrWhiteSpace(result.Message)
-                        ? "Command interrupted by Unity recompilation outside the UnityLeanMcp workflow."
-                        : result.Message;
-                }
-                else
-                {
-                    var parsedDiags = _diagnosticFormatter.ParseCompilerDiagnostics(result.Message);
-                    if (parsedDiags.Count > 0)
-                    {
-                        bool isSnippetFailure = parsedDiags.Any(d => DiagnosticFormatter.IsEvalSynthetic(d.File));
-                        string failureTrailer = isSnippetFailure
-                            ? "Evaluation aborted: Dynamic snippet compilation failed."
-                            : "Evaluation aborted: Project script compilation failed.";
-
-                        errorMsg = _diagnosticFormatter.FormatCompilerDiagnostics(
-                            result.Message,
-                            _pathResolver.ProjectRoot,
-                            failureTrailer: failureTrailer,
-                            isSuccess: false,
-                            isEval: true);
-                    }
-                    else
-                    {
-                        errorMsg = string.IsNullOrWhiteSpace(result.Message) ? "Evaluation failed." : result.Message;
-                    }
-                }
-
-                if (hasLogs)
-                {
-                    output.AppendLine("Logs:");
-                    output.AppendLine(logsText);
-                    output.AppendLine();
-                    output.AppendLine("Error:");
-                    output.AppendTrimmedBounded(
-                        errorMsg,
-                        McpOutputLimits.MaxFormattedOutputCharacters,
-                        McpOutputLimits.AggregateOutputTruncationMarker);
-                }
-                else
-                {
-                    output.AppendTrimmedBounded(
-                        errorMsg,
-                        McpOutputLimits.MaxFormattedOutputCharacters,
-                        McpOutputLimits.AggregateOutputTruncationMarker);
-                }
+                AppendSection("Error:", FormatEvalErrorMessage(result));
             }
 
-            string humanText = output.ToString().TrimEnd();
-
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock { Text = humanText }
-                ],
-                IsError = !result.Success
-            };
+            return Result(output.ToString().TrimEnd(), isError: !result.Success);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock { Text = $"Error: {ex.Message}" }
-                ],
-                IsError = true
-            };
+            return Error(ex.Message);
         }
+    }
+
+    private string FormatEvalErrorMessage(UnityEvalResult result)
+    {
+        if (result.Interrupted)
+        {
+            return string.IsNullOrWhiteSpace(result.Message)
+                ? "Command interrupted by Unity recompilation outside the UnityLeanMcp workflow."
+                : result.Message;
+        }
+
+        var parsedDiags = _diagnosticFormatter.ParseCompilerDiagnostics(result.Message);
+        if (parsedDiags.Count > 0)
+        {
+            bool isSnippetFailure = parsedDiags.Any(d => DiagnosticFormatter.IsEvalSynthetic(d.File));
+            string failureTrailer = isSnippetFailure
+                ? "Evaluation aborted: Dynamic snippet compilation failed."
+                : "Evaluation aborted: Project script compilation failed.";
+
+            return _diagnosticFormatter.FormatCompilerDiagnostics(
+                result.Message,
+                _pathResolver.ProjectRoot,
+                failureTrailer: failureTrailer,
+                isSuccess: false,
+                isEval: true);
+        }
+
+        return string.IsNullOrWhiteSpace(result.Message) ? "Evaluation failed." : result.Message;
     }
 
     private static string FormatLogs(IReadOnlyList<ConsoleLogEntry> logs)
@@ -287,14 +248,7 @@ public class UnityTools
         {
             if (!TestModeParser.TryNormalize(mode, out string normalizedMode))
             {
-                return new CallToolResult
-                {
-                    Content =
-                    [
-                        new TextContentBlock { Text = TestModeParser.InvalidModeMessage }
-                    ],
-                    IsError = true
-                };
+                return Result(TestModeParser.InvalidModeMessage, isError: true);
             }
 
             if (!TestFilterValidation.TryValidate("testNames", testNames, out string filterError) ||
@@ -302,14 +256,7 @@ public class UnityTools
                 !TestFilterValidation.TryValidate("categoryNames", categoryNames, out filterError) ||
                 !TestFilterValidation.TryValidate("assemblyNames", assemblyNames, out filterError))
             {
-                return new CallToolResult
-                {
-                    Content =
-                    [
-                        new TextContentBlock { Text = filterError }
-                    ],
-                    IsError = true
-                };
+                return Result(filterError, isError: true);
             }
 
             var result = await _client.RunTestsAsync(testNames, groupNames, categoryNames, assemblyNames, normalizedMode, failedOnly, progress, cancellationToken);
@@ -325,300 +272,304 @@ public class UnityTools
             int totalTests = result.PassCount + result.FailCount + result.SkipCount;
             var failedTests = result.FailedTests ?? new List<FailedTestInfo>();
 
-            bool success = result.Success && result.FailCount == 0;
+            bool success = result.Success && result.FailCount == 0 && !(hasAnyFilter && totalTests == 0);
 
-            if (result.ResultState == "CompileError")
-            {
-                string formatted = _diagnosticFormatter.FormatCompilerDiagnostics(
-                    result.Message,
-                    _pathResolver.ProjectRoot,
-                    failureTrailer: "Test execution aborted: Script compilation failed.",
-                    isSuccess: false);
-                output.Append(formatted);
-            }
-            else if (result.ResultState == "Interrupted")
-            {
-                output.Append("Test run interrupted: ");
-                output.AppendTrimmedBounded(
-                    result.Message,
-                    McpOutputLimits.MaxFailureMessageCharacters,
-                    McpOutputLimits.FailureMessageTruncationMarker);
-                output.AppendLine();
-            }
-            else if (!result.Success && !string.IsNullOrWhiteSpace(result.Message))
-            {
-                success = false;
-                output.Append("Test run failed: ");
-                output.AppendTrimmedBounded(
-                    result.Message,
-                    McpOutputLimits.MaxFailureMessageCharacters,
-                    McpOutputLimits.FailureMessageTruncationMarker);
-                output.AppendLine();
-            }
-            else if (hasAnyFilter && totalTests == 0)
-            {
-                success = false;
-                string filterDesc = groupNames != null ? string.Join(", ", groupNames) : "";
-                string categoryDesc = categoryNames != null ? string.Join(", ", categoryNames) : "";
+            output.Append(FormatTestOutcomeHeader(
+                result,
+                normalizedMode,
+                testNames,
+                groupNames,
+                categoryNames,
+                assemblyNames));
 
-                if (!string.IsNullOrWhiteSpace(filterDesc) && !string.IsNullOrWhiteSpace(categoryDesc))
+            FormatTestFailures(output, failedTests, _pathResolver.ProjectRoot);
+
+            return Result(output.ToString().TrimEnd(), isError: !success);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Error(ex.Message);
+        }
+    }
+
+    private string FormatTestOutcomeHeader(
+        UnityTestRunResult result,
+        string normalizedMode,
+        string[]? testNames,
+        string[]? groupNames,
+        string[]? categoryNames,
+        string[]? assemblyNames)
+    {
+        if (result.ResultState == "CompileError")
+        {
+            return _diagnosticFormatter.FormatCompilerDiagnostics(
+                result.Message,
+                _pathResolver.ProjectRoot,
+                failureTrailer: "Test execution aborted: Script compilation failed.",
+                isSuccess: false);
+        }
+
+        var headerOutput = new BoundedTextBuilder(
+            McpOutputLimits.MaxFormattedOutputCharacters,
+            McpOutputLimits.AggregateOutputTruncationMarker);
+
+        bool hasFilter = groupNames != null && groupNames.Length > 0;
+        bool hasCategory = categoryNames != null && categoryNames.Length > 0;
+        bool hasTestNames = testNames != null && testNames.Length > 0;
+        bool hasAssemblyNames = assemblyNames != null && assemblyNames.Length > 0;
+        bool hasAnyFilter = hasFilter || hasCategory || hasTestNames || hasAssemblyNames;
+        int totalTests = result.PassCount + result.FailCount + result.SkipCount;
+
+        if (result.ResultState == "Interrupted")
+        {
+            headerOutput.Append("Test run interrupted: ");
+            headerOutput.AppendTrimmedBounded(
+                result.Message,
+                McpOutputLimits.MaxFailureMessageCharacters,
+                McpOutputLimits.FailureMessageTruncationMarker);
+            headerOutput.AppendLine();
+        }
+        else if (!result.Success && !string.IsNullOrWhiteSpace(result.Message))
+        {
+            headerOutput.Append("Test run failed: ");
+            headerOutput.AppendTrimmedBounded(
+                result.Message,
+                McpOutputLimits.MaxFailureMessageCharacters,
+                McpOutputLimits.FailureMessageTruncationMarker);
+            headerOutput.AppendLine();
+        }
+        else if (hasAnyFilter && totalTests == 0)
+        {
+            string filterDesc = groupNames != null ? string.Join(", ", groupNames) : "";
+            string categoryDesc = categoryNames != null ? string.Join(", ", categoryNames) : "";
+
+            if (!string.IsNullOrWhiteSpace(filterDesc) && !string.IsNullOrWhiteSpace(categoryDesc))
+            {
+                headerOutput.AppendLine($"No tests found matching filter '{filterDesc}' and category '{categoryDesc}' (mode: {normalizedMode}).");
+            }
+            else if (!string.IsNullOrWhiteSpace(filterDesc))
+            {
+                headerOutput.AppendLine($"No tests found matching filter '{filterDesc}' (mode: {normalizedMode}).");
+            }
+            else if (!string.IsNullOrWhiteSpace(categoryDesc))
+            {
+                headerOutput.AppendLine($"No tests found matching category '{categoryDesc}' (mode: {normalizedMode}).");
+            }
+            else if (testNames is { Length: > 0 })
+            {
+                headerOutput.AppendLine($"No tests found matching testNames '{string.Join(", ", testNames)}' (mode: {normalizedMode}).");
+            }
+            else if (assemblyNames is { Length: > 0 })
+            {
+                headerOutput.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblyNames)}' (mode: {normalizedMode}).");
+            }
+            else
+            {
+                headerOutput.AppendLine($"No tests found matching the specified test filter(s) (mode: {normalizedMode}).");
+            }
+        }
+        else if (result.Success)
+        {
+            if (totalTests == 0)
+            {
+                if (!string.IsNullOrWhiteSpace(result.Message))
                 {
-                    output.AppendLine($"No tests found matching filter '{filterDesc}' and category '{categoryDesc}' (mode: {normalizedMode}).");
-                }
-                else if (!string.IsNullOrWhiteSpace(filterDesc))
-                {
-                    output.AppendLine($"No tests found matching filter '{filterDesc}' (mode: {normalizedMode}).");
-                }
-                else if (!string.IsNullOrWhiteSpace(categoryDesc))
-                {
-                    output.AppendLine($"No tests found matching category '{categoryDesc}' (mode: {normalizedMode}).");
-                }
-                else if (testNames is { Length: > 0 })
-                {
-                    output.AppendLine($"No tests found matching testNames '{string.Join(", ", testNames)}' (mode: {normalizedMode}).");
-                }
-                else if (assemblyNames is { Length: > 0 })
-                {
-                    output.AppendLine($"No tests found matching assemblyNames '{string.Join(", ", assemblyNames)}' (mode: {normalizedMode}).");
+                    headerOutput.AppendTrimmedBounded(
+                        result.Message,
+                        McpOutputLimits.MaxFailureMessageCharacters,
+                        McpOutputLimits.FailureMessageTruncationMarker);
+                    headerOutput.AppendLine();
                 }
                 else
                 {
-                    output.AppendLine($"No tests found matching the specified test filter(s) (mode: {normalizedMode}).");
+                    headerOutput.AppendLine("Tests Passed: 0 passed (no tests found in suite).");
                 }
-            }
-            else if (result.Success)
-            {
-                if (totalTests == 0)
-                {
-                    if (!string.IsNullOrWhiteSpace(result.Message))
-                    {
-                        output.AppendTrimmedBounded(
-                            result.Message,
-                            McpOutputLimits.MaxFailureMessageCharacters,
-                            McpOutputLimits.FailureMessageTruncationMarker);
-                        output.AppendLine();
-                    }
-                    else
-                    {
-                        output.AppendLine("Tests Passed: 0 passed (no tests found in suite).");
-                    }
-                }
-                else
-                {
-                    string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
-                    output.AppendLine($"Tests Passed: {result.PassCount} passed{skipStr}.");
-                }
-            }
-            else if (result.Message?.Contains("busy", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                output.AppendTrimmedBounded(
-                    result.Message,
-                    McpOutputLimits.MaxFailureMessageCharacters,
-                    McpOutputLimits.FailureMessageTruncationMarker);
-                output.AppendLine();
             }
             else
             {
                 string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
-                output.AppendLine($"Tests Failed: {result.FailCount} failed, {result.PassCount} passed{skipStr}.");
-                if (!string.IsNullOrWhiteSpace(result.Message))
-                {
-                    output.AppendTrimmedBounded(
-                        result.Message,
-                        McpOutputLimits.MaxFailureMessageCharacters,
-                        McpOutputLimits.FailureMessageTruncationMarker);
-                    output.AppendLine();
-                }
+                headerOutput.AppendLine($"Tests Passed: {result.PassCount} passed{skipStr}.");
             }
-
-            const int maxDetailedFailures = 5;
-            const int maxTotalFailures = 25;
-
-            int detailedCount = Math.Min(failedTests.Count, maxDetailedFailures);
-            var structuredFailures = new List<StructuredTestFailure>(detailedCount);
-            for (int i = 0; i < detailedCount; i++)
-            {
-                var fail = failedTests[i] ?? new FailedTestInfo();
-                var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, _pathResolver.ProjectRoot);
-                string sanitizedStackTrace = McpOutputLimits.Truncate(
-                    _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace),
-                    McpOutputLimits.MaxFailureStackTraceCharacters,
-                    McpOutputLimits.FailureStackTraceTruncationMarker);
-
-                structuredFailures.Add(new StructuredTestFailure
-                {
-                    Name = McpOutputLimits.Truncate(
-                        fail.Name,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker),
-                    FullName = McpOutputLimits.Truncate(
-                        fail.FullName,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker),
-                    Duration = fail.Duration,
-                    Message = McpOutputLimits.Truncate(
-                        fail.Message,
-                        McpOutputLimits.MaxFailureMessageCharacters,
-                        McpOutputLimits.FailureMessageTruncationMarker),
-                    StackTrace = sanitizedStackTrace,
-                    FilePath = McpOutputLimits.Truncate(
-                        filePath,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker),
-                    LineNumber = lineNumber,
-                    FileUri = McpOutputLimits.Truncate(
-                        fileUri,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker)
-                });
-            }
-
-            if (failedTests.Count > 0)
-            {
-                output.AppendLine();
-                output.AppendLine("Failures:");
-
-                // Keep compact summaries available even when the first detailed failures contain
-                // large messages and stack traces. The summary budget is sufficient for 20 entries
-                // at the existing identifier/message limits, including platform-newline overhead.
-                int summaryCount = Math.Min(failedTests.Count, maxTotalFailures);
-                int summaryFailureCount = Math.Max(0, summaryCount - detailedCount);
-                int availableFailureCharacters = Math.Max(0, McpOutputLimits.MaxFormattedOutputCharacters - output.Length);
-                int summaryBudget = summaryFailureCount > 0
-                    ? Math.Min(McpOutputLimits.MaxFailureSummaryCharacters, availableFailureCharacters)
-                    : 0;
-                int detailBudget = Math.Max(0, availableFailureCharacters - summaryBudget);
-                var detailedOutput = new BoundedTextBuilder(
-                    detailBudget,
-                    McpOutputLimits.DetailedFailureOutputTruncationMarker);
-                var summaryOutput = new BoundedTextBuilder(
-                    summaryBudget,
-                    McpOutputLimits.FailureSummaryOutputTruncationMarker);
-
-                for (int i = 0; i < detailedCount; i++)
-                {
-                    var fail = structuredFailures[i];
-                    string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
-                    detailedOutput.Append("• ");
-                    detailedOutput.AppendBounded(
-                        testIdentifier,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker);
-                    detailedOutput.Append(" (");
-                    detailedOutput.Append(fail.Duration.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
-                    detailedOutput.AppendLine("s)");
-                    if (!string.IsNullOrWhiteSpace(fail.FilePath) && fail.LineNumber.HasValue)
-                    {
-                        detailedOutput.Append("  Location: ");
-                        if (!string.IsNullOrWhiteSpace(fail.FileUri))
-                        {
-                            detailedOutput.Append("[");
-                        }
-                        detailedOutput.AppendBounded(
-                            fail.FilePath,
-                            McpOutputLimits.MaxFailureIdentifierCharacters,
-                            McpOutputLimits.FailureIdentifierTruncationMarker);
-                        detailedOutput.Append(":");
-                        detailedOutput.Append(fail.LineNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                        if (!string.IsNullOrWhiteSpace(fail.FileUri))
-                        {
-                            detailedOutput.Append("](");
-                            detailedOutput.AppendBounded(
-                                fail.FileUri,
-                                McpOutputLimits.MaxFailureIdentifierCharacters,
-                                McpOutputLimits.FailureIdentifierTruncationMarker);
-                            detailedOutput.Append(")");
-                        }
-                        detailedOutput.AppendLine();
-                    }
-                    if (!string.IsNullOrWhiteSpace(fail.Message))
-                    {
-                        detailedOutput.Append("  Message: ");
-                        detailedOutput.AppendBounded(
-                            fail.Message,
-                            McpOutputLimits.MaxFailureMessageCharacters,
-                            McpOutputLimits.FailureMessageTruncationMarker);
-                        detailedOutput.AppendLine();
-                    }
-                    if (!string.IsNullOrWhiteSpace(fail.StackTrace))
-                    {
-                        detailedOutput.AppendLine("  Stack trace:");
-                        detailedOutput.Append(fail.StackTrace);
-                        detailedOutput.AppendLine();
-                    }
-                }
-
-                for (int i = detailedCount; i < summaryCount; i++)
-                {
-                    var fail = failedTests[i] ?? new FailedTestInfo();
-                    string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
-                    string? oneLineMsg = ExtractOneLineSummaryMessage(
-                        fail.Message,
-                        McpOutputLimits.MaxFailureSummaryMessageCharacters);
-                    summaryOutput.Append("• ");
-                    summaryOutput.AppendBounded(
-                        testIdentifier,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker);
-                    if (!string.IsNullOrWhiteSpace(oneLineMsg))
-                    {
-                        summaryOutput.Append(": ");
-                        summaryOutput.Append(oneLineMsg);
-                    }
-                    summaryOutput.AppendLine();
-                }
-
-                if (failedTests.Count > maxTotalFailures)
-                {
-                    int remaining = failedTests.Count - maxTotalFailures;
-                    summaryOutput.AppendLine($"... and {remaining} more failed test(s).");
-                }
-
-                output.Append(detailedOutput.ToString());
-                output.Append(summaryOutput.ToString());
-            }
-
-            string humanText = output.ToString().TrimEnd();
-
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock { Text = humanText }
-                ],
-                IsError = !success
-            };
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        else if (result.Message?.Contains("busy", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return new CallToolResult
-            {
-                Content =
-                [
-                    new TextContentBlock { Text = $"Error: {ex.Message}" }
-                ],
-                IsError = true
-            };
+            headerOutput.AppendTrimmedBounded(
+                result.Message,
+                McpOutputLimits.MaxFailureMessageCharacters,
+                McpOutputLimits.FailureMessageTruncationMarker);
+            headerOutput.AppendLine();
         }
+        else
+        {
+            string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
+            headerOutput.AppendLine($"Tests Failed: {result.FailCount} failed, {result.PassCount} passed{skipStr}.");
+            if (!string.IsNullOrWhiteSpace(result.Message))
+            {
+                headerOutput.AppendTrimmedBounded(
+                    result.Message,
+                    McpOutputLimits.MaxFailureMessageCharacters,
+                    McpOutputLimits.FailureMessageTruncationMarker);
+                headerOutput.AppendLine();
+            }
+        }
+
+        return headerOutput.ToString();
     }
 
-    internal static (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
-        => DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, projectRoot);
+    private void FormatTestFailures(
+        BoundedTextBuilder output,
+        IReadOnlyList<FailedTestInfo> failedTests,
+        string? projectRoot)
+    {
+        if (failedTests.Count == 0)
+        {
+            return;
+        }
 
-    internal static List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
-        => DiagnosticFormatter.Default.ParseCompilerDiagnostics(diagnosticText);
+        const int maxDetailedFailures = 5;
+        const int maxTotalFailures = 25;
 
-    internal static string FormatCompilerDiagnostics(
-        string? diagnosticText,
-        string? projectRoot,
-        string? successTrailer = null,
-        string? failureTrailer = null,
-        bool isSuccess = false,
-        int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings)
-        => DiagnosticFormatter.Default.FormatCompilerDiagnostics(diagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings);
+        int detailedCount = Math.Min(failedTests.Count, maxDetailedFailures);
+        var structuredFailures = new List<StructuredTestFailure>(detailedCount);
+        for (int i = 0; i < detailedCount; i++)
+        {
+            var fail = failedTests[i] ?? new FailedTestInfo();
+            var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, projectRoot);
+            string sanitizedStackTrace = McpOutputLimits.Truncate(
+                _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace),
+                McpOutputLimits.MaxFailureStackTraceCharacters,
+                McpOutputLimits.FailureStackTraceTruncationMarker);
 
-    internal static string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot)
-        => DiagnosticFormatter.Default.FormatDiagnostic(diagnostic, projectRoot);
+            structuredFailures.Add(new StructuredTestFailure
+            {
+                Name = McpOutputLimits.Truncate(
+                    fail.Name,
+                    McpOutputLimits.MaxFailureIdentifierCharacters,
+                    McpOutputLimits.FailureIdentifierTruncationMarker),
+                FullName = McpOutputLimits.Truncate(
+                    fail.FullName,
+                    McpOutputLimits.MaxFailureIdentifierCharacters,
+                    McpOutputLimits.FailureIdentifierTruncationMarker),
+                Duration = fail.Duration,
+                Message = McpOutputLimits.Truncate(
+                    fail.Message,
+                    McpOutputLimits.MaxFailureMessageCharacters,
+                    McpOutputLimits.FailureMessageTruncationMarker),
+                StackTrace = sanitizedStackTrace,
+                FilePath = McpOutputLimits.Truncate(
+                    filePath,
+                    McpOutputLimits.MaxFailureIdentifierCharacters,
+                    McpOutputLimits.FailureIdentifierTruncationMarker),
+                LineNumber = lineNumber,
+                FileUri = McpOutputLimits.Truncate(
+                    fileUri,
+                    McpOutputLimits.MaxFailureIdentifierCharacters,
+                    McpOutputLimits.FailureIdentifierTruncationMarker)
+            });
+        }
+
+        output.AppendLine();
+        output.AppendLine("Failures:");
+
+        // Keep compact summaries available even when the first detailed failures contain
+        // large messages and stack traces. The summary budget is sufficient for 20 entries
+        // at the existing identifier/message limits, including platform-newline overhead.
+        int summaryCount = Math.Min(failedTests.Count, maxTotalFailures);
+        int summaryFailureCount = Math.Max(0, summaryCount - detailedCount);
+        int availableFailureCharacters = Math.Max(0, McpOutputLimits.MaxFormattedOutputCharacters - output.Length);
+        int summaryBudget = summaryFailureCount > 0
+            ? Math.Min(McpOutputLimits.MaxFailureSummaryCharacters, availableFailureCharacters)
+            : 0;
+        int detailBudget = Math.Max(0, availableFailureCharacters - summaryBudget);
+        var detailedOutput = new BoundedTextBuilder(
+            detailBudget,
+            McpOutputLimits.DetailedFailureOutputTruncationMarker);
+        var summaryOutput = new BoundedTextBuilder(
+            summaryBudget,
+            McpOutputLimits.FailureSummaryOutputTruncationMarker);
+
+        for (int i = 0; i < detailedCount; i++)
+        {
+            var fail = structuredFailures[i];
+            string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
+            detailedOutput.Append("• ");
+            detailedOutput.AppendBounded(
+                testIdentifier,
+                McpOutputLimits.MaxFailureIdentifierCharacters,
+                McpOutputLimits.FailureIdentifierTruncationMarker);
+            detailedOutput.Append(" (");
+            detailedOutput.Append(fail.Duration.ToString("F3", System.Globalization.CultureInfo.InvariantCulture));
+            detailedOutput.AppendLine("s)");
+            if (!string.IsNullOrWhiteSpace(fail.FilePath) && fail.LineNumber.HasValue)
+            {
+                detailedOutput.Append("  Location: ");
+                if (!string.IsNullOrWhiteSpace(fail.FileUri))
+                {
+                    detailedOutput.Append("[");
+                }
+                detailedOutput.AppendBounded(
+                    fail.FilePath,
+                    McpOutputLimits.MaxFailureIdentifierCharacters,
+                    McpOutputLimits.FailureIdentifierTruncationMarker);
+                detailedOutput.Append(":");
+                detailedOutput.Append(fail.LineNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                if (!string.IsNullOrWhiteSpace(fail.FileUri))
+                {
+                    detailedOutput.Append("](");
+                    detailedOutput.AppendBounded(
+                        fail.FileUri,
+                        McpOutputLimits.MaxFailureIdentifierCharacters,
+                        McpOutputLimits.FailureIdentifierTruncationMarker);
+                    detailedOutput.Append(")");
+                }
+                detailedOutput.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(fail.Message))
+            {
+                detailedOutput.Append("  Message: ");
+                detailedOutput.AppendBounded(
+                    fail.Message,
+                    McpOutputLimits.MaxFailureMessageCharacters,
+                    McpOutputLimits.FailureMessageTruncationMarker);
+                detailedOutput.AppendLine();
+            }
+            if (!string.IsNullOrWhiteSpace(fail.StackTrace))
+            {
+                detailedOutput.AppendLine("  Stack trace:");
+                detailedOutput.Append(fail.StackTrace);
+                detailedOutput.AppendLine();
+            }
+        }
+
+        for (int i = detailedCount; i < summaryCount; i++)
+        {
+            var fail = failedTests[i] ?? new FailedTestInfo();
+            string testIdentifier = !string.IsNullOrEmpty(fail.FullName) ? fail.FullName : fail.Name;
+            string? oneLineMsg = ExtractOneLineSummaryMessage(
+                fail.Message,
+                McpOutputLimits.MaxFailureSummaryMessageCharacters);
+            summaryOutput.Append("• ");
+            summaryOutput.AppendBounded(
+                testIdentifier,
+                McpOutputLimits.MaxFailureIdentifierCharacters,
+                McpOutputLimits.FailureIdentifierTruncationMarker);
+            if (!string.IsNullOrWhiteSpace(oneLineMsg))
+            {
+                summaryOutput.Append(": ");
+                summaryOutput.Append(oneLineMsg);
+            }
+            summaryOutput.AppendLine();
+        }
+
+        if (failedTests.Count > maxTotalFailures)
+        {
+            int remaining = failedTests.Count - maxTotalFailures;
+            summaryOutput.AppendLine($"... and {remaining} more failed test(s).");
+        }
+
+        output.Append(detailedOutput.ToString());
+        output.Append(summaryOutput.ToString());
+    }
 
     internal static string? ExtractOneLineSummaryMessage(string? message, int maxLineLength = 200)
     {
@@ -637,8 +588,8 @@ public class UnityTools
                 if (maxLineLength > 0 && trimmed.Length > maxLineLength)
                 {
                     return maxLineLength > 3
-                        ? trimmed.Substring(0, maxLineLength - 3) + "..."
-                        : trimmed.Substring(0, maxLineLength);
+                        ? McpOutputLimits.Truncate(trimmed, maxLineLength, "...")
+                        : McpOutputLimits.Truncate(trimmed, maxLineLength, string.Empty);
                 }
                 return trimmed;
             }
@@ -654,30 +605,27 @@ public class UnityTools
         [Description("Optional. If true, forces termination even when Unity is an interactive GUI Editor; this may discard unsaved Editor changes and requires explicit user approval. Defaults to false.")] bool force = false,
         CancellationToken cancellationToken = default)
     {
-        if (!_processManager.IsUnityRunning(out int? pid))
+        try
         {
-            return new CallToolResult
+            if (!_processManager.IsUnityRunning(out int? pid))
             {
-                Content = [new TextContentBlock { Text = "Unity background instance is not running." }],
-                IsError = false
-            };
-        }
+                return Result("Unity background instance is not running.");
+            }
 
-        if (_processManager.GetUnityMode(pid) == "GUI" && !force)
-        {
-            return new CallToolResult
+            if (_processManager.GetUnityMode(pid) == "GUI" && !force)
             {
-                Content = [new TextContentBlock { Text = "Refusing to stop Unity: The active Unity Editor is running in interactive GUI mode. Stopping it may lose unsaved user changes. Set 'force: true' to stop it anyway." }],
-                IsError = true
-            };
-        }
+                return Result("Refusing to stop Unity: The active Unity Editor is running in interactive GUI mode. Stopping it may lose unsaved user changes. Set 'force: true' to stop it anyway.", isError: true);
+            }
 
-        bool stopped = await _processManager.StopUnityAsync(force, cancellationToken);
-        return new CallToolResult
+            bool stopped = await _processManager.StopUnityAsync(force, cancellationToken);
+            return stopped
+                ? Result("Stopped.")
+                : Error("Unity background instance could not be stopped.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Content = [new TextContentBlock { Text = stopped ? "Stopped." : "Error: Unity background instance could not be stopped." }],
-            IsError = !stopped
-        };
+            return Error(ex.Message);
+        }
     }
 
     internal static string UnwrapJsonCodeIfPresent(string code)

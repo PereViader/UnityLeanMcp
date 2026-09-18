@@ -101,6 +101,8 @@ Enumerable results can contain themselves directly or through custom enumerators
 ### Public MCP UTF-8 Output Boundary
 The final public response builder must enforce both the 65,536 UTF-16-character cap and a conservative 65,536-byte UTF-8 cap. Character-count prefixes are not sufficient for CJK or supplementary-plane output: every bounded entry point, including field truncation helpers and `McpOutputLimits.Truncate`, must back up before a high surrogate and never append a partial surrogate pair. The existing aggregate truncation marker remains the deterministic signal for either limit.
 
+### `stackalloc` Outside Loops (`CA2014`)
+In .NET / CLR, stack memory allocated via `stackalloc` is not reclaimed until the containing method exits, rather than when the enclosing block or loop iteration ends. Allocating small stack buffers (such as `stackalloc byte[4]` for UTF-8 character encoding) inside a loop causes cumulative stack growth with each iteration and triggers compiler warning `CA2014` (`Do not use stackalloc in loops`). Declaring the fixed-size span once prior to the loop allows every iteration to safely reuse the same stack buffer with zero heap allocations, zero cumulative stack consumption, and zero compiler warnings.
 
 ### Operation-Scoped Resource Lifetime & Out-of-Lock Disposal
 When managing static references to active operation resources (such as `ConsoleLogCapture` or `CancellationTokenSource`) across asynchronous, domain-reloaded, or interrupted operations:

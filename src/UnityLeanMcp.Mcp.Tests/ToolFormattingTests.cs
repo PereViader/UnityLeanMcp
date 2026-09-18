@@ -1965,7 +1965,7 @@ public class ToolFormattingTests
     [InlineData("  at NUnit.Framework.Assert.Fail() in <filename unknown>:0\n  at MySuite.Run() in Assets/Tests/Run.cs:99", "Assets/Tests/Run.cs", 99)]
     public void ExtractSourceLocation_ExtractsExpectedFileAndLine(string stackTrace, string expectedFile, int expectedLine)
     {
-        var (file, line, uri) = UnityTools.ExtractSourceLocation(stackTrace, "C:/ProjectRoot");
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/ProjectRoot");
 
         Assert.Equal(expectedFile, file);
         Assert.Equal(expectedLine, line);
@@ -1981,7 +1981,7 @@ public class ToolFormattingTests
     [InlineData("  at NUnit.Framework.Assert.AreEqual() in <filename unknown>:0")]
     public void ExtractSourceLocation_WhenNoSourceLocation_ReturnsNulls(string? stackTrace)
     {
-        var (file, line, uri) = UnityTools.ExtractSourceLocation(stackTrace, "C:/ProjectRoot");
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/ProjectRoot");
 
         Assert.Null(file);
         Assert.Null(line);
@@ -1994,7 +1994,7 @@ public class ToolFormattingTests
         string text = @"Assets/Scripts/Player.cs(10,15): error CS0103: The name 'foo' does not exist in the current context
 Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned but its value is never used";
 
-        var diagnostics = UnityTools.ParseCompilerDiagnostics(text);
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
 
         Assert.Equal(2, diagnostics.Count);
 
@@ -2568,7 +2568,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     {
         const string stackTrace = "at Suite.Test() in C:\\Project Folder\\Assets\\file#name%.cs:line 12";
 
-        var (file, line, uri) = UnityTools.ExtractSourceLocation(stackTrace, "C:/Project");
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
 
         Assert.Equal("C:\\Project Folder\\Assets\\file#name%.cs", file);
         Assert.Equal(12, line);
