@@ -56,7 +56,7 @@ namespace UnityLeanMcp
             }
         }
 
-        private static void MoveWithOverwrite(string sourcePath, string destinationPath)
+        internal static void MoveWithOverwrite(string sourcePath, string destinationPath)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {

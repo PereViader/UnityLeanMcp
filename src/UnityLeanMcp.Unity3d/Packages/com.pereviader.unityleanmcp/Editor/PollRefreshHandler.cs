@@ -78,7 +78,18 @@ namespace UnityLeanMcp
                 return "COMPILING";
             }
 
-            return string.IsNullOrEmpty(operationId) ? "READY" : "IDLE";
+            if (!string.IsNullOrEmpty(operationId))
+            {
+                if (UnityLeanMcpCompilationTracker.TryReadRefreshResultThreadSafe(operationId, out result))
+                {
+                    if (result.Interrupted) return $"INTERRUPTION {PollHelper.EscapeLine(result.Message)}";
+                    return result.Success ? "READY" : "COMPILATION_ERROR";
+                }
+
+                return "IDLE";
+            }
+
+            return "READY";
         }
     }
 }

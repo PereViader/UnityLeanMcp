@@ -210,14 +210,7 @@ namespace UnityLeanMcp
                 {
                     try
                     {
-                        if (File.Exists(path))
-                        {
-                            File.Replace(tempPath, path, null);
-                        }
-                        else
-                        {
-                            File.Move(tempPath, path);
-                        }
+                        UnityLeanMcpStaticHistoryWriter.MoveWithOverwrite(tempPath, path);
                         return;
                     }
                     catch (IOException ex)

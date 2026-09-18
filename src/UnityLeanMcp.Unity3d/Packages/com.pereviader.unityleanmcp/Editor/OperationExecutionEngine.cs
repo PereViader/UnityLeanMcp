@@ -317,13 +317,13 @@ namespace UnityLeanMcp
             List<ConsoleLogEntry> logs = null,
             bool interrupted = false)
         {
-            if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
-            {
-                return;
-            }
-
             try
             {
+                if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
+                {
+                    return;
+                }
+
                 if (!Directory.Exists(UnityLeanMcpPaths.TempDir))
                 {
                     Directory.CreateDirectory(UnityLeanMcpPaths.TempDir);
@@ -342,11 +342,14 @@ namespace UnityLeanMcp
                 string json = JsonUtility.ToJson(runResult, true);
                 UnityLeanMcpOperationStore.WriteAtomic(resultFilePath, json, operationId);
                 UnityLeanMcpOperationStore.Complete(operationId);
-                ReleaseActiveOperation(operationId);
             }
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Failed to write {operationKind} result: {ex}");
+            }
+            finally
+            {
+                ReleaseActiveOperation(operationId);
             }
         }
 

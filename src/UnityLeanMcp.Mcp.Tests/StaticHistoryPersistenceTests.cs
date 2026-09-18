@@ -67,6 +67,53 @@ public sealed class StaticHistoryPersistenceTests
         }
     }
 
+    [Fact]
+    public void MoveWithOverwrite_WhenDestinationDoesNotExist_MovesFile()
+    {
+        string directory = CreateTempDirectory();
+        string sourcePath = Path.Combine(directory, "source.txt");
+        string destPath = Path.Combine(directory, "dest.txt");
+
+        try
+        {
+            File.WriteAllText(sourcePath, "source content");
+
+            UnityLeanMcpStaticHistoryWriter.MoveWithOverwrite(sourcePath, destPath);
+
+            Assert.False(File.Exists(sourcePath));
+            Assert.True(File.Exists(destPath));
+            Assert.Equal("source content", File.ReadAllText(destPath));
+        }
+        finally
+        {
+            DeleteTempDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void MoveWithOverwrite_WhenDestinationExists_OverwritesDestination()
+    {
+        string directory = CreateTempDirectory();
+        string sourcePath = Path.Combine(directory, "source.txt");
+        string destPath = Path.Combine(directory, "dest.txt");
+
+        try
+        {
+            File.WriteAllText(destPath, "old dest content");
+            File.WriteAllText(sourcePath, "new source content");
+
+            UnityLeanMcpStaticHistoryWriter.MoveWithOverwrite(sourcePath, destPath);
+
+            Assert.False(File.Exists(sourcePath));
+            Assert.True(File.Exists(destPath));
+            Assert.Equal("new source content", File.ReadAllText(destPath));
+        }
+        finally
+        {
+            DeleteTempDirectory(directory);
+        }
+    }
+
     private static string CreateTempDirectory()
     {
         string directory = Path.Combine(Path.GetTempPath(), "unity_static_history_" + Guid.NewGuid().ToString("N"));
