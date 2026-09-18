@@ -67,6 +67,8 @@ namespace UnityLeanMcp
         private static MethodInfo s_CreateFromFileMethod;
         private static MethodInfo s_CreateCompMethod;
         private static MethodInfo s_EmitMethod;
+        private static MethodInfo s_GetRootMethod;
+        private static MethodInfo s_DescendantNodesMethod;
 
         private static Type s_CompilationType;
         private static Type s_CompilationOptionsType;
@@ -75,6 +77,7 @@ namespace UnityLeanMcp
         private static object s_CompilationOptions;
 
         private static List<object> s_CachedMetadataReferences;
+        private static Array s_CachedMetadataReferenceArray;
         private static readonly object s_Lock = new object();
 
         private sealed class InitializationState
@@ -89,6 +92,8 @@ namespace UnityLeanMcp
             public MethodInfo CreateFromFileMethod;
             public MethodInfo CreateCompilationMethod;
             public MethodInfo EmitMethod;
+            public MethodInfo GetRootMethod;
+            public MethodInfo DescendantNodesMethod;
 
             public Type CompilationType;
             public Type CompilationOptionsType;
@@ -97,6 +102,7 @@ namespace UnityLeanMcp
             public object CompilationOptions;
 
             public List<object> CachedMetadataReferences;
+            public Array CachedMetadataReferenceArray;
         }
 
         public static RoslynSupportStatus GetSupportStatus()
@@ -140,17 +146,45 @@ namespace UnityLeanMcp
                 s_CreateFromFileMethod = state.CreateFromFileMethod;
                 s_CreateCompMethod = state.CreateCompilationMethod;
                 s_EmitMethod = state.EmitMethod;
+                s_GetRootMethod = state.GetRootMethod;
+                s_DescendantNodesMethod = state.DescendantNodesMethod;
                 s_CompilationType = state.CompilationType;
                 s_CompilationOptionsType = state.CompilationOptionsType;
                 s_SyntaxTreeType = state.SyntaxTreeType;
                 s_MetadataRefType = state.MetadataReferenceType;
                 s_CompilationOptions = state.CompilationOptions;
                 s_CachedMetadataReferences = state.CachedMetadataReferences;
+                s_CachedMetadataReferenceArray = state.CachedMetadataReferenceArray;
                 s_IsSupported = true;
                 s_UnsupportedReason = "";
 
                 // This is the release publication point for every field above.
                 Volatile.Write(ref s_Initialized, true);
+            }
+        }
+
+        internal static void ResetState()
+        {
+            lock (s_Lock)
+            {
+                s_Initialized = false;
+                s_IsSupported = false;
+                s_UnsupportedReason = "";
+                s_CodeAnalysisAsm = null;
+                s_CSharpAsm = null;
+                s_ParseTextMethod = null;
+                s_CreateFromFileMethod = null;
+                s_CreateCompMethod = null;
+                s_EmitMethod = null;
+                s_GetRootMethod = null;
+                s_DescendantNodesMethod = null;
+                s_CompilationType = null;
+                s_CompilationOptionsType = null;
+                s_SyntaxTreeType = null;
+                s_MetadataRefType = null;
+                s_CompilationOptions = null;
+                s_CachedMetadataReferences = null;
+                s_CachedMetadataReferenceArray = null;
             }
         }
 
@@ -306,7 +340,20 @@ namespace UnityLeanMcp
                     return state;
                 }
 
+                state.GetRootMethod = state.SyntaxTreeType.GetMethod("GetRoot", new Type[] { typeof(CancellationToken) }) ?? state.SyntaxTreeType.GetMethod("GetRoot", Type.EmptyTypes);
+                Type syntaxNodeType = state.CodeAnalysisAssembly.GetType("Microsoft.CodeAnalysis.SyntaxNode");
+                if (syntaxNodeType != null)
+                {
+                    state.DescendantNodesMethod = syntaxNodeType.GetMethod("DescendantNodes", new Type[] { typeof(Func<,>).MakeGenericType(syntaxNodeType, typeof(bool)), typeof(bool) }) ?? syntaxNodeType.GetMethod("DescendantNodes", Type.EmptyTypes);
+                }
+
                 state.CachedMetadataReferences = BuildMetadataReferences(state.CreateFromFileMethod);
+                state.CachedMetadataReferenceArray = Array.CreateInstance(state.MetadataReferenceType, state.CachedMetadataReferences.Count);
+                for (int i = 0; i < state.CachedMetadataReferences.Count; i++)
+                {
+                    state.CachedMetadataReferenceArray.SetValue(state.CachedMetadataReferences[i], i);
+                }
+
                 state.IsSupported = true;
                 return state;
             }
@@ -404,37 +451,20 @@ namespace UnityLeanMcp
             try
             {
                 // 1. Parse SyntaxTree
-                object syntaxTree;
-                var parsePars = s_ParseTextMethod.GetParameters();
-                if (parsePars.Length == 1)
+                object syntaxTree = ParseSyntaxTree(sourceCode);
+                if (syntaxTree == null)
                 {
-                    syntaxTree = s_ParseTextMethod.Invoke(null, new object[] { sourceCode });
-                }
-                else
-                {
-                    var parseArgs = new object[parsePars.Length];
-                    parseArgs[0] = sourceCode;
-                    for (int i = 1; i < parsePars.Length; i++)
-                    {
-                        parseArgs[i] = parsePars[i].DefaultValue != DBNull.Value ? parsePars[i].DefaultValue : null;
-                    }
-                    syntaxTree = s_ParseTextMethod.Invoke(null, parseArgs);
+                    errors.Add("Failed to parse syntax tree.");
+                    return false;
                 }
 
                 // 2. SyntaxTree array
                 var syntaxTreeArray = Array.CreateInstance(s_CodeAnalysisAsm.GetType("Microsoft.CodeAnalysis.SyntaxTree"), 1);
                 syntaxTreeArray.SetValue(syntaxTree, 0);
 
-                // 3. Metadata references array
-                var refArray = Array.CreateInstance(s_MetadataRefType, s_CachedMetadataReferences.Count);
-                for (int i = 0; i < s_CachedMetadataReferences.Count; i++)
-                {
-                    refArray.SetValue(s_CachedMetadataReferences[i], i);
-                }
-
-                // 4. Create compilation
+                // 3. Create compilation
                 string assemblyName = "__UnityLeanMcpEval_" + Guid.NewGuid().ToString("N");
-                var compilation = s_CreateCompMethod.Invoke(null, new object[] { assemblyName, syntaxTreeArray, refArray, s_CompilationOptions });
+                var compilation = s_CreateCompMethod.Invoke(null, new object[] { assemblyName, syntaxTreeArray, s_CachedMetadataReferenceArray, s_CompilationOptions });
 
                 // 5. Emit to memory stream
                 using (var ms = new MemoryStream())
@@ -507,6 +537,11 @@ namespace UnityLeanMcp
         private static object GetSyntaxTreeRoot(object syntaxTree)
         {
             if (syntaxTree == null) return null;
+            if (s_GetRootMethod != null)
+            {
+                return s_GetRootMethod.Invoke(syntaxTree, s_GetRootMethod.GetParameters().Length == 1 ? new object[] { CancellationToken.None } : null);
+            }
+
             MethodInfo getRootMethod = syntaxTree.GetType().GetMethod("GetRoot", new Type[] { typeof(CancellationToken) });
             if (getRootMethod == null)
             {
@@ -528,6 +563,11 @@ namespace UnityLeanMcp
         private static MethodInfo GetDescendantNodesMethod(object root)
         {
             if (root == null) return null;
+            if (s_DescendantNodesMethod != null)
+            {
+                return s_DescendantNodesMethod;
+            }
+
             MethodInfo descMethod = null;
             foreach (var m in root.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
@@ -683,7 +723,7 @@ namespace UnityLeanMcp
             return false;
         }
 
-        public static bool HasTopLevelValueReturn(string sourceCode)
+        public static bool HasTopLevelValueReturn(string sourceCode, bool alreadyCleaned = false)
         {
             if (string.IsNullOrWhiteSpace(sourceCode) || !IsSupported)
             {
@@ -692,8 +732,15 @@ namespace UnityLeanMcp
 
             try
             {
-                // If snippet has using directives, extract them first so probe method does not hit CS1529
-                ExtractUsingDirectives(sourceCode, out _, out string cleanBody);
+                string cleanBody;
+                if (alreadyCleaned)
+                {
+                    cleanBody = sourceCode;
+                }
+                else
+                {
+                    ExtractUsingDirectives(sourceCode, out _, out cleanBody);
+                }
 
                 // Wrap in a probe method so all C# language versions parse statements into a method body
                 string probeSource = "class __Probe { async System.Threading.Tasks.Task<object> M() {\n" + cleanBody + "\n} }";

@@ -150,7 +150,7 @@ namespace UnityLeanMcp
 
             RoslynCompilerHelper.ExtractUsingDirectives(rawCode, out var usings, out var methodBody);
 
-            bool hasValueReturn = RoslynCompilerHelper.HasTopLevelValueReturn(methodBody);
+            bool hasValueReturn = RoslynCompilerHelper.HasTopLevelValueReturn(methodBody, alreadyCleaned: true);
             isVoidStatement = !hasValueReturn;
 
             string source = BuildSource(methodBody, isVoidStatement, usings);

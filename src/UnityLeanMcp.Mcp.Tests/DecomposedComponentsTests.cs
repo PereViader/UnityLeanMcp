@@ -885,6 +885,22 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public void RoslynCompilerHelper_HasTopLevelValueReturn_WhenNullOrEmpty_ReturnsFalse()
+    {
+        Assert.False(UnityLeanMcp.RoslynCompilerHelper.HasTopLevelValueReturn(null!));
+        Assert.False(UnityLeanMcp.RoslynCompilerHelper.HasTopLevelValueReturn(""));
+        Assert.False(UnityLeanMcp.RoslynCompilerHelper.HasTopLevelValueReturn("   ", alreadyCleaned: true));
+    }
+
+    [Fact]
+    public void RoslynCompilerHelper_ResetState_ClearsInitializedStateCleanly()
+    {
+        UnityLeanMcp.RoslynCompilerHelper.ResetState();
+        var status = UnityLeanMcp.RoslynCompilerHelper.GetSupportStatus();
+        Assert.NotNull(status.UnsupportedReason);
+    }
+
+    [Fact]
     public void UnityClient_WithCustomOptions_SetsPropertiesProperly()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_opts_" + Guid.NewGuid().ToString("N"));
