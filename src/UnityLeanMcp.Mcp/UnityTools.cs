@@ -257,7 +257,7 @@ public class UnityTools
 
 
     [McpServerTool(Name = "unity_run_tests")]
-    [Description("Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to run only tests that previously failed.")]
+    [Description("Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
     public async Task<CallToolResult> UnityRunTestsAsync(
         [Description("Exact fully qualified test names in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format. Matches exact names only.")]
         string[]? testNames = null,
@@ -274,7 +274,7 @@ public class UnityTools
         [Description("Test execution mode: 'all' (default), 'editmode', or 'playmode'.")]
         UnityTestMode mode = UnityTestMode.All,
 
-        [Description("Only run tests that previously failed.")]
+        [Description("Only run tests that previously failed. Recommended for slow test suites; skip if tests run quickly.")]
         bool failedOnly = false,
 
         IProgress<ProgressNotificationValue>? progress = null,
