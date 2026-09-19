@@ -89,6 +89,11 @@ In hierarchical type matchers, `UnityEngine.Transform` inherits from `UnityEngin
 - In the decomposed `IUnityTypeFormatter` architecture, `TransformFormatter.Priority` must be strictly higher than `ComponentFormatter.Priority` (e.g. 110 vs 90).
 - If priorities were equal or inverted, `ComponentFormatter.CanFormat(value)` would return `true` for a `Transform`, capturing the instance and misformatting it with generic component inspection logic rather than rendering child count and local transform coordinates.
 
+### Math Struct Formatting vs. JSON Utility Serialization
+Common Unity geometric and math structs (`Vector2/3/4`, `Quaternion`, `Bounds`, `Rect`, `Color`, etc.) have public fields that `JsonUtility` serializes into verbose, multi-line JSON blocks (e.g. `{\n  "x": 1.0,\n  "y": 2.0,\n  "z": 3.0\n}`).
+- Assigning `UnityMathFormatter` a priority (35) strictly above `JsonUtilityFallbackFormatter` (-1000) and below `EnumerableFormatter` (40) formats math structs as concise invariant-culture strings (e.g. `(1.00, 2.00, 3.00)`), substantially conserving LLM context window tokens.
+- Placing it below `EnumerableFormatter` ensures collections of math structs (such as `Vector3[]`) are processed as lists of formatted elements rather than having collection handling bypassed.
+
 ### Extensible Type Formatters & `[InitializeOnLoad]` Execution Order
 When providing static registration APIs (`RegisterFormatter`, `UnregisterFormatter`) on `UnityResultFormatter`:
 - External packages and editor scripts may register custom formatters in their own `[InitializeOnLoad]` static constructors before or after `UnityLeanMcpServer` or `UnityResultFormatter` initializes.

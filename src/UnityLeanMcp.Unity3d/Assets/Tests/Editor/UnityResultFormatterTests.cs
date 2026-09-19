@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using NUnit.Framework;
+using UnityEngine;
 using UnityLeanMcp;
 
 namespace UnityLeanMcpTests
@@ -103,6 +105,56 @@ namespace UnityLeanMcpTests
                 prettyPrint: false);
 
             Assert.That(formatted, Is.EqualTo("[1, 2, 3]"));
+        }
+
+        [Test]
+        public void FormatResult_Vector3_FormatsWithInvariantCultureF2()
+        {
+            var v = new Vector3(1.234f, 5.678f, -9.012f);
+            string formatted = UnityResultFormatter.FormatResult(v, prettyPrint: false);
+            Assert.That(formatted, Is.EqualTo("(1.23, 5.68, -9.01)"));
+        }
+
+        [Test]
+        public void FormatResult_Color_FormatsWithInvariantCultureF3()
+        {
+            var c = new Color(1f, 0.5f, 0.25f, 0.8f);
+            string formatted = UnityResultFormatter.FormatResult(c, prettyPrint: false);
+            Assert.That(formatted, Is.EqualTo("RGBA(1.000, 0.500, 0.250, 0.800)"));
+        }
+
+        [Test]
+        public void FormatResult_Bounds_FormatsCenterAndExtents()
+        {
+            var b = new Bounds(new Vector3(1f, 2f, 3f), new Vector3(4f, 6f, 8f));
+            string formatted = UnityResultFormatter.FormatResult(b, prettyPrint: false);
+            Assert.That(formatted, Is.EqualTo("Center: (1.00, 2.00, 3.00), Extents: (2.00, 3.00, 4.00)"));
+        }
+
+        [Test]
+        public void FormatResult_Rect_FormatsCoordinatesAndSize()
+        {
+            var r = new Rect(10f, 20f, 100f, 200f);
+            string formatted = UnityResultFormatter.FormatResult(r, prettyPrint: false);
+            Assert.That(formatted, Is.EqualTo("(x:10.00, y:20.00, width:100.00, height:200.00)"));
+        }
+
+        [Test]
+        public void FormatResult_Vector3Array_FormatsThroughEnumerableFormatter()
+        {
+            var array = new[] { new Vector3(1f, 2f, 3f), new Vector3(4f, 5f, 6f) };
+            string formatted = UnityResultFormatter.FormatResult(array, prettyPrint: false);
+            Assert.That(formatted, Is.EqualTo("[(1.00, 2.00, 3.00), (4.00, 5.00, 6.00)]"));
+        }
+
+        [Test]
+        public void DefaultFormatters_ContainsUnityMathFormatterWithPriority35()
+        {
+            UnityResultFormatter.ResetToDefaults();
+            var formatters = UnityResultFormatter.Formatters;
+            var mathFormatter = formatters.OfType<UnityMathFormatter>().FirstOrDefault();
+            Assert.That(mathFormatter, Is.Not.Null);
+            Assert.That(mathFormatter.Priority, Is.EqualTo(35));
         }
 
         [Test]

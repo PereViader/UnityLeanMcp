@@ -471,6 +471,7 @@ namespace UnityLeanMcp
             s_Entries.Add(new FormatterEntry(new SerializedObjectFormatter(60), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new SerializedPropertyFormatter(50), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new EnumerableFormatter(40), ++s_OrderCounter));
+            s_Entries.Add(new FormatterEntry(new UnityMathFormatter(35), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new JsonUtilityFallbackFormatter(-1000), ++s_OrderCounter));
 
             SortEntriesLocked();
@@ -961,6 +962,80 @@ namespace UnityLeanMcp
                 return "[" + string.Join(", ", items) + "]";
             }
             return null;
+        }
+
+        public override bool Equals(object obj) =>
+            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
+
+        public override int GetHashCode() =>
+            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
+    }
+
+    public class UnityMathFormatter : IUnityTypeFormatter
+    {
+        public int Priority { get; }
+
+        public UnityMathFormatter(int priority = 35)
+        {
+            Priority = priority;
+        }
+
+        public bool CanFormat(object value)
+        {
+            return value is Vector2
+                || value is Vector3
+                || value is Vector4
+                || value is Vector2Int
+                || value is Vector3Int
+                || value is Quaternion
+                || value is Color
+                || value is Color32
+                || value is Bounds
+                || value is BoundsInt
+                || value is Rect
+                || value is RectInt
+                || value is Ray
+                || value is Ray2D
+                || value is Plane;
+        }
+
+        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
+        {
+            switch (value)
+            {
+                case Vector2 v:
+                    return v.ToString("F2", CultureInfo.InvariantCulture);
+                case Vector3 v:
+                    return v.ToString("F2", CultureInfo.InvariantCulture);
+                case Vector4 v:
+                    return v.ToString("F2", CultureInfo.InvariantCulture);
+                case Vector2Int v:
+                    return v.ToString();
+                case Vector3Int v:
+                    return v.ToString();
+                case Quaternion q:
+                    return q.ToString("F2", CultureInfo.InvariantCulture);
+                case Color c:
+                    return c.ToString("F3", CultureInfo.InvariantCulture);
+                case Color32 c32:
+                    return $"RGBA({c32.r}, {c32.g}, {c32.b}, {c32.a})";
+                case Bounds b:
+                    return $"Center: {b.center.ToString("F2", CultureInfo.InvariantCulture)}, Extents: {b.extents.ToString("F2", CultureInfo.InvariantCulture)}";
+                case BoundsInt bi:
+                    return $"Position: {bi.position}, Size: {bi.size}";
+                case Rect r:
+                    return r.ToString("F2", CultureInfo.InvariantCulture);
+                case RectInt ri:
+                    return ri.ToString();
+                case Ray ray:
+                    return $"Origin: {ray.origin.ToString("F2", CultureInfo.InvariantCulture)}, Direction: {ray.direction.ToString("F2", CultureInfo.InvariantCulture)}";
+                case Ray2D ray2:
+                    return $"Origin: {ray2.origin.ToString("F2", CultureInfo.InvariantCulture)}, Direction: {ray2.direction.ToString("F2", CultureInfo.InvariantCulture)}";
+                case Plane plane:
+                    return $"Normal: {plane.normal.ToString("F2", CultureInfo.InvariantCulture)}, Distance: {plane.distance.ToString("F2", CultureInfo.InvariantCulture)}";
+                default:
+                    return null;
+            }
         }
 
         public override bool Equals(object obj) =>
