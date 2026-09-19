@@ -2467,6 +2467,110 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
+    public async Task UnityEval_WhenSnippetCompilationFailsWithCS0103ForCommonUnityType_AppendsMissingNamespaceHint()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context"
+            };
+
+            var result = await tools.UnityEvalAsync("GameObject.Find(\"test\");");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'GameObject' does not exist in the current context", text);
+            Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityEval_WhenSnippetCompilationFailsWithCS0246ForCommonUnityType_AppendsMissingNamespaceHint()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "eval(1,1): error CS0246: The type or namespace name 'Selection' could not be found (are you missing a using directive or an assembly reference?)"
+            };
+
+            var result = await tools.UnityEvalAsync("Selection.activeGameObject = null;");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("• snippet line 1, col 1: error CS0246: The type or namespace name 'Selection' could not be found", text);
+            Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityEval_WhenSnippetCompilationFailsWithoutCommonUnityType_DoesNotAppendMissingNamespaceHint()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "eval(1,4): error CS1002: ; expected"
+            };
+
+            var result = await tools.UnityEvalAsync("int x = 1");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
+            Assert.DoesNotContain("Hint: Missing using directive?", text);
+            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityEval_WhenProjectCompilationFailsWithCommonUnityType_DoesNotAppendMissingNamespaceHint()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'GameObject' does not exist in the current context"
+            };
+
+            var result = await tools.UnityEvalAsync("return 42;");
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Assets/Scripts/Player.cs", text);
+            Assert.DoesNotContain("Hint: Missing using directive?", text);
+            Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void DiagnosticFormatter_ParseCompilerDiagnostics_WhenPipeSeparated_ParsesMultipleDiagnostics()
     {
         string text = "eval(1,4): error CS1002: ; expected | eval(1,1): error CS0103: The name 'xyz' does not exist in the current context";

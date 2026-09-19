@@ -178,6 +178,11 @@ public class UnityTools
                 ? "Evaluation aborted: Dynamic snippet compilation failed."
                 : "Evaluation aborted: Project script compilation failed.";
 
+            if (isSnippetFailure && parsedDiags.Any(IsMissingUnityNamespaceDiagnostic))
+            {
+                failureTrailer += "\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.";
+            }
+
             return _diagnosticFormatter.FormatCompilerDiagnostics(
                 result.Message,
                 _pathResolver.ProjectRoot,
@@ -187,6 +192,37 @@ public class UnityTools
         }
 
         return string.IsNullOrWhiteSpace(result.Message) ? "Evaluation failed." : result.Message;
+    }
+
+    private static readonly Regex s_CommonUnityTypesRegex = new(
+        @"\b(" +
+        "GameObject|Transform|Vector2|Vector3|Vector4|Quaternion|Color|Color32|Bounds|Rect|" +
+        "Mathf|Time|Debug|Selection|AssetDatabase|EditorApplication|Component|MonoBehaviour|" +
+        "SceneManager|Object|ScriptableObject|Camera|Material|Mesh|Texture|Texture2D|Shader|" +
+        "Physics|Physics2D|Ray|RaycastHit|Input|Screen|Application|EditorUtility|PrefabUtility|" +
+        "Undo|Gizmos|Handles|EditorWindow" +
+        @")\b",
+        RegexOptions.Compiled);
+
+    private static bool IsMissingUnityNamespaceDiagnostic(StructuredCompilerDiagnostic diagnostic)
+    {
+        if (!DiagnosticFormatter.IsEvalSynthetic(diagnostic.File) && !string.IsNullOrWhiteSpace(diagnostic.File))
+        {
+            return false;
+        }
+
+        if (!string.Equals(diagnostic.Code, "CS0103", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(diagnostic.Code, "CS0246", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(diagnostic.Message))
+        {
+            return false;
+        }
+
+        return s_CommonUnityTypesRegex.IsMatch(diagnostic.Message);
     }
 
     private static string FormatLogs(IReadOnlyList<ConsoleLogEntry> logs)
