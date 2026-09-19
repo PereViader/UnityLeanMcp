@@ -98,7 +98,7 @@ public class UnityTools
     }
 
     [McpServerTool(Name = "unity_eval")]
-    [Description("Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result; void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
+    [Description("Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result (e.g., 'return new { player.health, player.speed };' to inspect multiple properties); void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
     public async Task<CallToolResult> UnityEvalAsync(
         [Description("Raw C# source text to evaluate. Send plain text directly—do not wrap in JSON.")] string code,
         IProgress<ProgressNotificationValue>? progress = null,
