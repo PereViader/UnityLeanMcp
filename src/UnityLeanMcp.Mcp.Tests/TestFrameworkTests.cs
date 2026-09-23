@@ -109,23 +109,21 @@ public class TestFrameworkTests
     }
 
     [Fact]
-    public async Task TestEverythingPasses_RunsAllTestsByDefault()
+    public async Task TestRunTests_WithoutMode_FailsValidation()
     {
         var client = _fixture.SharedClient;
         var result = await client.CallToolAsync("unity_run_tests");
 
-        Assert.False(result.IsError, result.Text);
-        Assert.Contains("Tests Passed:", result.Text);
+        Assert.True(result.IsError, result.Text);
     }
 
     [Fact]
-    public async Task TestEverythingPasses_RunsAllTestsExplicitly()
+    public async Task TestRunTests_WithRemovedAllMode_FailsValidation()
     {
         var client = _fixture.SharedClient;
         var result = await client.CallToolAsync("unity_run_tests", new { mode = "all" });
 
-        Assert.False(result.IsError, result.Text);
-        Assert.Contains("Tests Passed:", result.Text);
+        Assert.True(result.IsError, result.Text);
     }
 
     [Fact]
@@ -140,7 +138,7 @@ public class TestFrameworkTests
         });
         Assert.False(initialRun.IsError, initialRun.Text);
 
-        var failedRun = await client.CallToolAsync("unity_run_tests", new { failedOnly = true });
+        var failedRun = await client.CallToolAsync("unity_run_tests", new { mode = "editmode", failedOnly = true });
         Assert.False(failedRun.IsError, failedRun.Text);
         Assert.Contains("No previously failed tests found.", failedRun.Text);
     }
@@ -158,7 +156,7 @@ public class TestFrameworkTests
         Assert.True(initialRun.IsError);
         Assert.Contains("Failures:", initialRun.Text);
 
-        var failedRun = await client.CallToolAsync("unity_run_tests", new { failedOnly = true });
+        var failedRun = await client.CallToolAsync("unity_run_tests", new { mode = "editmode", failedOnly = true });
         Assert.True(failedRun.IsError);
         Assert.Contains("Tests Failed:", failedRun.Text);
         Assert.Contains("Failures:", failedRun.Text);

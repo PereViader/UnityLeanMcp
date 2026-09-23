@@ -602,7 +602,7 @@ public class ToolFormattingTests
                 Message = "Assets/Scripts/Test.cs(12,8): error CS1002: ; expected"
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -630,7 +630,7 @@ public class ToolFormattingTests
                 FailedTests = null!
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -686,7 +686,6 @@ public class ToolFormattingTests
     }
 
     [Theory]
-    [InlineData(UnityTestMode.All, "all")]
     [InlineData(UnityTestMode.EditMode, "editmode")]
     [InlineData(UnityTestMode.PlayMode, "playmode")]
     public async Task UnityRunTests_WhenModeIsValid_PassesCanonicalModeToClient(UnityTestMode mode, string expectedMode)
@@ -741,7 +740,7 @@ public class ToolFormattingTests
                 FailedTests = failedTests
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -797,7 +796,7 @@ public class ToolFormattingTests
                 FailedTests = failedTests
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -850,7 +849,7 @@ public class ToolFormattingTests
                 FailedTests = failedTests
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -909,7 +908,7 @@ public class ToolFormattingTests
                 FailedTests = failedTests
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1111,7 +1110,7 @@ public class ToolFormattingTests
                 FailedTests = failedTests
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1175,11 +1174,11 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(groupNames: ["SomeFilter"]);
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: ["SomeFilter"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
-            Assert.Contains("No tests found matching filter 'SomeFilter' (mode: all).", text);
+            Assert.Contains("No tests found matching filter 'SomeFilter' (mode: editmode).", text);
         }
         finally
         {
@@ -1201,11 +1200,11 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(categoryNames: ["SomeCat"]);
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, categoryNames: ["SomeCat"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
-            Assert.Contains("No tests found matching category 'SomeCat' (mode: all).", text);
+            Assert.Contains("No tests found matching category 'SomeCat' (mode: editmode).", text);
         }
         finally
         {
@@ -1227,11 +1226,11 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(groupNames: ["SomeFilter"], categoryNames: ["SomeCat"]);
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: ["SomeFilter"], categoryNames: ["SomeCat"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
-            Assert.Contains("No tests found matching filter 'SomeFilter' and category 'SomeCat' (mode: all).", text);
+            Assert.Contains("No tests found matching filter 'SomeFilter' and category 'SomeCat' (mode: editmode).", text);
         }
         finally
         {
@@ -1253,7 +1252,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.False(result.IsError);
             string text = GetResultText(result);
@@ -1279,7 +1278,7 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.False(result.IsError);
             string text = GetResultText(result);
@@ -1306,7 +1305,7 @@ public class ToolFormattingTests
                 SkipCount = 1
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.False(result.IsError);
             string text = GetResultText(result);
@@ -1333,7 +1332,7 @@ public class ToolFormattingTests
                 FailedTests = [new FailedTestInfo { Name = "FailTest", FullName = "Suite.FailTest", Message = "Failed assertion" }]
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1361,7 +1360,7 @@ public class ToolFormattingTests
                 FailedTests = [new FailedTestInfo { Name = "FailTest", FullName = "Suite.FailTest", Message = "Failed assertion" }]
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1386,6 +1385,7 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
+                mode: UnityTestMode.EditMode,
                 testNames: ["MyNamespace.MyTestClass.MyMethod"],
                 groupNames: ["MyNamespace\\.MyTestClass"],
                 categoryNames: ["Integration"],
@@ -1425,6 +1425,7 @@ public class ToolFormattingTests
             var asmNames = new[] { "Asm1", "Asm2" };
 
             var result = await tools.UnityRunTestsAsync(
+                mode: UnityTestMode.EditMode,
                 testNames: testNames,
                 groupNames: groupNames,
                 categoryNames: catNames,
@@ -1455,13 +1456,13 @@ public class ToolFormattingTests
             };
 
             // Passing a single-element array
-            var singleResult = await tools.UnityRunTestsAsync(testNames: ["TestA"]);
+            var singleResult = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: ["TestA"]);
             Assert.False(singleResult.IsError);
             Assert.NotNull(client.LastTestNames);
             Assert.Equal(["TestA"], client.LastTestNames);
 
             // Passing an array with multiple strings
-            var arrayResult = await tools.UnityRunTestsAsync(testNames: ["TestA", "TestB"]);
+            var arrayResult = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: ["TestA", "TestB"]);
             Assert.False(arrayResult.IsError);
             Assert.NotNull(client.LastTestNames);
             Assert.Equal(["TestA", "TestB"], client.LastTestNames);
@@ -1488,10 +1489,10 @@ public class ToolFormattingTests
         {
             CallToolResult result = filterName switch
             {
-                "testNames" => await tools.UnityRunTestsAsync(testNames: [value]),
-                "groupNames" => await tools.UnityRunTestsAsync(groupNames: [value]),
-                "categoryNames" => await tools.UnityRunTestsAsync(categoryNames: [value]),
-                "assemblyNames" => await tools.UnityRunTestsAsync(assemblyNames: [value]),
+                "testNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: [value]),
+                "groupNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: [value]),
+                "categoryNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, categoryNames: [value]),
+                "assemblyNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, assemblyNames: [value]),
                 _ => throw new ArgumentOutOfRangeException(nameof(filterName))
             };
 
@@ -1517,10 +1518,10 @@ public class ToolFormattingTests
         {
             CallToolResult result = filterName switch
             {
-                "testNames" => await tools.UnityRunTestsAsync(testNames: ["Valid", " ", "AlsoValid"]),
-                "groupNames" => await tools.UnityRunTestsAsync(groupNames: ["Valid.*", " ", "AlsoValid.*"]),
-                "categoryNames" => await tools.UnityRunTestsAsync(categoryNames: ["Valid", " ", "AlsoValid"]),
-                "assemblyNames" => await tools.UnityRunTestsAsync(assemblyNames: ["Valid", " ", "AlsoValid"]),
+                "testNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: ["Valid", " ", "AlsoValid"]),
+                "groupNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: ["Valid.*", " ", "AlsoValid.*"]),
+                "categoryNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, categoryNames: ["Valid", " ", "AlsoValid"]),
+                "assemblyNames" => await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, assemblyNames: ["Valid", " ", "AlsoValid"]),
                 _ => throw new ArgumentOutOfRangeException(nameof(filterName))
             };
 
@@ -1547,6 +1548,7 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
+                mode: UnityTestMode.EditMode,
                 testNames: ["Namespace.Fixture.Test"],
                 groupNames: ["Namespace.Fixture.*", "OtherFixture.*"],
                 categoryNames: ["Fast"],
@@ -1582,6 +1584,7 @@ public class ToolFormattingTests
             };
 
             var result = await tools.UnityRunTestsAsync(
+                mode: UnityTestMode.EditMode,
                 groupNames: ["MyLegacyFilter"],
                 categoryNames: ["MyLegacyCat"]);
 
@@ -1613,7 +1616,7 @@ public class ToolFormattingTests
                 Message = "Regex parsing error: Quantifier * following nothing"
             };
 
-            var result = await tools.UnityRunTestsAsync(groupNames: ["*Movement*"]);
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: ["*Movement*"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -1640,11 +1643,11 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(testNames: ["MyNamespace.MyTest"]);
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: ["MyNamespace.MyTest"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
-            Assert.Contains("No tests found matching testNames 'MyNamespace.MyTest' (mode: all).", text);
+            Assert.Contains("No tests found matching testNames 'MyNamespace.MyTest' (mode: editmode).", text);
         }
         finally
         {
@@ -1666,11 +1669,11 @@ public class ToolFormattingTests
                 SkipCount = 0
             };
 
-            var result = await tools.UnityRunTestsAsync(assemblyNames: ["MyCompany.MyTests"]);
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, assemblyNames: ["MyCompany.MyTests"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
-            Assert.Contains("No tests found matching assemblyNames 'MyCompany.MyTests' (mode: all).", text);
+            Assert.Contains("No tests found matching assemblyNames 'MyCompany.MyTests' (mode: editmode).", text);
         }
         finally
         {
@@ -1818,7 +1821,7 @@ public class ToolFormattingTests
                 FailedTests = failed
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             Assert.Single(result.Content);
@@ -1873,7 +1876,7 @@ public class ToolFormattingTests
                 FailedTests = failed
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string humanText = GetResultText(result);
@@ -2103,7 +2106,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
                 }
             };
 
-            var testResult = await customTools.UnityRunTestsAsync();
+            var testResult = await customTools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
             Assert.True(customFormatter.ExtractSourceLocationCalled);
         }
         finally
@@ -2363,7 +2366,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
                           "Assets/Scripts/Test.cs(12,8): error CS1002: ; expected"
             };
 
-            var result = await tools.UnityRunTestsAsync();
+            var result = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);
@@ -2703,7 +2706,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     [Theory]
     [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     [InlineData("unity_eval", "Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result (e.g., 'return new { player.health, player.speed };' to inspect multiple properties); void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
-    [InlineData("unity_run_tests", "Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
+    [InlineData("unity_run_tests", "Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
     [InlineData("unity_stop", "Stops the running Unity instance when explicitly requested, to recover from a freeze or release project locks. Stopping an interactive GUI Editor can discard unsaved changes; use force: true only with explicit approval. Do not call automatically after operations.")]
     public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
     {
@@ -2803,7 +2806,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
 
         // Check default parameter values
         var modeParam = method.GetParameters().First(p => p.Name == "mode");
-        Assert.Equal(UnityTestMode.All, modeParam.DefaultValue);
+        Assert.False(modeParam.HasDefaultValue);
 
         var failedOnlyParam = method.GetParameters().First(p => p.Name == "failedOnly");
         Assert.Equal(false, failedOnlyParam.DefaultValue);
@@ -2841,6 +2844,22 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             descAttr.Description);
     }
 
+    [Fact]
+    public void UnityTools_UnityRunTests_Mode_HasAccurateDescription()
+    {
+        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityRunTestsAsync));
+        Assert.NotNull(method);
+
+        var modeParam = method.GetParameters().FirstOrDefault(p => p.Name == "mode");
+        Assert.NotNull(modeParam);
+
+        var descAttr = modeParam.GetCustomAttribute<DescriptionAttribute>();
+        Assert.NotNull(descAttr);
+        Assert.Equal(
+            "Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.",
+            descAttr.Description);
+    }
+
     [Theory]
     [InlineData("testNames")]
     [InlineData("groupNames")]
@@ -2857,22 +2876,22 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             switch (filterParam)
             {
                 case "testNames":
-                    await tools.UnityRunTestsAsync(testNames: ["MyTest"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: ["MyTest"]);
                     Assert.NotNull(client.LastTestNames);
                     Assert.Equal(["MyTest"], client.LastTestNames);
                     break;
                 case "groupNames":
-                    await tools.UnityRunTestsAsync(groupNames: ["MyGroup.*"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: ["MyGroup.*"]);
                     Assert.NotNull(client.LastGroupNames);
                     Assert.Equal(["MyGroup.*"], client.LastGroupNames);
                     break;
                 case "categoryNames":
-                    await tools.UnityRunTestsAsync(categoryNames: ["Unit"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, categoryNames: ["Unit"]);
                     Assert.NotNull(client.LastCategoryNames);
                     Assert.Equal(["Unit"], client.LastCategoryNames);
                     break;
                 case "assemblyNames":
-                    await tools.UnityRunTestsAsync(assemblyNames: ["MyAssembly"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, assemblyNames: ["MyAssembly"]);
                     Assert.NotNull(client.LastAssemblyNames);
                     Assert.Equal(["MyAssembly"], client.LastAssemblyNames);
                     break;
@@ -2882,22 +2901,22 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             switch (filterParam)
             {
                 case "testNames":
-                    await tools.UnityRunTestsAsync(testNames: ["Test1", "Test2"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, testNames: ["Test1", "Test2"]);
                     Assert.NotNull(client.LastTestNames);
                     Assert.Equal(["Test1", "Test2"], client.LastTestNames);
                     break;
                 case "groupNames":
-                    await tools.UnityRunTestsAsync(groupNames: ["Group1.*", "Group2.*"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, groupNames: ["Group1.*", "Group2.*"]);
                     Assert.NotNull(client.LastGroupNames);
                     Assert.Equal(["Group1.*", "Group2.*"], client.LastGroupNames);
                     break;
                 case "categoryNames":
-                    await tools.UnityRunTestsAsync(categoryNames: ["Unit", "Integration"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, categoryNames: ["Unit", "Integration"]);
                     Assert.NotNull(client.LastCategoryNames);
                     Assert.Equal(["Unit", "Integration"], client.LastCategoryNames);
                     break;
                 case "assemblyNames":
-                    await tools.UnityRunTestsAsync(assemblyNames: ["Asm1", "Asm2"]);
+                    await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode, assemblyNames: ["Asm1", "Asm2"]);
                     Assert.NotNull(client.LastAssemblyNames);
                     Assert.Equal(["Asm1", "Asm2"], client.LastAssemblyNames);
                     break;
@@ -2969,7 +2988,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
                 ResultState = "CompileError",
                 Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
             };
-            var testCompileResult = await tools.UnityRunTestsAsync();
+            var testCompileResult = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
             string testCompileText = GetResultText(testCompileResult);
             Assert.Contains(customRootNormalized, testCompileText);
             Assert.DoesNotContain(pmRootNormalized, testCompileText);
@@ -2992,7 +3011,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
                     }
                 ]
             };
-            var testRunResult = await tools.UnityRunTestsAsync();
+            var testRunResult = await tools.UnityRunTestsAsync(mode: UnityTestMode.EditMode);
             string testRunText = GetResultText(testRunResult);
             Assert.Contains(customRootNormalized, testRunText);
             Assert.DoesNotContain(pmRootNormalized, testRunText);

@@ -105,7 +105,7 @@ public class McpProtocolTests
         var modeProp = properties.GetProperty("mode");
         Assert.Equal("string", modeProp.GetProperty("type").GetString());
         Assert.Equal(
-            new[] { "all", "editmode", "playmode" },
+            new[] { "editmode", "playmode" },
             modeProp.GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray());
 
         // 4. tools/call unity_stop

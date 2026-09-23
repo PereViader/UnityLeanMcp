@@ -260,7 +260,7 @@ public class TieredAutowaitingTests
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "all", false, progress, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, progress, cts.Token);
 
         Assert.True(result.Success, result.Message);
         Assert.Equal(5, result.PassCount);
@@ -296,7 +296,7 @@ public class TieredAutowaitingTests
         }, new UnityClientOptions(PollIntervalMs: 20, BusyGracePeriod: TimeSpan.FromMilliseconds(100)));
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "all", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, call unity_stop to recover.", result.Message);

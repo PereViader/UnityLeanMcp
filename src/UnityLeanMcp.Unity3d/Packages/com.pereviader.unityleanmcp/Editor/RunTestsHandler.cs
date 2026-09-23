@@ -183,7 +183,7 @@ namespace UnityLeanMcp
 
             if ((int)mode == -1)
             {
-                writer.WriteLine("ERROR: Invalid test mode. Must be all, playmode, or editmode");
+                writer.WriteLine("ERROR: Invalid test mode. Must be playmode or editmode");
                 return;
             }
 
@@ -272,8 +272,6 @@ namespace UnityLeanMcp
                     return TestMode.PlayMode;
                 case "editmode":
                     return TestMode.EditMode;
-                case "all":
-                    return TestMode.EditMode | TestMode.PlayMode;
                 default:
                     return (TestMode)(-1);
             }

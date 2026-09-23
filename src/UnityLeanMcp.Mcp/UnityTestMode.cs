@@ -8,9 +8,6 @@ namespace UnityLeanMcp.Mcp;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum UnityTestMode
 {
-    [JsonStringEnumMemberName("all")]
-    All,
-
     [JsonStringEnumMemberName("editmode")]
     EditMode,
 

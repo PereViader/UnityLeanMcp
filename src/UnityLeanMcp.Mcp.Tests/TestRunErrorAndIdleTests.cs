@@ -41,7 +41,39 @@ public class TestRunErrorAndIdleTests
 
             Assert.False(result.Success);
             Assert.Equal("InvalidInput", result.ResultState);
-            Assert.Equal("Invalid test mode. Expected one of: all, editmode, or playmode. The mode must not be blank.", result.Message);
+            Assert.Equal(TestModeParser.InvalidModeMessage, result.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenModeIsAll_ReturnsRemovedAllModeError()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_test_all_mode_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
+
+        try
+        {
+            var processManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+                .WithTrustedTestProcessProvider();
+            var client = new UnityClient(processManager, NullLogger<UnityClient>.Instance);
+
+            var result = await client.RunTestsAsync(
+                testNames: null,
+                groupNames: null,
+                categoryNames: null,
+                assemblyNames: null,
+                mode: "all",
+                failedOnly: false,
+                progress: null,
+                cancellationToken: CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Equal("InvalidInput", result.ResultState);
+            Assert.Equal(TestModeParser.RemovedAllModeMessage, result.Message);
         }
         finally
         {
@@ -70,7 +102,7 @@ public class TestRunErrorAndIdleTests
                 groupNames: filterName == "groupNames" ? ["Valid.*", " "] : null,
                 categoryNames: filterName == "categoryNames" ? ["Valid", " "] : null,
                 assemblyNames: filterName == "assemblyNames" ? ["Valid", " "] : null,
-                mode: "all",
+                mode: "editmode",
                 failedOnly: false,
                 progress: null,
                 cancellationToken: CancellationToken.None);

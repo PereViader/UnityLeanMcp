@@ -29,9 +29,12 @@ public sealed class ToolSchemaTests
         JsonElement mode = properties.GetProperty("mode");
         Assert.Equal("string", mode.GetProperty("type").GetString());
         Assert.Equal(
-            new[] { "all", "editmode", "playmode" },
+            new[] { "editmode", "playmode" },
             mode.GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray());
-        Assert.Equal("all", mode.GetProperty("default").GetString());
+        Assert.False(mode.TryGetProperty("default", out _));
+
+        var required = schema.RootElement.GetProperty("required").EnumerateArray().Select(value => value.GetString()).ToArray();
+        Assert.Contains("mode", required);
     }
 
     private static IEnumerable<string> GetSchemaTypes(JsonElement schema)

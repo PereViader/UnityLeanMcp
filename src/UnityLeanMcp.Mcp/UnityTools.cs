@@ -257,8 +257,11 @@ public class UnityTools
 
 
     [McpServerTool(Name = "unity_run_tests")]
-    [Description("Runs Unity tests in 'all', 'editmode', or 'playmode' mode. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
+    [Description("Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
     public async Task<CallToolResult> UnityRunTestsAsync(
+        [Description("Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.")]
+        UnityTestMode mode,
+
         [Description("Exact fully qualified test names in 'FixtureName.MethodName' or 'Namespace.FixtureName.MethodName' format. Matches exact names only.")]
         string[]? testNames = null,
 
@@ -271,9 +274,6 @@ public class UnityTools
         [Description("Test assembly names without the .dll extension to run.")]
         string[]? assemblyNames = null,
 
-        [Description("Test execution mode: 'all' (default), 'editmode', or 'playmode'.")]
-        UnityTestMode mode = UnityTestMode.All,
-
         [Description("Only run tests that previously failed. Recommended for slow test suites; skip if tests run quickly.")]
         bool failedOnly = false,
 
@@ -282,9 +282,9 @@ public class UnityTools
     {
         try
         {
-            if (!TestModeParser.TryNormalize(mode, out string normalizedMode))
+            if (!TestModeParser.TryNormalize(mode, out string normalizedMode, out string? modeError))
             {
-                return Result(TestModeParser.InvalidModeMessage, isError: true);
+                return Result(modeError ?? TestModeParser.InvalidModeMessage, isError: true);
             }
 
             if (!TestFilterValidation.TryValidate(testNames, groupNames, categoryNames, assemblyNames, out string filterError))
@@ -400,6 +400,11 @@ public class UnityTools
             {
                 headerOutput.AppendLine($"No tests found matching the specified test filter(s) (mode: {normalizedMode}).");
             }
+
+            string modeHint = normalizedMode == "editmode"
+                ? "Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'."
+                : "Hint: If the target tests are unit tests or editor utilities without runtime/player lifecycle, try running with mode 'editmode'.";
+            headerOutput.AppendLine(modeHint);
         }
         else if (result.Success)
         {

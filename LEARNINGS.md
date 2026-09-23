@@ -213,7 +213,10 @@ The filter parameters passed to `TestRunnerApi.Execute` have strict, non-obvious
 - Filter arguments must be passed verbatim without lossy heuristic translations (such as naively rewriting `*` to `.*`).
 
 ### Test Mode Validation Must Precede Refresh
-The MCP test tool's documented default applies only when the `mode` argument is omitted and the method default supplies `all`. Explicit null, blank, or unsupported modes must be rejected before the client refreshes AssetDatabase or sends a `RUN_TESTS` command; otherwise an invalid request can unexpectedly execute the full suite.
+The MCP test tool requires explicit selection of `editmode` or `playmode`. Explicit null, blank, unsupported modes, or the removed `all` mode must be rejected before the client refreshes AssetDatabase or sends a `RUN_TESTS` command; otherwise an invalid request can trigger unnecessary recompilation or execute unintended test suites.
+
+### Removal of Ambiguous 'all' Test Mode for PlayMode Integration Tests
+The legacy `all` test mode was ambiguous and failed to reliably discover PlayMode-only integration tests under Unity Test Framework. For example, integration tests referencing `Stumble.Presentation.UI.Tests.Integration` and requiring runtime scene loading or MonoBehaviour lifecycle were reported as "No tests found" under `mode: "all"`, whereas running them explicitly under `mode: "playmode"` discovered and executed them successfully. Removing `all` and making `mode` mandatory eliminates ambiguity: callers and AI agents must actively determine whether target tests are EditMode (unit tests, editor utilities, no player loop) or PlayMode (integration tests, scene loading, frame-yielding `UnityTest`/`IEnumerator`). When no tests match a filter, actionable diagnostic guidance prompts the caller to try the alternative mode.
 
 ### Pre-Execution Test Run Failure Masking
 When the Unity Test Framework aborts prior to running tests (e.g. due to an invalid regex in `groupNames`, an assembly compilation error, or a runner initialization exception):
@@ -311,7 +314,7 @@ An MCP caller can cancel after a mutating command has reached Unity but before t
 
 ### MCP Layer Parameter Normalization vs. Low-Level API Contract
 
-In MCP server tools exposed to LLM agents (such as `unity_run_tests`), omitted arguments use their documented defaults and finite string choices should be represented by schema-aware enums. The tool boundary still validates invalid enum values before refresh or dispatch. Lower-level service methods (`UnityClient.RunTestsAsync`) maintain the independent string contract used by the Unity socket protocol and reject blank or unrecognized modes immediately with clear error messages. This keeps schema validation and protocol defense in depth without duplicating cross-tool instructions in every description.
+In MCP server tools exposed to LLM agents (such as `unity_run_tests`), mandatory parameters have no default value and finite string choices are represented by schema-aware enums (`UnityTestMode`). The tool boundary validates invalid enum values and legacy options (such as `all`) before refresh or dispatch. Lower-level service methods (`UnityClient.RunTestsAsync`) maintain the independent string contract used by the Unity socket protocol and reject blank, unrecognized, or removed modes immediately with clear error messages. This keeps schema validation and protocol defense in depth without duplicating cross-tool instructions in every description.
 
 ### Test-Environment PATH Isolation During Parallel Test Runs
 

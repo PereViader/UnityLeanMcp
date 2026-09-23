@@ -590,13 +590,13 @@ public class UnityClient : IUnityClient
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        if (!TestModeParser.TryNormalize(mode, out string testMode))
+        if (!TestModeParser.TryNormalize(mode, out string testMode, out string? modeError))
         {
             return new UnityTestRunResult
             {
                 Success = false,
                 ResultState = "InvalidInput",
-                Message = TestModeParser.InvalidModeMessage
+                Message = modeError ?? TestModeParser.InvalidModeMessage
             };
         }
 
