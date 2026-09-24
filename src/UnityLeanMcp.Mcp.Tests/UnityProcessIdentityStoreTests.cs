@@ -24,6 +24,29 @@ public sealed class UnityProcessIdentityStoreTests
             Assert.Equal(process.StartTime.ToUniversalTime().Ticks, identity.StartTimeUtcTicks);
             Assert.Equal(Path.GetFullPath(executablePath), identity.ExecutablePath);
             Assert.Equal(projectRoot, identity.ProjectRoot);
+            Assert.Equal("GUI", identity.Mode);
+        }
+        finally
+        {
+            DeleteProjectRoot(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void WriteAndRead_PreservesCustomMode()
+    {
+        string projectRoot = CreateProjectRoot();
+        using Process process = Process.GetCurrentProcess();
+        string executablePath = process.MainModule?.FileName ?? throw new InvalidOperationException();
+        var store = CreateStore(projectRoot);
+
+        try
+        {
+            store.Write(process, executablePath, projectRoot, mode: "Batchmode");
+
+            Assert.True(File.Exists(store.FilePath));
+            Assert.True(store.TryRead(out UnityProcessIdentityRecord identity));
+            Assert.Equal("Batchmode", identity.Mode);
         }
         finally
         {

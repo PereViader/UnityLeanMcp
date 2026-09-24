@@ -311,6 +311,60 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
+    public async Task EnsureUnityRunningAsync_AutoStartsInNormalInteractiveMode()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_interactive_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Temp"));
+        int dummyPid = 0;
+
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            ProcessStartInfo? capturedPsi = null;
+            var dummyProc = StartDummyProcess();
+            dummyPid = dummyProc.Id;
+            using var cts = new CancellationTokenSource();
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: new DiscoverySocketTransport(isReady: false),
+                executableLocator: new FixedExecutableLocator())
+            {
+                ProcessStarter = psi =>
+                {
+                    capturedPsi = psi;
+                    cts.Cancel();
+                    return dummyProc;
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cts.Token));
+
+            Assert.NotNull(capturedPsi);
+            Assert.DoesNotContain("-batchmode", capturedPsi!.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("-nographics", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("-projectPath", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("-logFile", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.False(capturedPsi.CreateNoWindow);
+
+            var store = new FileUnityProcessIdentityStore(resolver.PidFile);
+            Assert.True(store.TryRead(out var identity));
+            Assert.Equal("GUI", identity.Mode);
+            Assert.Equal(dummyPid, identity.ProcessId);
+        }
+        finally
+        {
+            try
+            {
+                using var p = Process.GetProcessById(dummyPid);
+                if (!p.HasExited) p.Kill(true);
+            }
+            catch { }
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task EnsureUnityRunningAsync_WhenUnityAlreadyRunning_IgnoresHistoricalCompilationErrorsInLogFile()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_test_" + Guid.NewGuid().ToString("N"));

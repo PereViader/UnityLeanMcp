@@ -14,7 +14,7 @@ internal interface IUnityProcessIdentityStore
 
     bool TryRead(out UnityProcessIdentityRecord identity);
 
-    void Write(Process process, string executablePath, string projectRoot);
+    void Write(Process process, string executablePath, string projectRoot, string mode = "GUI");
 
     bool Matches(Process process, UnityProcessIdentityRecord identity, string projectRoot);
 
@@ -27,6 +27,7 @@ internal sealed class UnityProcessIdentityRecord
     public long StartTimeUtcTicks { get; init; }
     public string ExecutablePath { get; init; } = string.Empty;
     public string ProjectRoot { get; init; } = string.Empty;
+    public string Mode { get; init; } = "GUI";
 }
 
 internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
@@ -62,7 +63,7 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         }
     }
 
-    public void Write(Process process, string executablePath, string projectRoot)
+    public void Write(Process process, string executablePath, string projectRoot, string mode = "GUI")
     {
         if (!TryGetProcessStartTimeTicks(process, out long startTimeTicks))
         {
@@ -77,7 +78,8 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
             ProcessId = process.Id,
             StartTimeUtcTicks = startTimeTicks,
             ExecutablePath = resolvedExecutablePath,
-            ProjectRoot = projectRoot
+            ProjectRoot = projectRoot,
+            Mode = mode
         };
 
         try

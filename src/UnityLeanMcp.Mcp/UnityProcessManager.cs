@@ -252,7 +252,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // receive no PID and therefore cannot use it to terminate an
                 // Editor. It only makes startup wait for the existing Editor to
                 // republish its socket (or release the lock) instead of racing it
-                // with a conflicting batchmode launch.
+                // with a conflicting launch.
                 processId = null;
                 _logger.LogInformation(
                     "Unity project lockfile {LockFile} is held but its process cannot be attributed; waiting for the existing Editor socket.",
@@ -701,7 +701,7 @@ public class UnityProcessManager : IUnityProcessManager
 
         if (pid.HasValue && _processIdentityStore.TryRead(out var identity) && identity.ProcessId == pid.Value)
         {
-            return "Batchmode";
+            return string.IsNullOrWhiteSpace(identity.Mode) ? "GUI" : identity.Mode;
         }
 
         if (pid.HasValue)
@@ -724,7 +724,7 @@ public class UnityProcessManager : IUnityProcessManager
     public string? GetProjectEditorVersion() => (_executableLocator as UnityExecutableLocator)?.GetProjectEditorVersion();
 
     /// <summary>
-    /// Ensures the project has a live Unity socket, auto-starting Unity in headless batchmode only when
+    /// Ensures the project has a live Unity socket, auto-starting Unity in interactive mode only when
     /// no project-scoped endpoint responds to PING and process discovery finds no existing Editor.
     /// </summary>
     public async Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default)
@@ -786,7 +786,7 @@ public class UnityProcessManager : IUnityProcessManager
 
         string unityExe = locatorResult.ExecutablePath!;
 
-        _logger.LogInformation("Auto-starting Unity batchmode from '{UnityExe}'...", unityExe);
+        _logger.LogInformation("Auto-starting Unity Editor in interactive mode from '{UnityExe}'...", unityExe);
 
         Directory.CreateDirectory(_pathResolver.TempDir);
         try { File.Delete(_pathResolver.LogFile); } catch { }
@@ -813,10 +813,10 @@ public class UnityProcessManager : IUnityProcessManager
         var psi = new ProcessStartInfo
         {
             FileName = unityExe,
-            Arguments = $"-batchmode -nographics -projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\"",
+            Arguments = $"-projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\"",
             WorkingDirectory = projectRootArg,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = false
         };
 
         Process proc;
@@ -837,7 +837,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // files atomically. If the host crashes between those
                 // publications, IsUnityRunning can recover from the sidecar
                 // alone; a reused PID cannot satisfy its identity.
-                _processIdentityStore.Write(proc, unityExe, _pathResolver.ProjectRoot);
+                _processIdentityStore.Write(proc, unityExe, _pathResolver.ProjectRoot, "GUI");
                 WriteTextAtomically(_pathResolver.PidFile, proc.Id.ToString());
             }
             catch (Exception ex)

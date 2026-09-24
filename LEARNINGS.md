@@ -308,9 +308,9 @@ Failure formatting must reserve a deterministic portion of the aggregate respons
 
 An MCP caller can cancel after a mutating command has reached Unity but before the socket response containing `RUNNING` is received. If cancellation is handled only inside the operation poller, this dispatch window leaves the Unity operation journal owned indefinitely because polling never begins. Command dispatch must issue the correlated cancellation request before propagating the caller's cancellation; Unity safely ignores it when the command was not accepted.
 
-### Interactive GUI Editor Lockfile Detection vs. Batchmode Identity Records
+### Interactive GUI Editor Lockfile Detection vs. Process Identity Records
 
-`UnityProcessIdentityStore` persists sidecar identity records (`.identity.json`) exclusively for batchmode instances launched by the MCP server (`EnsureUnityRunningAsync`). Interactive GUI Unity Editors launched directly by the user or Unity Hub do not create this identity sidecar. Instead, Unity holds an exclusive lock on `Temp/UnityLockfile` (or `Temp/UnityLockFile`). `IsUnityRunning` must recognize a locked GUI Editor lockfile held open by a live Unity process without requiring `.identity.json`, preventing spurious auto-start attempts that collide with the user's active GUI session.
+`UnityProcessIdentityStore` persists sidecar identity records (`.identity.json`) for Editor instances launched by the MCP server (`EnsureUnityRunningAsync`), recording their `ProcessId`, `StartTimeUtcTicks`, `ExecutablePath`, `ProjectRoot`, and `Mode` (`"GUI"` for interactive auto-starts or `"Batchmode"` when explicitly configured). Interactive GUI Unity Editors launched directly by the user or Unity Hub do not create this identity sidecar. Instead, Unity holds an exclusive lock on `Temp/UnityLockfile` (or `Temp/UnityLockFile`). `IsUnityRunning` must recognize a locked GUI Editor lockfile held open by a live Unity process without requiring `.identity.json`, preventing spurious auto-start attempts that collide with the user's active GUI session.
 
 ### MCP Layer Parameter Normalization vs. Low-Level API Contract
 
@@ -431,9 +431,13 @@ Scanning the OS process table (`Process.GetProcessesByName`) on every 500ms tick
 
 When Unity is launched via scripts or terminal commands, `-projectPath` is often passed as a relative path (such as `.`, `./`, or relative directory names) rather than an absolute path. Substring or boundary matching against an absolute `ProjectRoot` fails unless the argument tokenizer explicitly extracts `-projectPath <arg>` and `-projectPath=<arg>` and resolves the path relative to the process's working directory or canonical full path.
 
-### Unity Project Root Cleanliness & Batchmode Log Placement
+### Unity Project Root Cleanliness & Auto-Start Log Placement
 
-When auto-starting Unity in batchmode (`-batchmode -nographics -projectPath ... -logFile ...`), configuring `-logFile` to point to a file directly under `ProjectRoot` (such as `unity_background_log.txt`) pollutes the repository root, creating git status noise and risking accidental commits. Placing `-logFile` under Unity's `Temp/` directory (`Temp/unity_background_log.txt`) ensures it resides in Unity's standard transient directory alongside all other UnityLeanMcp IPC and marker files, where it is automatically ignored by standard Unity `.gitignore` rules (`[Tt]emp/`) and safely wiped by Unity lifecycle cleans.
+When auto-starting Unity in interactive mode (`-projectPath ... -logFile ...`), configuring `-logFile` to point to a file directly under `ProjectRoot` (such as `unity_background_log.txt`) pollutes the repository root, creating git status noise and risking accidental commits. Placing `-logFile` under Unity's `Temp/` directory (`Temp/unity_background_log.txt`) ensures it resides in Unity's standard transient directory alongside all other UnityLeanMcp IPC and marker files, where it is automatically ignored by standard Unity `.gitignore` rules (`[Tt]emp/`) and safely wiped by Unity lifecycle cleans. In addition, Unity continues to write early compilation and engine initialization errors to this specified log while simultaneously rendering the interactive GUI window and Console, allowing `WaitForSocketReadinessAsync` to monitor startup health deterministically without relying on user interaction.
+
+### Process Handle Disposal in Asynchronous Launchers
+
+When an asynchronous process manager disposes the `Process` handle in a `using (proc)` block upon exit or cancellation (such as in `EnsureUnityRunningAsync`), any external references or test assertions attempting to query `proc.Id` afterwards will throw `InvalidOperationException: No process is associated with this object.` Callers or tests capturing process identity across cancellation or lifecycle completion must capture the integer PID before entering the asynchronous wait.
 
 ### Safe Path Resolution Across Background Threads via Bootstrap Boundary
 
