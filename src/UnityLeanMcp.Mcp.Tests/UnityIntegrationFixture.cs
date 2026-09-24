@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
@@ -243,7 +244,9 @@ public class UnityIntegrationFixture : IAsyncLifetime
         {
             try
             {
-                await _sharedClient.CallToolAsync("unity_stop", timeout: TimeSpan.FromSeconds(15));
+                var resolver = new UnityPathResolver(_unityRoot);
+                var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+                await pm.StopUnityAsync(force: true);
                 await _sharedClient.DisposeAsync();
             }
             catch { }

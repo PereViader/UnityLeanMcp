@@ -637,35 +637,6 @@ public class UnityTools
     }
 
 
-    [McpServerTool(Name = "unity_stop")]
-    [Description("Stops the running Unity instance when explicitly requested, to recover from a freeze or release project locks. Stopping an interactive GUI Editor can discard unsaved changes; use force: true only with explicit approval. Do not call automatically after operations.")]
-    public async Task<CallToolResult> UnityStopAsync(
-        [Description("Optional. If true, forces termination even when Unity is an interactive GUI Editor; this may discard unsaved Editor changes and requires explicit user approval. Defaults to false.")] bool force = false,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            if (!_processManager.IsUnityRunning(out int? pid))
-            {
-                return Result("Unity background instance is not running.");
-            }
-
-            if (_processManager.GetUnityMode(pid) == "GUI" && !force)
-            {
-                return Result("Refusing to stop Unity: The active Unity Editor is running in interactive GUI mode. Stopping it may lose unsaved user changes. Set 'force: true' to stop it anyway.", isError: true);
-            }
-
-            bool stopped = await _processManager.StopUnityAsync(force, cancellationToken);
-            return stopped
-                ? Result("Stopped.")
-                : Error("Unity background instance could not be stopped.");
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return Error(ex.Message);
-        }
-    }
-
     internal static string UnwrapJsonCodeIfPresent(string code)
     {
         if (string.IsNullOrWhiteSpace(code)) return code;

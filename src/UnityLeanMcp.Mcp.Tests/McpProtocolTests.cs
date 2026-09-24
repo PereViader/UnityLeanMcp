@@ -78,9 +78,9 @@ public class McpProtocolTests
         Assert.Contains("unity_eval", toolNames);
         Assert.DoesNotContain("unity_execute_method", toolNames);
         Assert.Contains("unity_run_tests", toolNames);
-        Assert.Contains("unity_stop", toolNames);
+        Assert.DoesNotContain("unity_stop", toolNames);
         Assert.DoesNotContain("unity_start", toolNames);
-        Assert.Equal(4, toolNames.Count);
+        Assert.Equal(3, toolNames.Count);
 
         var runTestsTool = toolsElem.EnumerateArray().First(t => t.GetProperty("name").GetString() == "unity_run_tests");
         var inputSchema = runTestsTool.GetProperty("inputSchema");
@@ -107,21 +107,6 @@ public class McpProtocolTests
         Assert.Equal(
             new[] { "editmode", "playmode" },
             modeProp.GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray());
-
-        // 4. tools/call unity_stop
-        string callMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"unity_stop\",\"arguments\":{}}}";
-        await writer.WriteLineAsync(callMsg);
-        await writer.FlushAsync();
-
-        string? callResponse = await reader.ReadLineAsync();
-        Assert.NotNull(callResponse);
-        using var callDoc = JsonDocument.Parse(callResponse);
-        Assert.True(callDoc.RootElement.TryGetProperty("result", out var callResult));
-        Assert.False(callResult.TryGetProperty("isError", out var isErr) && isErr.GetBoolean());
-        Assert.True(callResult.TryGetProperty("content", out var content));
-        Assert.Equal(1, content.GetArrayLength());
-        string stopText = content[0].GetProperty("text").GetString()!;
-        Assert.True(stopText == "Unity background instance is not running." || stopText == "Stopped.", $"Unexpected stop text: {stopText}");
 
         writer.Close();
         if (!proc.WaitForExit(3000))

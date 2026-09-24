@@ -4,18 +4,17 @@
 
 A lean, native **Model Context Protocol (MCP)** server that connects AI coding agents (Antigravity, Claude Code, Cursor, VS Code, Codex) directly to the Unity Editor without polluting the context window.
 
-By communicating with a running Unity Editor (or a headless background instance) via loopback TCP sockets and exposing standard JSON-RPC stdio MCP tools, UnityLeanMcp enables sub-second compilation feedback, instant test execution, and dynamic C# evaluation without shell quoting issues, slow batchmode restarts, or heavy token overhead.
+By communicating with a running Unity Editor via loopback TCP sockets and exposing standard JSON-RPC stdio MCP tools, UnityLeanMcp enables sub-second compilation feedback, instant test execution, and dynamic C# evaluation without shell quoting issues, slow batchmode restarts, or heavy token overhead.
 
 ---
 
 ## Overview & Key Capabilities
 
-UnityLeanMcp provides 4 focused, token-optimized MCP tools:
+UnityLeanMcp provides 3 focused, token-optimized MCP tools:
 
 1. **`unity_refresh`**: Refreshes AssetDatabase and returns compiler diagnostics. Normal refreshes are fast when unchanged. Set `clean: true` only when a more expensive full script recompilation is needed to recover from a stale or corrupted compiler cache.
 2. **`unity_eval`**: Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types.
 3. **`unity_run_tests`**: Runs EditMode/PlayMode tests with failure diagnostics.
-4. **`unity_stop`**: Stops the running Unity instance when explicitly requested. `force: true` may discard unsaved changes in an interactive GUI Editor and requires explicit approval.
 
 ---
 
@@ -26,9 +25,8 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 | **`unity_refresh`** | `clean` (optional bool, default `false`) | Refreshes AssetDatabase and returns compiler diagnostics. Set `clean: true` only for a more expensive full script recompilation. |
 | **`unity_eval`** | `code` (string: raw C# text) | Evaluates C# top-level script source code in-memory and may mutate Unity state. Supports top-level `await` and `return <value>;`. |
 | **`unity_run_tests`** | `testNames`, `groupNames`, `categoryNames`, `assemblyNames` (optional string arrays), `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. `groupNames` uses .NET regular expressions. |
-| **`unity_stop`** | `force` (optional bool, default `false`) | Stops the running instance. `force: true` may discard unsaved changes in an interactive GUI Editor. |
 
-> **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts a headless background instance in batchmode first and keeps it warm for subsequent commands.
+> **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts the Unity Editor in normal interactive mode first and keeps it running for subsequent commands.
 
 ---
 

@@ -160,16 +160,28 @@ public class ToolFormattingTests
             };
             int testPid = Environment.ProcessId;
 
-            // When identity sidecar exists with matching PID -> Batchmode
+            // When identity sidecar exists with matching PID and Mode = Batchmode -> Batchmode
             string identityFile = realPm.PathResolver.PidFile + ".identity.json";
             File.WriteAllText(identityFile, JsonSerializer.Serialize(new
             {
                 ProcessId = testPid,
                 StartTimeUtcTicks = DateTime.UtcNow.Ticks,
                 ExecutablePath = "Unity",
-                ProjectRoot = tempDir
+                ProjectRoot = tempDir,
+                Mode = "Batchmode"
             }));
             Assert.Equal("Batchmode", realPm.GetUnityMode(testPid));
+
+            // When identity sidecar specifies Mode = GUI -> GUI
+            File.WriteAllText(identityFile, JsonSerializer.Serialize(new
+            {
+                ProcessId = testPid,
+                StartTimeUtcTicks = DateTime.UtcNow.Ticks,
+                ExecutablePath = "Unity",
+                ProjectRoot = tempDir,
+                Mode = "GUI"
+            }));
+            Assert.Equal("GUI", realPm.GetUnityMode(testPid));
 
             // When identity sidecar does not exist -> GUI
             File.Delete(identityFile);
@@ -1681,112 +1693,6 @@ public class ToolFormattingTests
         }
     }
 
-    // ==========================================
-    // 6. unity_stop tests
-    // ==========================================
-
-    [Fact]
-    public async Task UnityStop_WhenNotRunning_ReturnsNotRunningMessageWithNoError()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            pm.Running = false;
-
-            var result = await tools.UnityStopAsync();
-
-            Assert.False(result.IsError);
-            Assert.Equal("Unity background instance is not running.", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityStop_WhenRunningAndStopped_ReturnsStopped()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            pm.Running = true;
-            pm.StopSuccess = true;
-
-            var result = await tools.UnityStopAsync();
-
-            Assert.False(result.IsError);
-            Assert.Equal("Stopped.", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityStop_WhenRunningAndFailsToStop_ReturnsErrorMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            pm.Running = true;
-            pm.StopSuccess = false;
-
-            var result = await tools.UnityStopAsync();
-
-            Assert.True(result.IsError);
-            Assert.Equal("Error: Unity background instance could not be stopped.", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityStop_WhenGuiModeAndNotForced_ReturnsRefusalErrorMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            pm.Running = true;
-            pm.Mode = "GUI";
-            pm.StopSuccess = true;
-
-            var result = await tools.UnityStopAsync(force: false);
-
-            Assert.True(result.IsError);
-            Assert.Equal("Refusing to stop Unity: The active Unity Editor is running in interactive GUI mode. Stopping it may lose unsaved user changes. Set 'force: true' to stop it anyway.", GetResultText(result));
-            Assert.True(pm.Running);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityStop_WhenGuiModeAndForced_StopsSuccessfully()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            pm.Running = true;
-            pm.Mode = "GUI";
-            pm.StopSuccess = true;
-
-            var result = await tools.UnityStopAsync(force: true);
-
-            Assert.False(result.IsError);
-            Assert.Equal("Stopped.", GetResultText(result));
-            Assert.False(pm.Running);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
 
     // ==========================================
     // 7. Structured Data & Diagnostics tests
@@ -2707,7 +2613,6 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     [InlineData("unity_eval", "Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result (e.g., 'return new { player.health, player.speed };' to inspect multiple properties); void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
     [InlineData("unity_run_tests", "Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
-    [InlineData("unity_stop", "Stops the running Unity instance when explicitly requested, to recover from a freeze or release project locks. Stopping an interactive GUI Editor can discard unsaved changes; use force: true only with explicit approval. Do not call automatically after operations.")]
     public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
     {
         var methods = typeof(UnityTools).GetMethods(BindingFlags.Public | BindingFlags.Instance);
@@ -2753,18 +2658,6 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var descAttr = cleanParam.GetCustomAttribute<DescriptionAttribute>();
         Assert.NotNull(descAttr);
         Assert.Contains("full script recompilation", descAttr.Description);
-    }
-
-    [Fact]
-    public void UnityTools_UnityStop_ForceParameter_HasAccurateDescription()
-    {
-        var stopMethod = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityStopAsync));
-        Assert.NotNull(stopMethod);
-        var forceParam = stopMethod.GetParameters().FirstOrDefault(p => p.Name == "force");
-        Assert.NotNull(forceParam);
-        var descAttr = forceParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Contains("may discard unsaved Editor changes", descAttr.Description);
     }
 
     [Fact]

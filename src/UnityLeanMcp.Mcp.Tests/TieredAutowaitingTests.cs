@@ -51,7 +51,7 @@ public class TieredAutowaitingTests
     public void FormatBusyExecutingMessage_MatchesExactSpecification()
     {
         string msg = UnityClient.FormatBusyExecutingMessage("test", "abc12345");
-        Assert.Equal("Unity is busy executing 'test' (id: abc12345). If this operation is hung, call unity_stop to recover.", msg);
+        Assert.Equal("Unity is busy executing 'test' (id: abc12345). If this operation is hung, kill the Unity process owning this project to recover.", msg);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class TieredAutowaitingTests
         var result = await server.Client.EvalAsync("return 1;", progress, cts.Token);
 
         Assert.False(result.Success);
-        Assert.Contains("Unity is busy executing 'test' (id: op_foreign_999). If this operation is hung, call unity_stop to recover.", result.Message);
+        Assert.Contains("Unity is busy executing 'test' (id: op_foreign_999). If this operation is hung, kill the Unity process owning this project to recover.", result.Message);
 
         lock (receivedProgress)
         {
@@ -299,6 +299,6 @@ public class TieredAutowaitingTests
         var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
 
         Assert.False(result.Success);
-        Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, call unity_stop to recover.", result.Message);
+        Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, kill the Unity process owning this project to recover.", result.Message);
     }
 }

@@ -177,7 +177,7 @@ public class UnityClient : IUnityClient
     {
         string kindStr = string.IsNullOrWhiteSpace(kind) ? "unknown" : kind;
         string idStr = string.IsNullOrWhiteSpace(opId) ? "" : $" (id: {opId})";
-        return $"Unity is busy executing '{kindStr}'{idStr}. If this operation is hung, call unity_stop to recover.";
+        return $"Unity is busy executing '{kindStr}'{idStr}. If this operation is hung, kill the Unity process owning this project to recover.";
     }
 
     private static bool IsForeignOperationActive(
