@@ -21,6 +21,8 @@ public interface IUnityClient
         string[]? assemblyNames,
         string? mode,
         bool failedOnly = false,
+        bool coverage = false,
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default);
+    Task<CoverageResult> GetCoverageAsync(string[] paths, CancellationToken cancellationToken = default);
 }

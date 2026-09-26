@@ -49,7 +49,7 @@ public class McpProtocolTests
         Assert.True(initResult.TryGetProperty("serverInfo", out var serverInfo));
         Assert.Equal("UnityLeanMcp.Mcp", serverInfo.GetProperty("name").GetString());
         Assert.True(initResult.TryGetProperty("instructions", out var instructions));
-        Assert.Equal("unity_refresh verifies compilation diagnostics after editing scripts. unity_run_tests and unity_eval automatically compile and refresh pending changes before executing, so do not call unity_refresh immediately before evaluating code or running tests.", instructions.GetString());
+        Assert.Equal("unity_refresh verifies compilation diagnostics after editing scripts. unity_test and unity_eval automatically compile and refresh pending changes before executing, so do not call unity_refresh immediately before evaluating code or running tests.", instructions.GetString());
 
         // 2. Initialized notification
         await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
@@ -77,12 +77,14 @@ public class McpProtocolTests
         Assert.DoesNotContain("unity_recompile", toolNames);
         Assert.Contains("unity_eval", toolNames);
         Assert.DoesNotContain("unity_execute_method", toolNames);
-        Assert.Contains("unity_run_tests", toolNames);
+        Assert.DoesNotContain("unity_run_tests", toolNames);
+        Assert.Contains("unity_test", toolNames);
+        Assert.Contains("unity_coverage", toolNames);
         Assert.DoesNotContain("unity_stop", toolNames);
         Assert.DoesNotContain("unity_start", toolNames);
-        Assert.Equal(3, toolNames.Count);
+        Assert.Equal(4, toolNames.Count);
 
-        var runTestsTool = toolsElem.EnumerateArray().First(t => t.GetProperty("name").GetString() == "unity_run_tests");
+        var runTestsTool = toolsElem.EnumerateArray().First(t => t.GetProperty("name").GetString() == "unity_test");
         var inputSchema = runTestsTool.GetProperty("inputSchema");
         var properties = inputSchema.GetProperty("properties");
         Assert.True(properties.TryGetProperty("testNames", out _));
@@ -91,6 +93,12 @@ public class McpProtocolTests
         Assert.True(properties.TryGetProperty("assemblyNames", out _));
         Assert.True(properties.TryGetProperty("mode", out _));
         Assert.True(properties.TryGetProperty("failedOnly", out _));
+        Assert.True(properties.TryGetProperty("coverage", out _));
+
+        var coverageTool = toolsElem.EnumerateArray().First(t => t.GetProperty("name").GetString() == "unity_coverage");
+        var covSchema = coverageTool.GetProperty("inputSchema");
+        var covProps = covSchema.GetProperty("properties");
+        Assert.True(covProps.TryGetProperty("paths", out _));
 
         Assert.False(properties.TryGetProperty("testName", out _));
         Assert.False(properties.TryGetProperty("group", out _));

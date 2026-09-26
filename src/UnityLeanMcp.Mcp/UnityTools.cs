@@ -256,9 +256,9 @@ public class UnityTools
     }
 
 
-    [McpServerTool(Name = "unity_run_tests")]
-    [Description("Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites).")]
-    public async Task<CallToolResult> UnityRunTestsAsync(
+    [McpServerTool(Name = "unity_test")]
+    [Description("Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
+    public async Task<CallToolResult> UnityTestAsync(
         [Description("Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.")]
         UnityTestMode mode,
 
@@ -277,6 +277,9 @@ public class UnityTools
         [Description("Only run tests that previously failed. Recommended for slow test suites; skip if tests run quickly.")]
         bool failedOnly = false,
 
+        [Description("If true, records in-memory code coverage during test execution. Supported for 'editmode' tests across all Unity versions, and for 'playmode' tests on Unity 6.7+. Coverage can then be queried via unity_coverage.")]
+        bool coverage = false,
+
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -292,7 +295,7 @@ public class UnityTools
                 return Result(filterError, isError: true);
             }
 
-            var result = await _client.RunTestsAsync(testNames, groupNames, categoryNames, assemblyNames, normalizedMode, failedOnly, progress, cancellationToken);
+            var result = await _client.RunTestsAsync(testNames, groupNames, categoryNames, assemblyNames, normalizedMode, failedOnly, coverage, progress, cancellationToken);
             var output = new BoundedTextBuilder(
                 McpOutputLimits.MaxFormattedOutputCharacters,
                 McpOutputLimits.AggregateOutputTruncationMarker);
@@ -323,6 +326,142 @@ public class UnityTools
         {
             return Error(ex.Message);
         }
+    }
+
+    [McpServerTool(Name = "unity_coverage")]
+    [Description("Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
+    public async Task<CallToolResult> UnityCoverageAsync(
+        [Description("File or directory paths to inspect coverage for (e.g. ['Assets/Scripts/PlayerController.cs'] or ['Assets/Scripts/Combat/']). Directory paths recursively match all contained C# files. Required.")]
+        string[] paths,
+
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (paths == null || paths.Length == 0)
+            {
+                return Error("The 'paths' parameter is required. Specify one or more file or directory paths to inspect coverage for.");
+            }
+
+            var result = await _client.GetCoverageAsync(paths, cancellationToken);
+            if (!result.Success)
+            {
+                return Result(result.Message, isError: true);
+            }
+
+            if (result.Files.Count == 0)
+            {
+                return Result("No compiled C# scripts found in the specified path(s).");
+            }
+
+            var output = new BoundedTextBuilder(
+                McpOutputLimits.MaxFormattedOutputCharacters,
+                McpOutputLimits.AggregateOutputTruncationMarker);
+
+            int aggregateTotalPoints = 0;
+            int aggregateCoveredPoints = 0;
+
+            if (result.Files.Count > 1)
+            {
+                foreach (var file in result.Files)
+                {
+                    aggregateTotalPoints += file.TotalPoints;
+                    aggregateCoveredPoints += file.CoveredPoints;
+                }
+
+                if (aggregateTotalPoints > 0)
+                {
+                    double aggPct = (aggregateCoveredPoints / (double)aggregateTotalPoints) * 100.0;
+                    output.Append("Total Coverage: ");
+                    output.Append(aggPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                    output.Append("% (");
+                    output.Append(aggregateCoveredPoints.ToString());
+                    output.Append("/");
+                    output.Append(aggregateTotalPoints.ToString());
+                    output.Append(" points across ");
+                    output.Append(result.Files.Count.ToString());
+                    output.AppendLine(" files)");
+                    output.AppendLine();
+                }
+            }
+
+            foreach (var file in result.Files)
+            {
+                output.Append("• ");
+                output.Append(file.Path);
+                output.Append(": ");
+
+                if (file.TotalPoints == 0)
+                {
+                    output.AppendLine("No executable sequence points found (interfaces, enums, or declarations without executable code).");
+                    continue;
+                }
+
+                double pct = (file.CoveredPoints / (double)file.TotalPoints) * 100.0;
+                output.Append(pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+                output.Append("% (");
+                output.Append(file.CoveredPoints.ToString());
+                output.Append("/");
+                output.Append(file.TotalPoints.ToString());
+                output.AppendLine(" points)");
+
+                if (file.UncoveredLines != null && file.UncoveredLines.Length > 0)
+                {
+                    var spans = FormatUncoveredSpans(file.UncoveredLines);
+                    output.Append("  Uncovered lines: ");
+
+                    bool firstSpan = true;
+                    foreach (var span in spans)
+                    {
+                        if (!firstSpan) output.Append(", ");
+                        firstSpan = false;
+
+                        output.Append(span.StartLine.ToString());
+                        if (span.EndLine > span.StartLine)
+                        {
+                            output.Append("-");
+                            output.Append(span.EndLine.ToString());
+                        }
+                    }
+                    output.AppendLine();
+                }
+            }
+
+            return Result(output.ToString().TrimEnd());
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Error($"Coverage query failed: {ex.Message}");
+        }
+    }
+
+    public readonly record struct LineSpan(int StartLine, int EndLine);
+
+    internal static List<LineSpan> FormatUncoveredSpans(int[] uncoveredLines)
+    {
+        var spans = new List<LineSpan>();
+        if (uncoveredLines == null || uncoveredLines.Length == 0)
+            return spans;
+
+        var sorted = uncoveredLines.Distinct().OrderBy(l => l).ToArray();
+        int spanStart = sorted[0];
+        int prev = spanStart;
+
+        for (int i = 1; i < sorted.Length; i++)
+        {
+            if (sorted[i] == prev + 1)
+            {
+                prev = sorted[i];
+            }
+            else
+            {
+                spans.Add(new LineSpan(spanStart, prev));
+                spanStart = sorted[i];
+                prev = spanStart;
+            }
+        }
+        spans.Add(new LineSpan(spanStart, prev));
+        return spans;
     }
 
     private string FormatTestOutcomeHeader(

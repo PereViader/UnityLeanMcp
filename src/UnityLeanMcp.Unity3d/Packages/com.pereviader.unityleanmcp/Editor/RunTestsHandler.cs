@@ -4,8 +4,10 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
+using Coverage = UnityEngine.TestTools.Coverage;
 
 namespace UnityLeanMcp
 {
@@ -25,6 +27,35 @@ namespace UnityLeanMcp
         private static string s_CancellationSignalRunId;
         private static string s_CancellationMonitorRunId;
         private static bool s_CancellationMonitorRegistered;
+
+        internal static bool IsPlayModeCoverageSupported()
+        {
+            string version = Application.unityVersion;
+            if (string.IsNullOrEmpty(version))
+            {
+                return false;
+            }
+
+            string[] parts = version.Split('.');
+            if (parts.Length < 2)
+            {
+                return false;
+            }
+
+            if (int.TryParse(parts[0], out int major) && int.TryParse(parts[1], out int minor))
+            {
+                if (major == 6000 || major == 6)
+                {
+                    return minor >= 7;
+                }
+                if (major > 6000 || (major > 6 && major < 1000))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         internal static void ClearCachedRunState()
         {
@@ -191,6 +222,32 @@ namespace UnityLeanMcp
             {
                 writer.WriteLine($"ERROR: {filterError}");
                 return;
+            }
+
+            if (testArgs.coverage)
+            {
+                if (mode == TestMode.PlayMode && !IsPlayModeCoverageSupported())
+                {
+                    writer.WriteLine("FAILURE Code coverage for 'playmode' tests is only supported on Unity 6.7 or newer. In earlier Unity versions, exiting PlayMode triggers a domain reload that wipes in-memory coverage. Please use 'editmode' tests for coverage.");
+                    return;
+                }
+
+                if (CompilationPipeline.codeOptimization == CodeOptimization.Release)
+                {
+                    writer.WriteLine("FAILURE Cannot run tests with coverage: Unity script optimization is set to Release mode. Switch Unity to Debug mode before running tests with coverage.");
+                    return;
+                }
+
+                try
+                {
+                    Coverage.ResetAll();
+                    Coverage.enabled = true;
+                }
+                catch (Exception ex)
+                {
+                    writer.WriteLine($"FAILURE Failed to initialize code coverage: {ex.Message}");
+                    return;
+                }
             }
 
             var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKinds.Test, OperationStatus.Queued, out var existing);
@@ -684,6 +741,11 @@ namespace UnityLeanMcp
 
         internal static void CleanupTestRun(string runId)
         {
+            try
+            {
+                Coverage.enabled = false;
+            }
+            catch { }
             ClearCancellationRequest(runId);
             StopCancellationMonitoring(runId);
             DeleteRunningStateIfOwned(runId);

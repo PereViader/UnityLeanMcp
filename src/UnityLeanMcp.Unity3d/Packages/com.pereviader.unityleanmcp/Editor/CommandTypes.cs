@@ -48,6 +48,7 @@ namespace UnityLeanMcp
         public string[] categoryNames;
         public string[] assemblyNames;
         public bool failedOnly;
+        public bool coverage;
     }
 
     [Serializable]
@@ -151,5 +152,26 @@ namespace UnityLeanMcp
     [Serializable]
     public class UnityEvalResult : UnityOperationResult
     {
+    }
+
+    [Serializable]
+    public class GetCoverageArgs
+    {
+        public string[] paths;
+    }
+
+    [Serializable]
+    public class CoverageFileReport
+    {
+        public string path;
+        public int totalPoints;
+        public int coveredPoints;
+        public int[] uncoveredLines;
+    }
+
+    [Serializable]
+    public class CoverageResponsePayload
+    {
+        public List<CoverageFileReport> files;
     }
 }

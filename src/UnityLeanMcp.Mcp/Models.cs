@@ -122,6 +122,9 @@ public class RunTestsArgs
 
     [JsonPropertyName("failedOnly")]
     public bool FailedOnly { get; set; }
+
+    [JsonPropertyName("coverage")]
+    public bool Coverage { get; set; }
 }
 
 public class UnityTestRunState
@@ -287,3 +290,37 @@ public class StructuredCompilerDiagnostic
     [JsonPropertyName("assembly")]
     public string? Assembly { get; set; }
 }
+
+public class GetCoverageArgs
+{
+    [JsonPropertyName("paths")]
+    public string[] Paths { get; set; } = System.Array.Empty<string>();
+}
+
+public class CoverageFileResult
+{
+    [JsonPropertyName("path")]
+    public string Path { get; set; } = "";
+
+    [JsonPropertyName("totalPoints")]
+    public int TotalPoints { get; set; }
+
+    [JsonPropertyName("coveredPoints")]
+    public int CoveredPoints { get; set; }
+
+    [JsonPropertyName("uncoveredLines")]
+    public int[] UncoveredLines { get; set; } = System.Array.Empty<int>();
+}
+
+public class CoverageResult
+{
+    [JsonPropertyName("success")]
+    public bool Success { get; set; }
+
+    [JsonPropertyName("files")]
+    public List<CoverageFileResult> Files { get; set; } = new();
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = "";
+}
+

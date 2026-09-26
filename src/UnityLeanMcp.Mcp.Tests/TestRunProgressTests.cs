@@ -91,7 +91,7 @@ public class TestRunProgressTests
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var runResult = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, progress, cts.Token);
+        var runResult = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, progress, cts.Token);
 
         Assert.True(runResult.Success);
         Assert.Equal(9, runResult.PassCount);
@@ -151,7 +151,7 @@ public class TestRunProgressTests
         });
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var runResult = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, progress, cts.Token);
+        var runResult = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, progress, cts.Token);
 
         Assert.True(runResult.Success);
         Assert.Equal(27, runResult.PassCount);
@@ -216,7 +216,7 @@ public class TestRunProgressTests
 
         await using var client = new McpTestClient(server.ProjectRoot);
         var toolResult = await client.CallToolAsync(
-            "unity_run_tests",
+            "unity_test",
             new { mode = "editmode" },
             timeout: TimeSpan.FromSeconds(20),
             progressToken: "progress-token-test-1");

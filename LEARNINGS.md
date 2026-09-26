@@ -245,6 +245,31 @@ Long-lived process fixtures cannot assume that utilities such as `sleep` or `pin
 ### `UnityTestRunResult.Interrupted` State Symmetry & `IOperationResult` Contract
 In polymorphic operation result handling (`IOperationResult`), `Interrupted` is exposed as a mutable boolean property (`bool Interrupted { get; set; }`). In `UnityTestRunResult`, `Interrupted` maps onto `ResultState == "Interrupted"` / `resultState == "Interrupted"`. If code assigns `Interrupted = false` to clear interruption state, a one-way setter that only assigns on `true` leaves `Interrupted` returning `true`, violating the Liskov Substitution Principle and property symmetry. The setter must explicitly restore `ResultState` / `resultState` to `"Passed"` (if `Success` is true), `"Failed"` (if `FailCount > 0`), or `""`.
 
+### Native IL Sequence Point Harvesting & Coverage Profiler Lifecycle
+- Disassembling `UnityEngine.TestTools.Coverage.GetSequencePointsFor(MethodBase)` reveals that it calls the native extern `Coverage.GetSequencePointsFor_Internal` directly, without checking managed state (`Coverage.enabled`).
+- Setting `Coverage.enabled = false` immediately during test cleanup disables the active profiler overhead while leaving in-memory sequence point hit counters recorded and queryable on demand for subsequent requests.
+- `Coverage.ResetAll()` must be invoked before starting a test run with coverage to clear counters from previous runs.
+
+### PlayMode Test Domain Reload & Coverage Persistence (Unity < 6.7 vs Unity 6.7+)
+- In Unity versions running on Mono (Unity < 6.7), exiting PlayMode unloads the Mono AppDomain and clears all native and managed sequence point hit counts recorded by `UnityEngine.TestTools.Coverage`.
+- In Unity 6.7+ (introducing CoreCLR and Fast Enter Play Mode optimizations), domain reloads on PlayMode exit are avoided, preserving in-memory hit counters across PlayMode runs.
+- Consequently, requesting `coverage: true` for `playmode` tests must fail fast on Unity versions prior to 6.7 with a clear diagnostic explaining the Mono domain reload limitation and advising the use of `editmode` tests, while allowing `playmode` coverage on Unity 6.7+.
+
+### Compiler-Synthesized Hidden Sequence Points (`0xfeefee`)
+- Roslyn and Mono compilers emit special hidden sequence points with line number `0xfeefee` (`16707566`) to signal debugger transitions (such as stepping out of async state machines, compiler-generated iterator blocks, or lambda expressions).
+- These points have no corresponding source lines and must be filtered out (`sp.line != 0xfeefee && sp.line > 0`) when calculating uncovered lines and total points to prevent negative or nonsensical line numbers.
+
+### Nested Types for Async Methods and Lambdas in Code Coverage
+- In compiled C# assemblies, `async/await` methods and lambda closures are compiled into state machine structs and display classes (e.g. `<MethodAsync>d__1`, `<>c__DisplayClass0_0`).
+- Calling `type.GetMethods()` on top-level classes misses these compiler-generated sequence points entirely. Scanning must recursively traverse `type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)` to discover and harvest sequence points for async methods and lambdas.
+
+### Namespace Ambiguity Between `UnityEditor.TestTools.TestRunner.Api` and `UnityEngine.TestTools`
+- Both `UnityEditor.TestTools.TestRunner.Api` and `UnityEngine.TestTools` define an enum named `TestMode`. Adding `using UnityEngine.TestTools;` in files that already import `using UnityEditor.TestTools.TestRunner.Api;` causes compilation error CS0104 (`'TestMode' is an ambiguous reference`).
+- Using a targeted type alias (`using Coverage = UnityEngine.TestTools.Coverage;`) rather than opening the whole namespace resolves the ambiguity cleanly.
+
+### SequencePoint.line is `uint` in Unity
+- In `UnityEngine.TestTools.CoveredSequencePoint`, `line` is of type `uint`. When grouping by line and mapping to managed DTOs where line numbers are `int`, an explicit cast `(int)g.Key` is required to avoid CS0029 compilation error.
+
 ---
 
 ## 5. External Client & Tool Quirks
@@ -298,7 +323,7 @@ Integration tests must not infer which MCP server binary to launch from build ti
 
 ### Integration Fixture Source Changes Need an Explicit Asset Refresh
 
-Copying a fixture over an existing Unity script and waiting a fixed interval is racy: the Editor may not have delivered its asynchronous external-file/project-change notification before the following `unity_run_tests` readiness probe. The probe can then report `READY` and execute stale compiled code. Fixture setup must issue and await `unity_refresh` after replacing the source; the refresh may legitimately return a compile-error result for a negative fixture.
+Copying a fixture over an existing Unity script and waiting a fixed interval is racy: the Editor may not have delivered its asynchronous external-file/project-change notification before the following `unity_test` readiness probe. The probe can then report `READY` and execute stale compiled code. Fixture setup must issue and await `unity_refresh` after replacing the source; the refresh may legitimately return a compile-error result for a negative fixture.
 
 ### Reserving Space for Test Failure Summaries
 
@@ -314,7 +339,7 @@ An MCP caller can cancel after a mutating command has reached Unity but before t
 
 ### MCP Layer Parameter Normalization vs. Low-Level API Contract
 
-In MCP server tools exposed to LLM agents (such as `unity_run_tests`), mandatory parameters have no default value and finite string choices are represented by schema-aware enums (`UnityTestMode`). The tool boundary validates invalid enum values and legacy options (such as `all`) before refresh or dispatch. Lower-level service methods (`UnityClient.RunTestsAsync`) maintain the independent string contract used by the Unity socket protocol and reject blank, unrecognized, or removed modes immediately with clear error messages. This keeps schema validation and protocol defense in depth without duplicating cross-tool instructions in every description.
+In MCP server tools exposed to LLM agents (such as `unity_test`), mandatory parameters have no default value and finite string choices are represented by schema-aware enums (`UnityTestMode`). The tool boundary validates invalid enum values and legacy options (such as `all`) before refresh or dispatch. Lower-level service methods (`UnityClient.RunTestsAsync`) maintain the independent string contract used by the Unity socket protocol and reject blank, unrecognized, or removed modes immediately with clear error messages. This keeps schema validation and protocol defense in depth without duplicating cross-tool instructions in every description.
 
 ### Test-Environment PATH Isolation During Parallel Test Runs
 

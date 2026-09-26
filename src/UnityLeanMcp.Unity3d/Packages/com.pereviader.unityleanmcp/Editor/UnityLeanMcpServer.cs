@@ -102,6 +102,7 @@ namespace UnityLeanMcp
             s_Handlers.TryAdd("CANCEL_OPERATION", new CancelOperationHandler());
             s_Handlers.TryAdd("EVAL", new EvalHandler());
             s_Handlers.TryAdd("POLL_EVAL", new PollEvalHandler());
+            s_Handlers.TryAdd("GET_COVERAGE", new GetCoverageHandler());
         }
 
         [InitializeOnLoadMethod]

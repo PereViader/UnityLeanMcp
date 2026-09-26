@@ -19,7 +19,7 @@ public class TestFrameworkTests
     public async Task TestEverythingPasses_RunsEditModeTestsSuccessfully()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new { mode = "editmode" });
+        var result = await client.CallToolAsync("unity_test", new { mode = "editmode" });
 
         Assert.False(result.IsError, result.Text);
         Assert.Contains("Tests Passed:", result.Text);
@@ -31,7 +31,7 @@ public class TestFrameworkTests
         await using var _ = await _fixture.UseFixtureAsync("TestCompileErrorsAndWarnings");
         var client = _fixture.SharedClient;
 
-        var result = await client.CallToolAsync("unity_run_tests", new { mode = "editmode" });
+        var result = await client.CallToolAsync("unity_test", new { mode = "editmode" });
 
         Assert.True(result.IsError, result.Text);
         Assert.Contains("CS", result.Text);
@@ -41,7 +41,7 @@ public class TestFrameworkTests
     public async Task TestCompileWarningsAndPass_RunsTestsDespiteCompilerWarnings()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new
+        var result = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             groupNames = new[] { "PassWithWarningTest" }
@@ -55,7 +55,7 @@ public class TestFrameworkTests
     public async Task TestNoWarningsAndFailures_ReportsFailedAssertionsAndStackTraces()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new
+        var result = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             groupNames = new[] { "FailTest" }
@@ -70,7 +70,7 @@ public class TestFrameworkTests
     public async Task TestNoWarningsAndSkipped_ReportsSkippedTests()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new
+        var result = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             groupNames = new[] { "IgnoreTest" }
@@ -84,7 +84,7 @@ public class TestFrameworkTests
     public async Task TestFilterCategory_ExcludesOrIncludesCategories()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new
+        var result = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             categoryNames = new[] { "!LongRunning" }
@@ -98,7 +98,7 @@ public class TestFrameworkTests
     public async Task TestFilterByName_RunsOnlyTargetedTest()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new
+        var result = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             groupNames = new[] { "SpecificTargetTest" }
@@ -112,7 +112,7 @@ public class TestFrameworkTests
     public async Task TestRunTests_WithoutMode_FailsValidation()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests");
+        var result = await client.CallToolAsync("unity_test");
 
         Assert.True(result.IsError, result.Text);
     }
@@ -121,7 +121,7 @@ public class TestFrameworkTests
     public async Task TestRunTests_WithRemovedAllMode_FailsValidation()
     {
         var client = _fixture.SharedClient;
-        var result = await client.CallToolAsync("unity_run_tests", new { mode = "all" });
+        var result = await client.CallToolAsync("unity_test", new { mode = "all" });
 
         Assert.True(result.IsError, result.Text);
     }
@@ -131,14 +131,14 @@ public class TestFrameworkTests
     {
         var client = _fixture.SharedClient;
 
-        var initialRun = await client.CallToolAsync("unity_run_tests", new
+        var initialRun = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             groupNames = new[] { "PassTest" }
         });
         Assert.False(initialRun.IsError, initialRun.Text);
 
-        var failedRun = await client.CallToolAsync("unity_run_tests", new { mode = "editmode", failedOnly = true });
+        var failedRun = await client.CallToolAsync("unity_test", new { mode = "editmode", failedOnly = true });
         Assert.False(failedRun.IsError, failedRun.Text);
         Assert.Contains("No previously failed tests found.", failedRun.Text);
     }
@@ -148,7 +148,7 @@ public class TestFrameworkTests
     {
         var client = _fixture.SharedClient;
 
-        var initialRun = await client.CallToolAsync("unity_run_tests", new
+        var initialRun = await client.CallToolAsync("unity_test", new
         {
             mode = "editmode",
             groupNames = new[] { "FailTest" }
@@ -156,7 +156,7 @@ public class TestFrameworkTests
         Assert.True(initialRun.IsError);
         Assert.Contains("Failures:", initialRun.Text);
 
-        var failedRun = await client.CallToolAsync("unity_run_tests", new { mode = "editmode", failedOnly = true });
+        var failedRun = await client.CallToolAsync("unity_test", new { mode = "editmode", failedOnly = true });
         Assert.True(failedRun.IsError);
         Assert.Contains("Tests Failed:", failedRun.Text);
         Assert.Contains("Failures:", failedRun.Text);

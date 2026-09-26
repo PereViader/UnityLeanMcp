@@ -10,11 +10,12 @@ By communicating with a running Unity Editor via loopback TCP sockets and exposi
 
 ## Overview & Key Capabilities
 
-UnityLeanMcp provides 3 focused, token-optimized MCP tools:
+UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 
 1. **`unity_refresh`**: Refreshes AssetDatabase and returns compiler diagnostics. Normal refreshes are fast when unchanged. Set `clean: true` only when a more expensive full script recompilation is needed to recover from a stale or corrupted compiler cache.
 2. **`unity_eval`**: Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing. Supports top-level `await` and `return <value>;`. No default namespaces are pre-imported; include `using UnityEngine;` for Unity types.
-3. **`unity_run_tests`**: Runs EditMode/PlayMode tests with failure diagnostics.
+3. **`unity_test`**: Runs EditMode/PlayMode tests with failure diagnostics. Supports `coverage: true` to record in-memory code coverage without disk snapshots.
+4. **`unity_coverage`**: Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests; reports line coverage percentages and lists uncovered line spans for each file.
 
 ---
 
@@ -24,7 +25,8 @@ UnityLeanMcp provides 3 focused, token-optimized MCP tools:
 | :--- | :--- | :--- |
 | **`unity_refresh`** | `clean` (optional bool, default `false`) | Refreshes AssetDatabase and returns compiler diagnostics. Set `clean: true` only for a more expensive full script recompilation. |
 | **`unity_eval`** | `code` (string: raw C# text) | Evaluates C# top-level script source code in-memory and may mutate Unity state. Supports top-level `await` and `return <value>;`. |
-| **`unity_run_tests`** | `testNames`, `groupNames`, `categoryNames`, `assemblyNames` (optional string arrays), `mode` (`all`, `editmode`, `playmode`), `failedOnly` | Runs EditMode/PlayMode tests with failure diagnostics. `groupNames` uses .NET regular expressions. |
+| **`unity_test`** | `mode` (`editmode`, `playmode`, required), `testNames`, `groupNames`, `categoryNames`, `assemblyNames` (optional string arrays), `failedOnly` (optional bool), `coverage` (optional bool, default `false`) | Runs EditMode/PlayMode tests with failure diagnostics. `groupNames` uses .NET regular expressions. Set `coverage: true` to record in-memory coverage. |
+| **`unity_coverage`** | `paths` (string[], required) | Queries in-memory code coverage for specified files or directories (recursively evaluating all contained C# scripts) from the latest test run without re-running tests. Returns line coverage percentages and lists uncovered line spans for each file. |
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts the Unity Editor in normal interactive mode first and keeps it running for subsequent commands.
 

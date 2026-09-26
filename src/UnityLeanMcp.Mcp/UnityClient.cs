@@ -587,6 +587,7 @@ public class UnityClient : IUnityClient
         string[]? assemblyNames,
         string? mode,
         bool failedOnly = false,
+        bool coverage = false,
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -657,7 +658,8 @@ public class UnityClient : IUnityClient
             GroupNames = groupNames != null && groupNames.Length > 0 ? groupNames : null,
             CategoryNames = categoryNames != null && categoryNames.Length > 0 ? categoryNames : null,
             AssemblyNames = assemblyNames != null && assemblyNames.Length > 0 ? assemblyNames : null,
-            FailedOnly = failedOnly
+            FailedOnly = failedOnly,
+            Coverage = coverage
         };
 
         string json = JsonSerializer.Serialize(runArgs, s_RunArgsJsonOptions);
@@ -922,6 +924,90 @@ public class UnityClient : IUnityClient
                 result.Success = false;
             }
         }
+    }
+
+    public virtual async Task<CoverageResult> GetCoverageAsync(string[] paths, CancellationToken cancellationToken = default)
+    {
+        if (paths == null || paths.Length == 0)
+        {
+            return new CoverageResult
+            {
+                Success = false,
+                Message = "No paths provided. Please specify one or more file or directory paths to inspect coverage for."
+            };
+        }
+
+        var args = new GetCoverageArgs { Paths = paths };
+        string json = JsonSerializer.Serialize(args, s_RunArgsJsonOptions);
+        string escapedJson = ProtocolCodec.EscapeLine(json);
+
+        string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 15, cancellationToken);
+        if (string.IsNullOrEmpty(response))
+        {
+            return new CoverageResult
+            {
+                Success = false,
+                Message = "No response received from Unity Editor. Ensure Unity is running with UnityLeanMcp."
+            };
+        }
+
+        if (response.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            string payloadJson = ProtocolCodec.UnescapeLine(ProtocolCodec.StripStatusPrefix(response));
+            try
+            {
+                using var doc = JsonDocument.Parse(payloadJson);
+                var root = doc.RootElement;
+                var result = new CoverageResult { Success = true };
+
+                if (root.TryGetProperty("files", out var filesElement) && filesElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var fileElem in filesElement.EnumerateArray())
+                    {
+                        var fileReport = new CoverageFileResult();
+                        if (fileElem.TryGetProperty("path", out var p)) fileReport.Path = p.GetString() ?? "";
+                        if (fileElem.TryGetProperty("totalPoints", out var tp)) fileReport.TotalPoints = tp.GetInt32();
+                        if (fileElem.TryGetProperty("coveredPoints", out var cp)) fileReport.CoveredPoints = cp.GetInt32();
+                        if (fileElem.TryGetProperty("uncoveredLines", out var ul) && ul.ValueKind == JsonValueKind.Array)
+                        {
+                            var lines = new List<int>();
+                            foreach (var lineElem in ul.EnumerateArray())
+                            {
+                                lines.Add(lineElem.GetInt32());
+                            }
+                            fileReport.UncoveredLines = lines.ToArray();
+                        }
+                        result.Files.Add(fileReport);
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return new CoverageResult
+                {
+                    Success = false,
+                    Message = $"Failed to parse coverage response: {ex.Message}"
+                };
+            }
+        }
+
+        if (response.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase) ||
+            response.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CoverageResult
+            {
+                Success = false,
+                Message = ProtocolCodec.StripStatusPrefix(response)
+            };
+        }
+
+        return new CoverageResult
+        {
+            Success = false,
+            Message = response
+        };
     }
 
     private static T? TryReadJsonFile<T>(string filePath, Func<T, bool> predicate) where T : class =>

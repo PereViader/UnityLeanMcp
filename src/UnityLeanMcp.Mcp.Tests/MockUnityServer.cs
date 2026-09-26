@@ -196,6 +196,11 @@ public sealed class MockUnityServer : IAsyncDisposable, IDisposable
             return "READY";
         }
 
+        if (line.StartsWith("GET_COVERAGE", StringComparison.OrdinalIgnoreCase))
+        {
+            return "SUCCESS {\"files\":[]}";
+        }
+
         return null;
     }
 

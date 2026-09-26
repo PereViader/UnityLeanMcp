@@ -130,7 +130,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.DoesNotContain("ERROR", result.Message);
@@ -150,7 +150,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.DoesNotContain("FAILURE", result.Message);
@@ -174,7 +174,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.Contains("no longer recognized by the Editor (Editor is idle)", result.Message);
@@ -197,7 +197,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.DoesNotContain("ERROR", result.Message);
@@ -221,7 +221,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.DoesNotContain("ERROR", result.Message);
@@ -241,7 +241,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.DoesNotContain("FAILURE", result.Message);
@@ -273,7 +273,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.True(result.Success);
         Assert.Equal(10, result.PassCount);
@@ -297,7 +297,7 @@ public class TestRunErrorAndIdleTests
             return null;
         });
 
-        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, null, cts.Token);
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, null, cts.Token);
 
         Assert.False(result.Success);
         Assert.Contains("Lost ownership of test run: BUSY eval foreign-op", result.Message);
