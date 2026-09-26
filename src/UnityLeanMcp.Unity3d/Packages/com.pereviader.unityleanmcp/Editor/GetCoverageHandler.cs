@@ -64,6 +64,15 @@ namespace UnityLeanMcp
                 return;
             }
 
+            for (int i = 0; i < args.paths.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(args.paths[i]))
+                {
+                    writer.WriteLine("ERROR: The 'paths' parameter contains an empty or whitespace-only path.");
+                    return;
+                }
+            }
+
             var coveredStats = Coverage.GetStatsForAllCoveredMethods();
             if (coveredStats == null || coveredStats.Length == 0)
             {
@@ -71,28 +80,13 @@ namespace UnityLeanMcp
                 return;
             }
 
-            string projectRoot = Path.GetFullPath(Application.dataPath + "/..").Replace('\\', '/');
-            if (!projectRoot.EndsWith("/"))
-            {
-                projectRoot += "/";
-            }
+            string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
 
             // Normalize requested filter paths
             var normalizedFilters = new List<string>();
             foreach (var rawPath in args.paths)
             {
-                if (string.IsNullOrWhiteSpace(rawPath))
-                    continue;
-
-                string p = rawPath.Trim().Replace('\\', '/');
-                if (p.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
-                {
-                    p = p.Substring(projectRoot.Length);
-                }
-                if (p.StartsWith("./"))
-                    p = p.Substring(2);
-                if (p.StartsWith("/"))
-                    p = p.TrimStart('/');
+                string p = NormalizePathRelativeToProject(rawPath, projectRoot);
 
                 // If path does not end in .cs, ensure trailing slash for directory matching
                 if (!p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !p.EndsWith("/"))
@@ -113,14 +107,11 @@ namespace UnityLeanMcp
             var nonExistentPaths = new List<string>();
             foreach (var rawPath in args.paths)
             {
-                if (string.IsNullOrWhiteSpace(rawPath))
-                    continue;
-
                 string trimmed = rawPath.Trim();
                 string fullPath;
                 try
                 {
-                    fullPath = Path.IsPathRooted(trimmed)
+                    fullPath = IsPathRootedCrossPlatform(trimmed)
                         ? Path.GetFullPath(trimmed)
                         : Path.GetFullPath(Path.Combine(projectRoot, trimmed));
                 }
@@ -161,15 +152,7 @@ namespace UnityLeanMcp
 
                 foreach (var srcFile in asm.sourceFiles)
                 {
-                    string normSrc = srcFile.Replace('\\', '/');
-                    if (normSrc.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
-                    {
-                        normSrc = normSrc.Substring(projectRoot.Length);
-                    }
-                    if (normSrc.StartsWith("/"))
-                    {
-                        normSrc = normSrc.TrimStart('/');
-                    }
+                    string normSrc = NormalizePathRelativeToProject(srcFile, projectRoot);
 
                     if (MatchesAnyFilter(normSrc, normalizedFilters))
                     {
@@ -213,6 +196,7 @@ namespace UnityLeanMcp
 
             // Harvest sequence points for matching files
             var pointsByFile = new Dictionary<string, List<CoveredSequencePoint>>(StringComparer.OrdinalIgnoreCase);
+            var visitedTypes = new HashSet<Type>();
 
             foreach (var asm in assembliesToScan)
             {
@@ -232,7 +216,10 @@ namespace UnityLeanMcp
 
                 foreach (var type in types)
                 {
-                    ProcessType(type, projectRoot, normalizedFilters, pointsByFile);
+                    if (type == null || type.IsNested)
+                        continue;
+
+                    ProcessType(type, projectRoot, normalizedFilters, pointsByFile, visitedTypes);
                 }
             }
 
@@ -267,13 +254,7 @@ namespace UnityLeanMcp
             {
                 if (!reports.Any(r => r.path.Equals(srcFile, StringComparison.OrdinalIgnoreCase)))
                 {
-                    reports.Add(new CoverageFileReport
-                    {
-                        path = srcFile,
-                        totalPoints = 0,
-                        coveredPoints = 0,
-                        uncoveredLines = new int[0]
-                    });
+                    reports.Add(CreateEmptyFileReport(srcFile));
                 }
             }
 
@@ -287,22 +268,10 @@ namespace UnityLeanMcp
                         string fullPath = Path.Combine(projectRoot, filter);
                         if (File.Exists(fullPath))
                         {
-                            reports.Add(new CoverageFileReport
-                            {
-                                path = filter,
-                                totalPoints = 0,
-                                coveredPoints = 0,
-                                uncoveredLines = new int[0]
-                            });
+                            reports.Add(CreateEmptyFileReport(filter));
                         }
                     }
                 }
-            }
-
-            if (reports.Count == 0)
-            {
-                writer.WriteLine("FAILURE No compiled C# scripts found in the specified path(s).");
-                return;
             }
 
             reports = reports.OrderBy(r => r.path, StringComparer.OrdinalIgnoreCase).ToList();
@@ -314,6 +283,43 @@ namespace UnityLeanMcp
 
             string json = JsonUtility.ToJson(response);
             writer.WriteLine($"SUCCESS {ProtocolCodec.EscapeLine(json)}");
+        }
+
+        private static CoverageFileReport CreateEmptyFileReport(string path) =>
+            new CoverageFileReport
+            {
+                path = path,
+                totalPoints = 0,
+                coveredPoints = 0,
+                uncoveredLines = new int[0]
+            };
+
+        private static string NormalizePathRelativeToProject(string path, string projectRoot)
+        {
+            if (string.IsNullOrEmpty(path)) return "";
+            string p = path.Trim().Replace('\\', '/');
+            if (p.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                p = p.Substring(projectRoot.Length);
+            }
+            if (p.StartsWith("./"))
+                p = p.Substring(2);
+            if (p.StartsWith("/"))
+                p = p.TrimStart('/');
+            return p;
+        }
+
+        private static bool IsPathRootedCrossPlatform(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            if (Path.IsPathRooted(path)) return true;
+            if (path.StartsWith('/') || path.StartsWith('\\')) return true;
+            if (path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':')
+            {
+                if (path.Length == 2 || path[2] == '/' || path[2] == '\\')
+                    return true;
+            }
+            return false;
         }
 
         private static bool MatchesAnyFilter(string filePath, List<string> filters)
@@ -334,9 +340,9 @@ namespace UnityLeanMcp
             return false;
         }
 
-        private static void ProcessType(Type type, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile)
+        private static void ProcessType(Type type, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile, HashSet<Type> visitedTypes)
         {
-            if (type == null) return;
+            if (type == null || !visitedTypes.Add(type)) return;
 
             const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
@@ -360,13 +366,20 @@ namespace UnityLeanMcp
                 }
             }
 
+            MethodBase initializer = null;
+            try { initializer = type.TypeInitializer; } catch { }
+            if (initializer != null)
+            {
+                ProcessMethod(initializer, projectRoot, filters, pointsByFile);
+            }
+
             Type[] nestedTypes = null;
             try { nestedTypes = type.GetNestedTypes(flags); } catch { }
             if (nestedTypes != null)
             {
                 foreach (var nested in nestedTypes)
                 {
-                    ProcessType(nested, projectRoot, filters, pointsByFile);
+                    ProcessType(nested, projectRoot, filters, pointsByFile, visitedTypes);
                 }
             }
         }
@@ -397,15 +410,7 @@ namespace UnityLeanMcp
                 if (string.IsNullOrEmpty(sp.filename))
                     continue;
 
-                string normFile = sp.filename.Replace('\\', '/');
-                if (normFile.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
-                {
-                    normFile = normFile.Substring(projectRoot.Length);
-                }
-                if (normFile.StartsWith("/"))
-                {
-                    normFile = normFile.TrimStart('/');
-                }
+                string normFile = NormalizePathRelativeToProject(sp.filename, projectRoot);
 
                 if (!MatchesAnyFilter(normFile, filters))
                     continue;

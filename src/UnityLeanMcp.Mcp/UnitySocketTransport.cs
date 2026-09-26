@@ -32,14 +32,17 @@ public class UnitySocketTransport : IUnitySocketTransport
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        if (timeoutSeconds > 0)
+        {
+            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        }
 
         try
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
-            client.ReceiveTimeout = timeoutSeconds * 1000;
-            client.SendTimeout = timeoutSeconds * 1000;
+            client.ReceiveTimeout = timeoutSeconds > 0 ? timeoutSeconds * 1000 : 0;
+            client.SendTimeout = timeoutSeconds > 0 ? timeoutSeconds * 1000 : 0;
 
             using var stream = client.GetStream();
             using var reader = new StreamReader(stream, Encoding.UTF8);

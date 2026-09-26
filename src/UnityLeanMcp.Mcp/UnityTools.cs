@@ -344,6 +344,14 @@ public class UnityTools
                 return Error("The 'paths' parameter is required. Specify one or more file or directory paths to inspect coverage for.");
             }
 
+            for (int i = 0; i < paths.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(paths[i]))
+                {
+                    return Error("The 'paths' parameter contains an empty or whitespace-only path.");
+                }
+            }
+
             var result = await _client.GetCoverageAsync(paths, progress, cancellationToken);
             if (!result.Success)
             {

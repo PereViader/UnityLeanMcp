@@ -372,6 +372,79 @@ public class CoverageFormattingTests
         }
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task UnityCoverage_WhenPathsContainNullOrWhitespace_ReturnsError(string? invalidPath)
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            var result = await tools.UnityCoverageAsync(["Assets/Scripts/Player.cs", invalidPath!]);
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("empty or whitespace-only", text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task UnityClient_GetCoverageAsync_WhenPathsContainNullOrWhitespace_ReturnsError(string? invalidPath)
+    {
+        var resolver = new UnityPathResolver(Path.GetTempPath());
+        var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+        var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
+
+        var result = await client.GetCoverageAsync(["Assets/Scripts/Player.cs", invalidPath!]);
+        Assert.False(result.Success);
+        Assert.Contains("empty or whitespace-only", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UnityClient_GetCoverageAsync_WhenEmptyFilesResponse_ReturnsSuccessWithEmptyFiles()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var server = await MockUnityServer.StartAsync(cmd =>
+        {
+            if (cmd.StartsWith("GET_COVERAGE"))
+            {
+                var payload = new { files = Array.Empty<object>() };
+                string json = JsonSerializer.Serialize(payload);
+                return $"SUCCESS {ProtocolCodec.EscapeLine(json)}";
+            }
+            return null;
+        });
+
+        var result = await server.Client.GetCoverageAsync(["Assets/Scripts/Empty/"], cts.Token);
+        Assert.True(result.Success);
+        Assert.Empty(result.Files);
+    }
+
+    [Fact]
+    public async Task UnitySocketTransport_SendCommandAsync_WithZeroTimeout_DoesNotCancelAndSucceeds()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var server = await MockUnityServer.StartAsync(cmd =>
+        {
+            if (cmd.StartsWith("PING"))
+            {
+                return "PONG";
+            }
+            return null;
+        });
+
+        var transport = new UnitySocketTransport();
+        string? response = await transport.SendCommandAsync(server.Port, "PING", timeoutSeconds: 0, cts.Token);
+        Assert.Equal("PONG", response);
+    }
+
     private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_cov_test_" + Guid.NewGuid().ToString("N"));

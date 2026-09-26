@@ -943,6 +943,18 @@ public class UnityClient : IUnityClient
             };
         }
 
+        for (int i = 0; i < paths.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(paths[i]))
+            {
+                return new CoverageResult
+                {
+                    Success = false,
+                    Message = "The 'paths' parameter contains an empty or whitespace-only path."
+                };
+            }
+        }
+
         var args = new GetCoverageArgs { Paths = paths };
         string json = JsonSerializer.Serialize(args, s_RunArgsJsonOptions);
         string escapedJson = ProtocolCodec.EscapeLine(json);
@@ -951,7 +963,7 @@ public class UnityClient : IUnityClient
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 15, cancellationToken);
+            string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 0, cancellationToken);
             if (string.IsNullOrEmpty(response))
             {
                 return new CoverageResult

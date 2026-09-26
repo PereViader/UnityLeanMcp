@@ -237,17 +237,6 @@ namespace UnityLeanMcp
                     writer.WriteLine("FAILURE Cannot run tests with coverage: Unity script optimization is set to Release mode. Switch Unity to Debug mode before running tests with coverage.");
                     return;
                 }
-
-                try
-                {
-                    Coverage.ResetAll();
-                    Coverage.enabled = true;
-                }
-                catch (Exception ex)
-                {
-                    writer.WriteLine($"FAILURE Failed to initialize code coverage: {ex.Message}");
-                    return;
-                }
             }
 
             var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKinds.Test, OperationStatus.Queued, out var existing);
@@ -309,6 +298,23 @@ namespace UnityLeanMcp
                     return;
                 }
 
+                if (testArgs.coverage)
+                {
+                    try
+                    {
+                        Coverage.ResetAll();
+                        Coverage.enabled = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        writer.WriteLine($"FAILURE Failed to initialize code coverage: {ex.Message}");
+                        writer.Flush();
+                        DeleteRunningStateIfOwned(operationId);
+                        UnityLeanMcpOperationStore.Complete(operationId);
+                        return;
+                    }
+                }
+
                 writer.WriteLine("RUNNING");
                 writer.Flush();
 
@@ -316,6 +322,10 @@ namespace UnityLeanMcp
             }
             catch (Exception ex)
             {
+                if (testArgs.coverage)
+                {
+                    try { Coverage.enabled = false; } catch { }
+                }
                 Debug.LogError($"UnityLeanMcp: Unhandled exception during RunTests: {ex}");
                 WriteInterruptedResult("Failed to start test run: " + ex.Message, operationId);
             }

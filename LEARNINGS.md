@@ -269,6 +269,15 @@ In polymorphic operation result handling (`IOperationResult`), `Interrupted` is 
 ### Nested Types for Async Methods and Lambdas in Code Coverage
 - In compiled C# assemblies, `async/await` methods and lambda closures are compiled into state machine structs and display classes (e.g. `<MethodAsync>d__1`, `<>c__DisplayClass0_0`).
 - Calling `type.GetMethods()` on top-level classes misses these compiler-generated sequence points entirely. Scanning must recursively traverse `type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)` to discover and harvest sequence points for async methods and lambdas.
+- In .NET CLR, `Assembly.GetTypes()` returns all types defined in the assembly, *including* nested types. When recursively traversing `type.GetNestedTypes()`, the outer assembly loop will visit those same nested types again unless `if (type.IsNested) continue;` is filtered out or a `HashSet<Type> visitedTypes` set is maintained, otherwise sequence points in async methods and lambdas are double-counted.
+
+### Static Constructor (`.cctor`) Omission in `Type.GetConstructors`
+- In .NET CLR, `Type.GetConstructors(BindingFlags)` only retrieves instance constructors. Even specifying `BindingFlags.Static | BindingFlags.NonPublic` fails to return static constructors (`.cctor`).
+- Reflective sequence point discovery must explicitly inspect `type.TypeInitializer` to harvest executable sequence points from static constructors (`static MyClass() { ... }`).
+
+### Deferred Coverage Engine Initialization & Profiler Deactivation
+- Calling `Coverage.ResetAll()` and `Coverage.enabled = true` before verifying operation ownership via `UnityLeanMcpOperationStore.TryBegin` wipes existing counters and leaks the active profiler overhead if the request is rejected with `BUSY` or `Invalid`.
+- Initialization must strictly occur after operation ownership is confirmed, right before test execution begins. Any early exit (e.g. `--failed-only` finding no failed tests) or startup dispatch exception must guarantee `Coverage.enabled = false` is restored immediately to maintain profiler overhead neutrality.
 
 ### Namespace Ambiguity Between `UnityEditor.TestTools.TestRunner.Api` and `UnityEngine.TestTools`
 - Both `UnityEditor.TestTools.TestRunner.Api` and `UnityEngine.TestTools` define an enum named `TestMode`. Adding `using UnityEngine.TestTools;` in files that already import `using UnityEditor.TestTools.TestRunner.Api;` causes compilation error CS0104 (`'TestMode' is an ambiguous reference`).
