@@ -255,6 +255,13 @@ In polymorphic operation result handling (`IOperationResult`), `Interrupted` is 
 - In Unity 6.7+ (introducing CoreCLR and Fast Enter Play Mode optimizations), domain reloads on PlayMode exit are avoided, preserving in-memory hit counters across PlayMode runs.
 - Consequently, requesting `coverage: true` for `playmode` tests must fail fast on Unity versions prior to 6.7 with a clear diagnostic explaining the Mono domain reload limitation and advising the use of `editmode` tests, while allowing `playmode` coverage on Unity 6.7+.
 
+### In-Memory Coverage Invalidation on Script Compilation & Domain Reloads
+- In Unity (both Mono and Unity 6.7+ CoreCLR), compiling C# scripts and triggering domain reloads resets all native and managed sequence point hit counters tracked by `UnityEngine.TestTools.Coverage`.
+- Unlike execution tools (`unity_eval`, `unity_test`) that autowait compilation because they execute against newly compiled assemblies, `unity_coverage` queries the results of tests that ran in the past.
+- Autowaiting 15–30 seconds for script compilation to settle only leads to `Coverage.GetStatsForAllCoveredMethods()` returning 0 covered methods (`"No coverage data recorded"`).
+- Consequently, `unity_coverage` fails fast on `BUSY compile` with an actionable error advising re-running `unity_test` with coverage, while observing `BusyGracePeriod` on foreign operations (such as in-flight test runs).
+- On the server, `ICommandHandler.RequiresCompilationSettled` must be evaluated on the background worker thread for non-mutating commands as well as mutating commands, ensuring commands like `GET_COVERAGE` are rejected immediately with `BUSY compile` without queuing onto a compilation-blocked main thread.
+
 ### Compiler-Synthesized Hidden Sequence Points (`0xfeefee`)
 - Roslyn and Mono compilers emit special hidden sequence points with line number `0xfeefee` (`16707566`) to signal debugger transitions (such as stepping out of async state machines, compiler-generated iterator blocks, or lambda expressions).
 - These points have no corresponding source lines and must be filtered out (`sp.line != 0xfeefee && sp.line > 0`) when calculating uncovered lines and total points to prevent negative or nonsensical line numbers.

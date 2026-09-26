@@ -14,10 +14,17 @@ namespace UnityLeanMcp
     {
         public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.MainThread;
         public bool IsMutating => false;
-        public bool RequiresCompilationSettled => false;
+        public bool RequiresCompilationSettled => true;
 
         public void Handle(string payload, StreamWriter writer)
         {
+            var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            if (activeOp != null)
+            {
+                writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
+                return;
+            }
+
             if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
             {
                 writer.WriteLine("FAILURE Compilation failed");

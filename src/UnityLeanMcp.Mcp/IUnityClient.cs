@@ -24,5 +24,6 @@ public interface IUnityClient
         bool coverage = false,
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default);
-    Task<CoverageResult> GetCoverageAsync(string[] paths, CancellationToken cancellationToken = default);
+    Task<CoverageResult> GetCoverageAsync(string[] paths, IProgress<ProgressNotificationValue>? progress = null, CancellationToken cancellationToken = default);
+    Task<CoverageResult> GetCoverageAsync(string[] paths, CancellationToken cancellationToken) => GetCoverageAsync(paths, null, cancellationToken);
 }

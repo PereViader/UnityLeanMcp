@@ -926,7 +926,13 @@ public class UnityClient : IUnityClient
         }
     }
 
-    public virtual async Task<CoverageResult> GetCoverageAsync(string[] paths, CancellationToken cancellationToken = default)
+    public Task<CoverageResult> GetCoverageAsync(string[] paths, CancellationToken cancellationToken) =>
+        GetCoverageAsync(paths, null, cancellationToken);
+
+    public virtual async Task<CoverageResult> GetCoverageAsync(
+        string[] paths,
+        IProgress<ProgressNotificationValue>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         if (paths == null || paths.Length == 0)
         {
@@ -941,73 +947,105 @@ public class UnityClient : IUnityClient
         string json = JsonSerializer.Serialize(args, s_RunArgsJsonOptions);
         string escapedJson = ProtocolCodec.EscapeLine(json);
 
-        string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 15, cancellationToken);
-        if (string.IsNullOrEmpty(response))
+        while (true)
         {
-            return new CoverageResult
-            {
-                Success = false,
-                Message = "No response received from Unity Editor. Ensure Unity is running with UnityLeanMcp."
-            };
-        }
+            cancellationToken.ThrowIfCancellationRequested();
 
-        if (response.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
-        {
-            string payloadJson = ProtocolCodec.UnescapeLine(ProtocolCodec.StripStatusPrefix(response));
-            try
-            {
-                using var doc = JsonDocument.Parse(payloadJson);
-                var root = doc.RootElement;
-                var result = new CoverageResult { Success = true };
-
-                if (root.TryGetProperty("files", out var filesElement) && filesElement.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var fileElem in filesElement.EnumerateArray())
-                    {
-                        var fileReport = new CoverageFileResult();
-                        if (fileElem.TryGetProperty("path", out var p)) fileReport.Path = p.GetString() ?? "";
-                        if (fileElem.TryGetProperty("totalPoints", out var tp)) fileReport.TotalPoints = tp.GetInt32();
-                        if (fileElem.TryGetProperty("coveredPoints", out var cp)) fileReport.CoveredPoints = cp.GetInt32();
-                        if (fileElem.TryGetProperty("uncoveredLines", out var ul) && ul.ValueKind == JsonValueKind.Array)
-                        {
-                            var lines = new List<int>();
-                            foreach (var lineElem in ul.EnumerateArray())
-                            {
-                                lines.Add(lineElem.GetInt32());
-                            }
-                            fileReport.UncoveredLines = lines.ToArray();
-                        }
-                        result.Files.Add(fileReport);
-                    }
-                }
-
-                return result;
-            }
-            catch (Exception ex)
+            string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 15, cancellationToken);
+            if (string.IsNullOrEmpty(response))
             {
                 return new CoverageResult
                 {
                     Success = false,
-                    Message = $"Failed to parse coverage response: {ex.Message}"
+                    Message = "No response received from Unity Editor. Ensure Unity is running with UnityLeanMcp."
                 };
             }
-        }
 
-        if (response.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase) ||
-            response.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
-        {
+            var busyInfo = ParseBusyResponse(response);
+            if (busyInfo.isBusy)
+            {
+                if (busyInfo.isCompilation)
+                {
+                    // In-memory coverage counters are wiped by domain reload upon script compilation.
+                    // Fail fast with an actionable diagnostic rather than waiting for compilation to complete.
+                    return new CoverageResult
+                    {
+                        Success = false,
+                        Message = "Cannot query coverage: Unity is currently compiling script assemblies. Script compilation and domain reloads reset in-memory coverage data. Please re-run 'unity_test' with coverage: true after compilation completes."
+                    };
+                }
+
+                bool cleared = await WaitForActiveOperationGracePeriodAsync(busyInfo.kind, busyInfo.opId, progress, BusyGracePeriod, cancellationToken);
+                if (!cleared)
+                {
+                    return new CoverageResult
+                    {
+                        Success = false,
+                        Message = FormatBusyExecutingMessage(busyInfo.kind, busyInfo.opId)
+                    };
+                }
+
+                continue;
+            }
+
+            if (response.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
+            {
+                string payloadJson = ProtocolCodec.UnescapeLine(ProtocolCodec.StripStatusPrefix(response));
+                try
+                {
+                    using var doc = JsonDocument.Parse(payloadJson);
+                    var root = doc.RootElement;
+                    var result = new CoverageResult { Success = true };
+
+                    if (root.TryGetProperty("files", out var filesElement) && filesElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var fileElem in filesElement.EnumerateArray())
+                        {
+                            var fileReport = new CoverageFileResult();
+                            if (fileElem.TryGetProperty("path", out var p)) fileReport.Path = p.GetString() ?? "";
+                            if (fileElem.TryGetProperty("totalPoints", out var tp)) fileReport.TotalPoints = tp.GetInt32();
+                            if (fileElem.TryGetProperty("coveredPoints", out var cp)) fileReport.CoveredPoints = cp.GetInt32();
+                            if (fileElem.TryGetProperty("uncoveredLines", out var ul) && ul.ValueKind == JsonValueKind.Array)
+                            {
+                                var lines = new List<int>();
+                                foreach (var lineElem in ul.EnumerateArray())
+                                {
+                                    lines.Add(lineElem.GetInt32());
+                                }
+                                fileReport.UncoveredLines = lines.ToArray();
+                            }
+                            result.Files.Add(fileReport);
+                        }
+                    }
+
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    return new CoverageResult
+                    {
+                        Success = false,
+                        Message = $"Failed to parse coverage response: {ex.Message}"
+                    };
+                }
+            }
+
+            if (response.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase) ||
+                response.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                return new CoverageResult
+                {
+                    Success = false,
+                    Message = ProtocolCodec.StripStatusPrefix(response)
+                };
+            }
+
             return new CoverageResult
             {
                 Success = false,
-                Message = ProtocolCodec.StripStatusPrefix(response)
+                Message = response
             };
         }
-
-        return new CoverageResult
-        {
-            Success = false,
-            Message = response
-        };
     }
 
     private static T? TryReadJsonFile<T>(string filePath, Func<T, bool> predicate) where T : class =>

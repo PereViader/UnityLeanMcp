@@ -269,4 +269,45 @@ public class ToolProgressTests
             tok.GetString() == "progress-eval-token");
         Assert.True(hasEvalProgress, "Expected progress notification for unity_eval");
     }
+
+    [Fact]
+    public async Task UnityTools_UnityCoverageAsync_ForwardsProgressNotifications()
+    {
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new SynchronousProgress<ProgressNotificationValue>(p =>
+        {
+            lock (receivedProgress)
+            {
+                receivedProgress.Add(p);
+            }
+        });
+
+        int coverageAttempts = 0;
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                return null;
+            }
+            if (line.StartsWith("GET_COVERAGE"))
+            {
+                coverageAttempts++;
+                if (coverageAttempts == 1)
+                {
+                    return "BUSY test op_wait_test";
+                }
+                return "SUCCESS {\"files\":[]}";
+            }
+            return null;
+        });
+
+        var tools = new UnityTools(server.Client, server.ProcessManager);
+        var result = await tools.UnityCoverageAsync(new[] { "Assets/Scripts/Foo.cs" }, progress, CancellationToken.None);
+
+        Assert.False(result.IsError);
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
+        }
+    }
 }

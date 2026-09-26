@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using Xunit;
 
@@ -436,6 +437,7 @@ public class CoverageFormattingTests
 
         public override Task<CoverageResult> GetCoverageAsync(
             string[] paths,
+            IProgress<ProgressNotificationValue>? progress = null,
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(CoverageResultToReturn);

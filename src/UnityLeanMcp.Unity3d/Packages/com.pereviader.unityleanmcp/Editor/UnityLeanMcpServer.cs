@@ -426,7 +426,7 @@ namespace UnityLeanMcp
                         return;
                     }
 
-                    // Reject mutating operations early on the worker thread if another operation is active,
+                    // Reject operations early on the worker thread if another operation is active,
                     // or if Unity is compiling. This prevents main thread deadlock and dispatcher queue pollution
                     // when an operation (e.g. eval) is executing synchronously on the main thread.
                     if (handler.IsMutating)
@@ -441,16 +441,25 @@ namespace UnityLeanMcp
                                 return;
                             }
                         }
-
-                        if (handler.RequiresCompilationSettled)
+                    }
+                    else if (handler.ExecutionTarget != CommandExecutionTarget.WorkerThread)
+                    {
+                        var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+                        if (activeOp != null)
                         {
-                            if (UnityLeanMcpCompilationTracker.IsCompiling ||
-                                UnityLeanMcpCompilationTracker.RefreshPending ||
-                                UnityLeanMcpCompilationTracker.RefreshRequired)
-                            {
-                                writer.WriteLine("BUSY compile");
-                                return;
-                            }
+                            writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
+                            return;
+                        }
+                    }
+
+                    if (handler.RequiresCompilationSettled)
+                    {
+                        if (UnityLeanMcpCompilationTracker.IsCompiling ||
+                            UnityLeanMcpCompilationTracker.RefreshPending ||
+                            UnityLeanMcpCompilationTracker.RefreshRequired)
+                        {
+                            writer.WriteLine("BUSY compile");
+                            return;
                         }
                     }
 

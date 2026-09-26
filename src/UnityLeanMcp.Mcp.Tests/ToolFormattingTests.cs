@@ -130,6 +130,7 @@ public class ToolFormattingTests
 
         public override Task<CoverageResult> GetCoverageAsync(
             string[] paths,
+            IProgress<ProgressNotificationValue>? progress = null,
             CancellationToken cancellationToken = default)
         {
             LastCoveragePaths = paths;

@@ -334,6 +334,7 @@ public class UnityTools
         [Description("File or directory paths to inspect coverage for (e.g. ['Assets/Scripts/PlayerController.cs'] or ['Assets/Scripts/Combat/']). Directory paths recursively match all contained C# files. Required.")]
         string[] paths,
 
+        IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -343,7 +344,7 @@ public class UnityTools
                 return Error("The 'paths' parameter is required. Specify one or more file or directory paths to inspect coverage for.");
             }
 
-            var result = await _client.GetCoverageAsync(paths, cancellationToken);
+            var result = await _client.GetCoverageAsync(paths, progress, cancellationToken);
             if (!result.Success)
             {
                 return Result(result.Message, isError: true);

@@ -301,4 +301,113 @@ public class TieredAutowaitingTests
         Assert.False(result.Success);
         Assert.Contains("Unity is busy executing 'eval' (id: op_eval_777). If this operation is hung, kill the Unity process owning this project to recover.", result.Message);
     }
+
+    [Fact]
+    public async Task UnityClient_GetCoverageAsync_WhenBusyCompile_ReturnsActionableDiagnostic()
+    {
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("GET_COVERAGE"))
+            {
+                return "BUSY compile";
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.GetCoverageAsync(new[] { "Assets/Scripts/Foo.cs" }, null, cts.Token);
+
+        Assert.False(result.Success);
+        Assert.Contains("Cannot query coverage: Unity is currently compiling script assemblies", result.Message);
+        Assert.Contains("re-run 'unity_test' with coverage: true", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UnityClient_GetCoverageAsync_WhenBusyForeignOperation_GracePeriodExpires_ReturnsFailFastDiagnostic()
+    {
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new Progress<ProgressNotificationValue>(p =>
+        {
+            lock (receivedProgress)
+            {
+                receivedProgress.Add(p);
+            }
+        });
+
+        int coverageAttempts = 0;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (coverageAttempts >= 1)
+                {
+                    return "BUSY test op_test_123";
+                }
+                return null;
+            }
+            if (line.StartsWith("GET_COVERAGE"))
+            {
+                coverageAttempts++;
+                return "BUSY test op_test_123";
+            }
+            return null;
+        }, new UnityClientOptions(PollIntervalMs: 20, BusyGracePeriod: TimeSpan.FromMilliseconds(100)));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.GetCoverageAsync(new[] { "Assets/Scripts/Foo.cs" }, progress, cts.Token);
+
+        Assert.False(result.Success);
+        Assert.Contains("Unity is busy executing 'test' (id: op_test_123). If this operation is hung, kill the Unity process owning this project to recover.", result.Message);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_GetCoverageAsync_WhenBusyForeignOperation_ClearsDuringGracePeriod_Succeeds()
+    {
+        int coverageAttempts = 0;
+        int gracePolls = 0;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (coverageAttempts == 1)
+                {
+                    if (gracePolls++ < 1)
+                    {
+                        return "BUSY test op_foreign_test";
+                    }
+                }
+                return null;
+            }
+            if (line.StartsWith("GET_COVERAGE"))
+            {
+                coverageAttempts++;
+                if (coverageAttempts == 1)
+                {
+                    return "BUSY test op_foreign_test";
+                }
+                else
+                {
+                    return "SUCCESS {\"files\":[{\"path\":\"Assets/Scripts/Foo.cs\",\"totalPoints\":10,\"coveredPoints\":8,\"uncoveredLines\":[1,2]}]}";
+                }
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.GetCoverageAsync(new[] { "Assets/Scripts/Foo.cs" }, null, cts.Token);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Single(result.Files);
+        Assert.Equal("Assets/Scripts/Foo.cs", result.Files[0].Path);
+        Assert.Equal(10, result.Files[0].TotalPoints);
+        Assert.Equal(8, result.Files[0].CoveredPoints);
+        Assert.Equal(2, coverageAttempts);
+    }
 }
