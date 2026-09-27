@@ -106,7 +106,7 @@ public class UnityTestRunResult : IOperationResult
 public class RunTestsArgs
 {
     [JsonPropertyName("mode")]
-    public string Mode { get; set; } = "all";
+    public string Mode { get; set; } = "";
 
     [JsonPropertyName("testNames")]
     public string[]? TestNames { get; set; }

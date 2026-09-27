@@ -1005,31 +1005,8 @@ public class UnityClient : IUnityClient
                 string payloadJson = ProtocolCodec.UnescapeLine(ProtocolCodec.StripStatusPrefix(response));
                 try
                 {
-                    using var doc = JsonDocument.Parse(payloadJson);
-                    var root = doc.RootElement;
-                    var result = new CoverageResult { Success = true };
-
-                    if (root.TryGetProperty("files", out var filesElement) && filesElement.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var fileElem in filesElement.EnumerateArray())
-                        {
-                            var fileReport = new CoverageFileResult();
-                            if (fileElem.TryGetProperty("path", out var p)) fileReport.Path = p.GetString() ?? "";
-                            if (fileElem.TryGetProperty("totalPoints", out var tp)) fileReport.TotalPoints = tp.GetInt32();
-                            if (fileElem.TryGetProperty("coveredPoints", out var cp)) fileReport.CoveredPoints = cp.GetInt32();
-                            if (fileElem.TryGetProperty("uncoveredLines", out var ul) && ul.ValueKind == JsonValueKind.Array)
-                            {
-                                var lines = new List<int>();
-                                foreach (var lineElem in ul.EnumerateArray())
-                                {
-                                    lines.Add(lineElem.GetInt32());
-                                }
-                                fileReport.UncoveredLines = lines.ToArray();
-                            }
-                            result.Files.Add(fileReport);
-                        }
-                    }
-
+                    var result = JsonSerializer.Deserialize<CoverageResult>(payloadJson) ?? new CoverageResult();
+                    result.Success = true;
                     return result;
                 }
                 catch (Exception ex)
@@ -1041,6 +1018,7 @@ public class UnityClient : IUnityClient
                     };
                 }
             }
+
 
             if (response.StartsWith("FAILURE", StringComparison.OrdinalIgnoreCase) ||
                 response.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase))

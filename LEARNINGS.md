@@ -286,6 +286,16 @@ In polymorphic operation result handling (`IOperationResult`), `Interrupted` is 
 ### SequencePoint.line is `uint` in Unity
 - In `UnityEngine.TestTools.CoveredSequencePoint`, `line` is of type `uint`. When grouping by line and mapping to managed DTOs where line numbers are `int`, an explicit cast `(int)g.Key` is required to avoid CS0029 compilation error.
 
+### Leading Slash Path Rooting on Windows vs Unix (`Path.IsPathRooted`)
+- In .NET across Windows, Linux, and macOS, `Path.IsPathRooted("/Assets/Scripts/Player.cs")` evaluates to `true`.
+- On Windows, a path starting with `/` or `\` without a drive letter resolves relative to the current working drive root (e.g. `C:\Assets\...`), failing `File.Exists` and `Directory.Exists` checks if the project is located within a nested directory (e.g. `C:\Users\...\Project\Assets\...`).
+- Path validation routines in Editor handlers must resolve leading slashes against `projectRoot` (e.g. `Path.Combine(projectRoot, trimmed.TrimStart('/', '\\'))`) when checking disk existence before treating them as absolute filesystem paths.
+
+### Project Root Directory Filters (`.` and `./`) in Coverage Filtering
+- When AI agents or users query whole-project coverage using `paths: ["."]`, naive relative path normalization converts `"."` or `"./"` to `""`.
+- In filter matching (`MatchesAnyFilter`), an empty filter string (`""`) must match all compiled source files in the project.
+- For non-empty directory filters (such as `Assets/Scripts`), filtering must enforce directory boundaries (e.g. ensuring trailing `/`) so prefix matching does not inadvertently match sibling directories (such as `Assets/ScriptsExtended`).
+
 ---
 
 ## 5. External Client & Tool Quirks

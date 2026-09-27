@@ -445,6 +445,116 @@ public class CoverageFormattingTests
         Assert.Equal("PONG", response);
     }
 
+    [Fact]
+    public void RunTestsArgs_DefaultMode_IsEmptyString_AndNotObsoleteAll()
+    {
+        var args = new RunTestsArgs();
+        Assert.Equal(string.Empty, args.Mode);
+        Assert.NotEqual("all", args.Mode, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UnityClient_GetCoverageAsync_ParsesTypedResult_WithMultipleFilesAndUncoveredSpans()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var server = await MockUnityServer.StartAsync(cmd =>
+        {
+            if (cmd.StartsWith("GET_COVERAGE"))
+            {
+                var payload = new
+                {
+                    files = new[]
+                    {
+                        new
+                        {
+                            path = "Assets/Scripts/Player.cs",
+                            totalPoints = 20,
+                            coveredPoints = 15,
+                            uncoveredLines = new[] { 10, 11, 12, 25 }
+                        },
+                        new
+                        {
+                            path = "Assets/Scripts/Enemy.cs",
+                            totalPoints = 10,
+                            coveredPoints = 10,
+                            uncoveredLines = Array.Empty<int>()
+                        }
+                    }
+                };
+                string json = JsonSerializer.Serialize(payload);
+                return $"SUCCESS {ProtocolCodec.EscapeLine(json)}";
+            }
+            return null;
+        });
+
+        var result = await server.Client.GetCoverageAsync(["Assets/Scripts/"], cts.Token);
+        Assert.True(result.Success);
+        Assert.Equal(2, result.Files.Count);
+
+        var player = result.Files[0];
+        Assert.Equal("Assets/Scripts/Player.cs", player.Path);
+        Assert.Equal(20, player.TotalPoints);
+        Assert.Equal(15, player.CoveredPoints);
+        Assert.Equal(new[] { 10, 11, 12, 25 }, player.UncoveredLines);
+
+        var enemy = result.Files[1];
+        Assert.Equal("Assets/Scripts/Enemy.cs", enemy.Path);
+        Assert.Equal(10, enemy.TotalPoints);
+        Assert.Equal(10, enemy.CoveredPoints);
+        Assert.Empty(enemy.UncoveredLines);
+    }
+
+    [Fact]
+    public async Task UnityClient_GetCoverageAsync_WhenInvalidJsonInSuccess_ReturnsFailureResult()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var server = await MockUnityServer.StartAsync(cmd =>
+        {
+            if (cmd.StartsWith("GET_COVERAGE"))
+            {
+                return "SUCCESS {not valid json";
+            }
+            return null;
+        });
+
+        var result = await server.Client.GetCoverageAsync(["Assets/Scripts/Foo.cs"], cts.Token);
+        Assert.False(result.Success);
+        Assert.Contains("Failed to parse coverage response", result.Message);
+    }
+
+    [Fact]
+    public async Task UnityTools_UnityCoverage_LeadingSlashPath_PassesToClient()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.CoverageResultToReturn = new CoverageResult
+            {
+                Success = true,
+                Files =
+                [
+                    new CoverageFileResult
+                    {
+                        Path = "Assets/Scripts/Player.cs",
+                        TotalPoints = 10,
+                        CoveredPoints = 8,
+                        UncoveredLines = [2, 3]
+                    }
+                ]
+            };
+
+            var result = await tools.UnityCoverageAsync(["/Assets/Scripts/Player.cs"]);
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("• Assets/Scripts/Player.cs: 80.0% (8/10 points)", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+
     private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_cov_test_" + Guid.NewGuid().ToString("N"));

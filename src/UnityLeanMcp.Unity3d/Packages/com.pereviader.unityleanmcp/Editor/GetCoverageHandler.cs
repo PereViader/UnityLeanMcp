@@ -39,6 +39,13 @@ namespace UnityLeanMcp
                 return;
             }
 
+            if (CompilationPipeline.codeOptimization == CodeOptimization.Release)
+            {
+                writer.WriteLine("FAILURE Cannot query code coverage: Unity script optimization is set to Release mode. Switch Unity to Debug mode before running tests and inspecting coverage.");
+                return;
+            }
+
+
             string trimmedPayload = (payload ?? "").Trim();
             if (string.IsNullOrEmpty(trimmedPayload))
             {
@@ -88,8 +95,8 @@ namespace UnityLeanMcp
             {
                 string p = NormalizePathRelativeToProject(rawPath, projectRoot);
 
-                // If path does not end in .cs, ensure trailing slash for directory matching
-                if (!p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !p.EndsWith("/"))
+                // If path is not empty and does not end in .cs, ensure trailing slash for directory matching
+                if (!string.IsNullOrEmpty(p) && !p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !p.EndsWith("/"))
                 {
                     p += "/";
                 }
@@ -107,23 +114,9 @@ namespace UnityLeanMcp
             var nonExistentPaths = new List<string>();
             foreach (var rawPath in args.paths)
             {
-                string trimmed = rawPath.Trim();
-                string fullPath;
-                try
+                if (!TryResolveExistingPath(rawPath, projectRoot, out _))
                 {
-                    fullPath = IsPathRootedCrossPlatform(trimmed)
-                        ? Path.GetFullPath(trimmed)
-                        : Path.GetFullPath(Path.Combine(projectRoot, trimmed));
-                }
-                catch
-                {
-                    nonExistentPaths.Add(trimmed);
-                    continue;
-                }
-
-                if (!File.Exists(fullPath) && !Directory.Exists(fullPath))
-                {
-                    nonExistentPaths.Add(trimmed);
+                    nonExistentPaths.Add(rawPath.Trim());
                 }
             }
 
@@ -139,6 +132,7 @@ namespace UnityLeanMcp
                 }
                 return;
             }
+
 
             // Find assemblies containing scripts that match any requested filter
             var allAssemblies = CompilationPipeline.GetAssemblies();
@@ -261,7 +255,7 @@ namespace UnityLeanMcp
             // Also check if an exact .cs file filter exists on disk even if not in compiled assembly source files
             foreach (var filter in normalizedFilters)
             {
-                if (filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(filter) && filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!reports.Any(r => r.path.Equals(filter, StringComparison.OrdinalIgnoreCase)))
                     {
@@ -294,7 +288,7 @@ namespace UnityLeanMcp
                 uncoveredLines = new int[0]
             };
 
-        private static string NormalizePathRelativeToProject(string path, string projectRoot)
+        internal static string NormalizePathRelativeToProject(string path, string projectRoot)
         {
             if (string.IsNullOrEmpty(path)) return "";
             string p = path.Trim().Replace('\\', '/');
@@ -306,10 +300,12 @@ namespace UnityLeanMcp
                 p = p.Substring(2);
             if (p.StartsWith("/"))
                 p = p.TrimStart('/');
+            if (p == "." || p == "./")
+                return "";
             return p;
         }
 
-        private static bool IsPathRootedCrossPlatform(string path)
+        internal static bool IsPathRootedCrossPlatform(string path)
         {
             if (string.IsNullOrWhiteSpace(path)) return false;
             if (Path.IsPathRooted(path)) return true;
@@ -322,10 +318,53 @@ namespace UnityLeanMcp
             return false;
         }
 
-        private static bool MatchesAnyFilter(string filePath, List<string> filters)
+        internal static bool TryResolveExistingPath(string rawPath, string projectRoot, out string fullPath)
+        {
+            fullPath = string.Empty;
+            if (string.IsNullOrWhiteSpace(rawPath))
+                return false;
+
+            string trimmed = rawPath.Trim();
+            try
+            {
+                if (IsPathRootedCrossPlatform(trimmed))
+                {
+                    fullPath = Path.GetFullPath(trimmed);
+                    if (File.Exists(fullPath) || Directory.Exists(fullPath))
+                    {
+                        return true;
+                    }
+
+                    // If a leading slash was used (e.g. "/Assets/Scripts"), check relative to projectRoot
+                    string relTrimmed = trimmed.TrimStart('/', '\\');
+                    string projectRelativePath = Path.GetFullPath(Path.Combine(projectRoot, relTrimmed));
+                    if (File.Exists(projectRelativePath) || Directory.Exists(projectRelativePath))
+                    {
+                        fullPath = projectRelativePath;
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                fullPath = Path.GetFullPath(Path.Combine(projectRoot, trimmed));
+                return File.Exists(fullPath) || Directory.Exists(fullPath);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static bool MatchesAnyFilter(string filePath, List<string> filters)
         {
             foreach (var f in filters)
             {
+                if (string.IsNullOrEmpty(f) || f == "/")
+                {
+                    return true;
+                }
+
                 if (f.EndsWith("/", StringComparison.Ordinal))
                 {
                     if (filePath.StartsWith(f, StringComparison.OrdinalIgnoreCase))
@@ -339,6 +378,7 @@ namespace UnityLeanMcp
             }
             return false;
         }
+
 
         private static void ProcessType(Type type, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile, HashSet<Type> visitedTypes)
         {

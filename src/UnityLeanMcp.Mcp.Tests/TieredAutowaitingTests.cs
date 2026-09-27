@@ -323,6 +323,27 @@ public class TieredAutowaitingTests
     }
 
     [Fact]
+    public async Task UnityClient_GetCoverageAsync_WhenReleaseModeFailure_ReturnsActionableDiagnostic()
+    {
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("GET_COVERAGE"))
+            {
+                return "FAILURE Cannot query code coverage: Unity script optimization is set to Release mode. Switch Unity to Debug mode before running tests and inspecting coverage.";
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.GetCoverageAsync(new[] { "Assets/Scripts/Foo.cs" }, null, cts.Token);
+
+        Assert.False(result.Success);
+        Assert.Contains("Release mode", result.Message);
+        Assert.Contains("Switch Unity to Debug mode", result.Message);
+    }
+
+
+    [Fact]
     public async Task UnityClient_GetCoverageAsync_WhenBusyForeignOperation_GracePeriodExpires_ReturnsFailFastDiagnostic()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
