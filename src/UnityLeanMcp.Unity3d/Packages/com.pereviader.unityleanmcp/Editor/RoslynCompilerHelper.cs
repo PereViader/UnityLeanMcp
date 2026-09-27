@@ -76,8 +76,6 @@ namespace UnityLeanMcp
         private static Type s_MetadataRefType;
         private static object s_CompilationOptions;
 
-        private static List<object> s_CachedMetadataReferences;
-        private static Array s_CachedMetadataReferenceArray;
         private static readonly object s_Lock = new object();
 
         private sealed class InitializationState
@@ -100,9 +98,6 @@ namespace UnityLeanMcp
             public Type SyntaxTreeType;
             public Type MetadataReferenceType;
             public object CompilationOptions;
-
-            public List<object> CachedMetadataReferences;
-            public Array CachedMetadataReferenceArray;
         }
 
         public static RoslynSupportStatus GetSupportStatus()
@@ -153,10 +148,13 @@ namespace UnityLeanMcp
                 s_SyntaxTreeType = state.SyntaxTreeType;
                 s_MetadataRefType = state.MetadataReferenceType;
                 s_CompilationOptions = state.CompilationOptions;
-                s_CachedMetadataReferences = state.CachedMetadataReferences;
-                s_CachedMetadataReferenceArray = state.CachedMetadataReferenceArray;
                 s_IsSupported = true;
                 s_UnsupportedReason = "";
+
+#pragma warning disable CS8622
+                AppDomain.CurrentDomain.AssemblyResolve -= OnAssemblyResolve;
+                AppDomain.CurrentDomain.AssemblyResolve += OnAssemblyResolve;
+#pragma warning restore CS8622
 
                 // This is the release publication point for every field above.
                 Volatile.Write(ref s_Initialized, true);
@@ -167,6 +165,9 @@ namespace UnityLeanMcp
         {
             lock (s_Lock)
             {
+#pragma warning disable CS8622
+                AppDomain.CurrentDomain.AssemblyResolve -= OnAssemblyResolve;
+#pragma warning restore CS8622
                 s_Initialized = false;
                 s_IsSupported = false;
                 s_UnsupportedReason = "";
@@ -183,8 +184,6 @@ namespace UnityLeanMcp
                 s_SyntaxTreeType = null;
                 s_MetadataRefType = null;
                 s_CompilationOptions = null;
-                s_CachedMetadataReferences = null;
-                s_CachedMetadataReferenceArray = null;
             }
         }
 
@@ -347,11 +346,24 @@ namespace UnityLeanMcp
                     state.DescendantNodesMethod = syntaxNodeType.GetMethod("DescendantNodes", new Type[] { typeof(Func<,>).MakeGenericType(syntaxNodeType, typeof(bool)), typeof(bool) }) ?? syntaxNodeType.GetMethod("DescendantNodes", Type.EmptyTypes);
                 }
 
-                state.CachedMetadataReferences = BuildMetadataReferences(state.CreateFromFileMethod);
-                state.CachedMetadataReferenceArray = Array.CreateInstance(state.MetadataReferenceType, state.CachedMetadataReferences.Count);
-                for (int i = 0; i < state.CachedMetadataReferences.Count; i++)
+                // Test CreateFromFile to verify it binds and functions properly
+                try
                 {
-                    state.CachedMetadataReferenceArray.SetValue(state.CachedMetadataReferences[i], i);
+                    string testPath = typeof(object).Assembly.Location;
+                    if (!string.IsNullOrEmpty(testPath) && File.Exists(testPath))
+                    {
+                        var testRef = InvokeCreateFromFile(state.CreateFromFileMethod, testPath);
+                        if (testRef == null)
+                        {
+                            state.UnsupportedReason = "MetadataReference.CreateFromFile returned null.";
+                            return state;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    state.UnsupportedReason = "MetadataReference.CreateFromFile failed: " + ex.Message;
+                    return state;
                 }
 
                 state.IsSupported = true;
@@ -364,41 +376,47 @@ namespace UnityLeanMcp
             }
         }
 
-        private static List<object> BuildMetadataReferences(MethodInfo createFromFileMethod)
+        private static object InvokeCreateFromFile(MethodInfo method, string path)
+        {
+            var pars = method.GetParameters();
+            if (pars.Length == 1)
+            {
+                return method.Invoke(null, new object[] { path });
+            }
+            var args = new object[pars.Length];
+            args[0] = path;
+            for (int i = 1; i < pars.Length; i++)
+            {
+                if (pars[i].DefaultValue != DBNull.Value && pars[i].DefaultValue != null)
+                {
+                    args[i] = pars[i].DefaultValue;
+                }
+                else if (pars[i].ParameterType.IsValueType)
+                {
+                    args[i] = Activator.CreateInstance(pars[i].ParameterType);
+                }
+                else
+                {
+                    args[i] = null;
+                }
+            }
+            return method.Invoke(null, args);
+        }
+
+        private static Array BuildMetadataReferenceArray()
         {
             var refList = new List<object>();
-            var addedLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var addedAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            void AddRef(string path, string assemblyName = null)
+            void AddPath(string path)
             {
-                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-                if (!addedLocations.Add(path)) return;
-
-                if (!string.IsNullOrEmpty(assemblyName))
-                {
-                    if (!addedAssemblyNames.Add(assemblyName)) return;
-                }
+                if (string.IsNullOrEmpty(path)) return;
+                string fullPath = Path.IsPathRooted(path) ? path : Path.GetFullPath(path);
+                if (!File.Exists(fullPath) || !addedPaths.Add(fullPath)) return;
 
                 try
                 {
-                    object r;
-                    var pars = createFromFileMethod.GetParameters();
-                    if (pars.Length == 1)
-                    {
-                        r = createFromFileMethod.Invoke(null, new object[] { path });
-                    }
-                    else
-                    {
-                        var args = new object[pars.Length];
-                        args[0] = path;
-                        for (int i = 1; i < pars.Length; i++)
-                        {
-                            args[i] = pars[i].DefaultValue != DBNull.Value ? pars[i].DefaultValue : null;
-                        }
-                        r = createFromFileMethod.Invoke(null, args);
-                    }
-
+                    object r = InvokeCreateFromFile(s_CreateFromFileMethod, fullPath);
                     if (r != null)
                     {
                         refList.Add(r);
@@ -407,34 +425,88 @@ namespace UnityLeanMcp
                 catch { }
             }
 
-            void AddAssembly(Assembly asm)
+            // 1. All currently loaded assemblies in AppDomain (BCL, UnityEditor, UnityEngine, loaded packages)
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                if (asm == null || asm.IsDynamic) return;
+                if (asm == null || asm.IsDynamic) continue;
                 try
                 {
-                    string loc = asm.Location;
-                    if (string.IsNullOrEmpty(loc) || !File.Exists(loc)) return;
-                    string name = asm.GetName().Name;
-                    AddRef(loc, name);
+                    AddPath(asm.Location);
                 }
                 catch { }
             }
 
-            // 1. All currently loaded assemblies in AppDomain
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            // 2. All project .asmdef assemblies compiled for Editor & their referenced DLLs
+            try
             {
-                AddAssembly(asm);
+                var editorAssemblies = UnityEditor.Compilation.CompilationPipeline.GetAssemblies(UnityEditor.Compilation.AssembliesType.Editor);
+                if (editorAssemblies != null)
+                {
+                    foreach (var asm in editorAssemblies)
+                    {
+                        if (asm == null) continue;
+                        AddPath(asm.outputPath);
+                        if (asm.compiledAssemblyReferences != null)
+                        {
+                            foreach (var r in asm.compiledAssemblyReferences)
+                            {
+                                AddPath(r);
+                            }
+                        }
+                    }
+                }
             }
+            catch { }
 
-            // 2. Core framework types
-            try { AddAssembly(typeof(object).Assembly); } catch { }
-            try { AddAssembly(typeof(System.Linq.Enumerable).Assembly); } catch { }
-            try { AddAssembly(typeof(System.Collections.Generic.List<>).Assembly); } catch { }
-            try { AddAssembly(typeof(UnityEngine.Object).Assembly); } catch { }
-            try { AddAssembly(typeof(UnityEngine.GameObject).Assembly); } catch { }
-            try { AddAssembly(typeof(UnityEditor.Editor).Assembly); } catch { }
+            // 3. User plugin DLLs in Assets/ (e.g. Assets/Plugins/*.dll)
+            try
+            {
+                var pluginPaths = UnityEditor.Compilation.CompilationPipeline.GetPrecompiledAssemblyPaths(
+                    UnityEditor.Compilation.CompilationPipeline.PrecompiledAssemblySources.UserAssembly);
+                if (pluginPaths != null)
+                {
+                    foreach (var p in pluginPaths)
+                    {
+                        AddPath(p);
+                    }
+                }
+            }
+            catch { }
 
-            return refList;
+            var refArray = Array.CreateInstance(s_MetadataRefType, refList.Count);
+            for (int i = 0; i < refList.Count; i++)
+            {
+                refArray.SetValue(refList[i], i);
+            }
+            return refArray;
+        }
+
+#pragma warning disable CS8622
+        private static Assembly OnAssemblyResolve(object sender, ResolveEventArgs args)
+#pragma warning restore CS8622
+        {
+            try
+            {
+                string simpleName = new AssemblyName(args.Name).Name;
+                if (string.IsNullOrEmpty(simpleName)) return null;
+
+                // 1. Check Library/ScriptAssemblies/<simpleName>.dll (where all project .asmdef assemblies reside)
+                string scriptPath = Path.GetFullPath(Path.Combine("Library", "ScriptAssemblies", simpleName + ".dll"));
+                if (File.Exists(scriptPath))
+                {
+                    return Assembly.LoadFrom(scriptPath);
+                }
+
+                // 2. Check precompiled plugin DLLs via Unity's built-in lookup
+                string pluginPath = UnityEditor.Compilation.CompilationPipeline.GetPrecompiledAssemblyPathFromAssemblyName(simpleName);
+                if (!string.IsNullOrEmpty(pluginPath) && File.Exists(pluginPath))
+                {
+                    return Assembly.LoadFrom(pluginPath);
+                }
+            }
+            catch { }
+
+            return null;
         }
 
         public static bool CompileAndEmit(string sourceCode, out byte[] assemblyBytes, out List<string> errors)
@@ -462,9 +534,10 @@ namespace UnityLeanMcp
                 var syntaxTreeArray = Array.CreateInstance(s_CodeAnalysisAsm.GetType("Microsoft.CodeAnalysis.SyntaxTree"), 1);
                 syntaxTreeArray.SetValue(syntaxTree, 0);
 
-                // 3. Create compilation
+                // 3. Create compilation with freshly gathered metadata references (stateless & transactional)
+                Array metadataReferenceArray = BuildMetadataReferenceArray();
                 string assemblyName = "__UnityLeanMcpEval_" + Guid.NewGuid().ToString("N");
-                var compilation = s_CreateCompMethod.Invoke(null, new object[] { assemblyName, syntaxTreeArray, s_CachedMetadataReferenceArray, s_CompilationOptions });
+                var compilation = s_CreateCompMethod.Invoke(null, new object[] { assemblyName, syntaxTreeArray, metadataReferenceArray, s_CompilationOptions });
 
                 // 5. Emit to memory stream
                 using (var ms = new MemoryStream())

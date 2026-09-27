@@ -113,4 +113,18 @@ fi
 # Attempt to remove old .old files if unlocked, or leave them
 rm -f "$PACKAGE_SRC/MCP~/"*.old "$PACKAGE_SRC/MCP~/"*.old.* 2>/dev/null || true
 
+# Clean up obsolete files in $PACKAGE_SRC/MCP~ that are no longer part of the build
+shopt -s dotglob nullglob
+for item in "$PACKAGE_SRC/MCP~"/*; do
+  fname="$(basename "$item")"
+  if [[ "$fname" == *.old* ]]; then
+    continue
+  fi
+  if [ ! -e "$BUILD_DIR/MCP~/$fname" ]; then
+    echo "Removing obsolete file from package MCP~: $fname"
+    rm -rf "$item" 2>/dev/null || true
+  fi
+done
+shopt -u dotglob nullglob
+
 echo "=== Build completed successfully! ==="

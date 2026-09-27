@@ -57,7 +57,7 @@ public class UnityLogScanner : IUnityLogScanner
             string text = UnityProcessManager.ReadFileWithRetry(logFilePath, fromOffset: initialOffset);
             var lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             int start = Math.Max(0, lines.Length - 25);
-            return "Last log lines:\n" + string.Join(Environment.NewLine, lines[start..]);
+            return "Last log lines:" + Environment.NewLine + string.Join(Environment.NewLine, lines[start..]);
         }
         catch (Exception ex)
         {
