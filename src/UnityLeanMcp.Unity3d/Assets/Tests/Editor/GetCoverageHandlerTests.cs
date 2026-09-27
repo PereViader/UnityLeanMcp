@@ -90,5 +90,352 @@ namespace UnityLeanMcpTests
                 try { Directory.Delete(tempDir, true); } catch { }
             }
         }
+
+        [Test]
+        public void GetDeclaredMethodsAndConstructors_WhenTypeHasStaticAndInstanceConstructors_CapturesEachExactlyOnce()
+        {
+            var methods = GetCoverageHandler.GetDeclaredMethodsAndConstructors(typeof(TypeWithStaticAndInstanceCtors));
+
+            // Verify no duplicates
+            Assert.That(methods.Count, Is.EqualTo(new HashSet<System.Reflection.MethodBase>(methods).Count));
+
+            // Verify static constructor (.cctor) is captured exactly once
+            Assert.That(methods.FindAll(m => m.Name == ".cctor").Count, Is.EqualTo(1));
+
+            // Verify instance constructor (.ctor) is captured exactly once
+            Assert.That(methods.FindAll(m => m.Name == ".ctor").Count, Is.EqualTo(1));
+
+            // Verify normal instance and static methods are captured
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithStaticAndInstanceCtors.InstanceMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithStaticAndInstanceCtors.StaticMethod)), Is.True);
+        }
+
+        [Test]
+        public void GetDeclaredMethodsAndConstructors_WhenTypeHasNoStaticConstructor_DoesNotEmitCctor()
+        {
+            var methods = GetCoverageHandler.GetDeclaredMethodsAndConstructors(typeof(TypeWithOnlyInstanceCtor));
+
+            Assert.That(methods.Count, Is.EqualTo(new HashSet<System.Reflection.MethodBase>(methods).Count));
+            Assert.That(methods.FindAll(m => m.Name == ".cctor").Count, Is.EqualTo(0));
+            Assert.That(methods.FindAll(m => m.Name == ".ctor").Count, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_AsyncMethods_DiscoversKickOffAndStateMachines()
+        {
+            var methods = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(TypeWithAsyncMethods));
+
+            // Verify kick-off methods exist
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithAsyncMethods.AsyncVoidMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithAsyncMethods.AsyncTaskMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithAsyncMethods.AsyncAwaitableMethod)), Is.True);
+
+            // Verify compiler-generated async state machine MoveNext methods are discovered
+            var moveNextMethods = methods.FindAll(m => m.Name == "MoveNext");
+            Assert.That(moveNextMethods.Count, Is.GreaterThanOrEqualTo(3));
+
+            // Verify state machines are declared on compiler-generated nested types
+            Assert.That(moveNextMethods.TrueForAll(m => m.DeclaringType.IsNested), Is.True);
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_Iterators_DiscoversKickOffAndIteratorTypes()
+        {
+            var methods = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(TypeWithIterators));
+
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithIterators.YieldEnumeratorMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithIterators.YieldEnumerableMethod)), Is.True);
+
+            var moveNextMethods = methods.FindAll(m => m.Name == "MoveNext");
+            Assert.That(moveNextMethods.Count, Is.GreaterThanOrEqualTo(2));
+            Assert.That(moveNextMethods.TrueForAll(m => m.DeclaringType.IsNested), Is.True);
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_LambdasAndClosures_DiscoversNestedAndNestedNestedLambdas()
+        {
+            var methods = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(TypeWithLambdas));
+
+            // Declaring methods
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithLambdas.SimpleLambdaMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithLambdas.LambdaWithClosureMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithLambdas.NestedLambdaMethod)), Is.True);
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithLambdas.NestedNestedLambdaMethod)), Is.True);
+
+            // Compiler-generated lambda methods (contain "b__")
+            var lambdaMethods = methods.FindAll(m => m.Name.Contains("b__"));
+            // At least: 1 simple + 1 closure + 2 nested (outer+inner) + 3 nested-nested (l1+l2+l3) = 7 lambdas
+            Assert.That(lambdaMethods.Count, Is.GreaterThanOrEqualTo(7));
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_PropertiesAndEvents_DiscoversAllAccessors()
+        {
+            var methods = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(TypeWithPropertiesAndEvents));
+
+            // Auto property accessors
+            Assert.That(methods.Exists(m => m.Name == "get_AutoProperty"), Is.True);
+            Assert.That(methods.Exists(m => m.Name == "set_AutoProperty"), Is.True);
+
+            // Manual property accessors
+            Assert.That(methods.Exists(m => m.Name == "get_ManualProperty"), Is.True);
+            Assert.That(methods.Exists(m => m.Name == "set_ManualProperty"), Is.True);
+
+            // Indexer accessors
+            Assert.That(methods.Exists(m => m.Name == "get_Item"), Is.True);
+            Assert.That(methods.Exists(m => m.Name == "set_Item"), Is.True);
+
+            // Auto event accessors
+            Assert.That(methods.Exists(m => m.Name == "add_AutoEvent"), Is.True);
+            Assert.That(methods.Exists(m => m.Name == "remove_AutoEvent"), Is.True);
+
+            // Custom event accessors
+            Assert.That(methods.Exists(m => m.Name == "add_CustomEvent"), Is.True);
+            Assert.That(methods.Exists(m => m.Name == "remove_CustomEvent"), Is.True);
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_LocalFunctions_DiscoversStaticRegularAsyncAndIteratorLocalFunctions()
+        {
+            var methods = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(TypeWithLocalFunctions));
+
+            Assert.That(methods.Exists(m => m.Name == nameof(TypeWithLocalFunctions.HostMethod)), Is.True);
+
+            // Compiler-generated local function methods contain "g__"
+            var localFunctions = methods.FindAll(m => m.Name.Contains("g__"));
+            Assert.That(localFunctions.Count, Is.GreaterThanOrEqualTo(4));
+
+            // Async and iterator local functions also generate state machine MoveNext
+            var moveNextMethods = methods.FindAll(m => m.Name == "MoveNext");
+            Assert.That(moveNextMethods.Count, Is.GreaterThanOrEqualTo(2));
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_ExplicitInterfaceImplementation_DiscoversExplicitMembers()
+        {
+            var methods = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(TypeWithExplicitInterface));
+
+            // Explicit methods are private and qualified with interface name
+            Assert.That(methods.Exists(m => m.Name.EndsWith("ITestCoverageInterface.ExplicitMethod")), Is.True);
+            Assert.That(methods.Exists(m => m.Name.EndsWith("ITestCoverageInterface.get_ExplicitProperty")), Is.True);
+            Assert.That(methods.Exists(m => m.Name.EndsWith("ITestCoverageInterface.set_ExplicitProperty")), Is.True);
+            Assert.That(methods.Exists(m => m.Name.EndsWith("ITestCoverageInterface.add_ExplicitEvent")), Is.True);
+            Assert.That(methods.Exists(m => m.Name.EndsWith("ITestCoverageInterface.remove_ExplicitEvent")), Is.True);
+        }
+
+        [Test]
+        public void GetAllMethodsAndConstructorsRecursive_MoreThanOneClass_StrictSeparationAndNoDuplicates()
+        {
+            var visitedTypes = new HashSet<Type>();
+            var methodsClassA = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(MultiClassA), visitedTypes);
+            var methodsClassB = GetCoverageHandler.GetAllMethodsAndConstructorsRecursive(typeof(MultiClassB), visitedTypes);
+
+            Assert.That(methodsClassA.Exists(m => m.Name == nameof(MultiClassA.MethodA)), Is.True);
+            Assert.That(methodsClassB.Exists(m => m.Name == nameof(MultiClassB.MethodB)), Is.True);
+
+            // Verify disjoint sets
+            var setA = new HashSet<System.Reflection.MethodBase>(methodsClassA);
+            var setB = new HashSet<System.Reflection.MethodBase>(methodsClassB);
+            setA.IntersectWith(setB);
+            Assert.That(setA.Count, Is.EqualTo(0));
+        }
+
+        private class TypeWithStaticAndInstanceCtors
+        {
+            static TypeWithStaticAndInstanceCtors() { }
+            public TypeWithStaticAndInstanceCtors() { }
+            public void InstanceMethod() { }
+            public static void StaticMethod() { }
+        }
+
+        private class TypeWithOnlyInstanceCtor
+        {
+            public TypeWithOnlyInstanceCtor() { }
+        }
+
+        private class TypeWithAsyncMethods
+        {
+            public async void AsyncVoidMethod()
+            {
+                await System.Threading.Tasks.Task.Yield();
+            }
+
+            public async System.Threading.Tasks.Task AsyncTaskMethod()
+            {
+                await System.Threading.Tasks.Task.Yield();
+            }
+
+            public async TestCustomAwaitable AsyncAwaitableMethod()
+            {
+                await System.Threading.Tasks.Task.Yield();
+            }
+        }
+
+        [System.Runtime.CompilerServices.AsyncMethodBuilder(typeof(TestCustomAwaitableBuilder))]
+        public struct TestCustomAwaitable
+        {
+            public TestCustomAwaiter GetAwaiter() => new TestCustomAwaiter();
+        }
+
+        public struct TestCustomAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+        {
+            public bool IsCompleted => true;
+            public void GetResult() { }
+            public void OnCompleted(Action continuation) => continuation();
+        }
+
+        public struct TestCustomAwaitableBuilder
+        {
+            public static TestCustomAwaitableBuilder Create() => new TestCustomAwaitableBuilder();
+            public void Start<TStateMachine>(ref TStateMachine stateMachine) where TStateMachine : System.Runtime.CompilerServices.IAsyncStateMachine => stateMachine.MoveNext();
+            public void SetStateMachine(System.Runtime.CompilerServices.IAsyncStateMachine stateMachine) { }
+            public void SetResult() { }
+            public void SetException(Exception exception) { }
+            public TestCustomAwaitable Task => default;
+            public void AwaitOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine)
+                where TAwaiter : System.Runtime.CompilerServices.INotifyCompletion
+                where TStateMachine : System.Runtime.CompilerServices.IAsyncStateMachine => awaiter.OnCompleted(stateMachine.MoveNext);
+            public void AwaitUnsafeOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine)
+                where TAwaiter : System.Runtime.CompilerServices.ICriticalNotifyCompletion
+                where TStateMachine : System.Runtime.CompilerServices.IAsyncStateMachine => awaiter.OnCompleted(stateMachine.MoveNext);
+        }
+
+        private class TypeWithIterators
+        {
+            public System.Collections.IEnumerator YieldEnumeratorMethod()
+            {
+                yield return 1;
+                yield return 2;
+            }
+
+            public System.Collections.Generic.IEnumerable<string> YieldEnumerableMethod()
+            {
+                yield return "hello";
+                yield return "world";
+            }
+        }
+
+        private class TypeWithLambdas
+        {
+            public void SimpleLambdaMethod()
+            {
+                Action a = () => { };
+                a();
+            }
+
+            public void LambdaWithClosureMethod()
+            {
+                int x = 10;
+                Action a = () => { x++; };
+                a();
+            }
+
+            public void NestedLambdaMethod()
+            {
+                int x = 1;
+                Func<Func<int>> outer = () =>
+                {
+                    int y = 2;
+                    return () => x + y;
+                };
+                outer()();
+            }
+
+            public void NestedNestedLambdaMethod()
+            {
+                int a = 1;
+                Func<Func<Func<int>>> l1 = () =>
+                {
+                    int b = 2;
+                    return () =>
+                    {
+                        int c = 3;
+                        return () => a + b + c;
+                    };
+                };
+                l1()()();
+            }
+        }
+
+        private class TypeWithPropertiesAndEvents
+        {
+            public int AutoProperty { get; set; }
+
+            private int _manual;
+            public int ManualProperty
+            {
+                get => _manual;
+                set => _manual = value;
+            }
+
+            public string this[int index]
+            {
+                get => index.ToString();
+                set { }
+            }
+
+            public event Action AutoEvent;
+            public void RaiseAuto() => AutoEvent?.Invoke();
+
+            private Action _custom;
+            public event Action CustomEvent
+            {
+                add => _custom += value;
+                remove => _custom -= value;
+            }
+        }
+
+        private class TypeWithLocalFunctions
+        {
+            public void HostMethod()
+            {
+                int localVal = 10;
+                int RegularLocal() => localVal + 1;
+                static int StaticLocal(int x) => x * 2;
+
+                async System.Threading.Tasks.Task AsyncLocal()
+                {
+                    await System.Threading.Tasks.Task.Yield();
+                }
+
+                System.Collections.Generic.IEnumerable<int> IteratorLocal()
+                {
+                    yield return localVal;
+                }
+
+                RegularLocal();
+                StaticLocal(5);
+                AsyncLocal();
+                IteratorLocal();
+            }
+        }
+
+        public interface ITestCoverageInterface
+        {
+            void ExplicitMethod();
+            int ExplicitProperty { get; set; }
+            event Action ExplicitEvent;
+        }
+
+        private class TypeWithExplicitInterface : ITestCoverageInterface
+        {
+            void ITestCoverageInterface.ExplicitMethod() { }
+            int ITestCoverageInterface.ExplicitProperty { get; set; }
+            event Action ITestCoverageInterface.ExplicitEvent
+            {
+                add { }
+                remove { }
+            }
+        }
+
+        private class MultiClassA
+        {
+            public void MethodA() { }
+        }
+
+        private class MultiClassB
+        {
+            public void MethodB() { }
+        }
     }
 }

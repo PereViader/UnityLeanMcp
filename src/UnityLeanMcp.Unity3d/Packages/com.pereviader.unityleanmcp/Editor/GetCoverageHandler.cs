@@ -380,47 +380,69 @@ namespace UnityLeanMcp
         }
 
 
-        private static void ProcessType(Type type, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile, HashSet<Type> visitedTypes)
+        internal static List<MethodBase> GetDeclaredMethodsAndConstructors(Type type)
         {
-            if (type == null || !visitedTypes.Add(type)) return;
+            var result = new List<MethodBase>();
+            if (type == null) return result;
+
+            const BindingFlags instanceFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+            const BindingFlags allFlags = instanceFlags | BindingFlags.Static;
+
+            try
+            {
+                var methods = type.GetMethods(allFlags);
+                if (methods != null) result.AddRange(methods);
+            }
+            catch { }
+
+            try
+            {
+                // In .NET reflection, GetConstructors with BindingFlags.Static includes the static constructor (.cctor).
+                // We restrict GetConstructors to instanceFlags so .ctor and .cctor are disjoint and .cctor is not duplicated.
+                var constructors = type.GetConstructors(instanceFlags);
+                if (constructors != null) result.AddRange(constructors);
+            }
+            catch { }
+
+            try
+            {
+                var initializer = type.TypeInitializer;
+                if (initializer != null) result.Add(initializer);
+            }
+            catch { }
+
+            return result;
+        }
+
+        internal static List<MethodBase> GetAllMethodsAndConstructorsRecursive(Type type, HashSet<Type> visitedTypes = null)
+        {
+            var result = new List<MethodBase>();
+            if (type == null) return result;
+            if (visitedTypes == null) visitedTypes = new HashSet<Type>();
+            if (!visitedTypes.Add(type)) return result;
+
+            result.AddRange(GetDeclaredMethodsAndConstructors(type));
 
             const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
-
-            MethodInfo[] methods = null;
-            try { methods = type.GetMethods(flags); } catch { }
-            if (methods != null)
-            {
-                foreach (var m in methods)
-                {
-                    ProcessMethod(m, projectRoot, filters, pointsByFile);
-                }
-            }
-
-            ConstructorInfo[] constructors = null;
-            try { constructors = type.GetConstructors(flags); } catch { }
-            if (constructors != null)
-            {
-                foreach (var c in constructors)
-                {
-                    ProcessMethod(c, projectRoot, filters, pointsByFile);
-                }
-            }
-
-            MethodBase initializer = null;
-            try { initializer = type.TypeInitializer; } catch { }
-            if (initializer != null)
-            {
-                ProcessMethod(initializer, projectRoot, filters, pointsByFile);
-            }
-
             Type[] nestedTypes = null;
             try { nestedTypes = type.GetNestedTypes(flags); } catch { }
             if (nestedTypes != null)
             {
                 foreach (var nested in nestedTypes)
                 {
-                    ProcessType(nested, projectRoot, filters, pointsByFile, visitedTypes);
+                    result.AddRange(GetAllMethodsAndConstructorsRecursive(nested, visitedTypes));
                 }
+            }
+
+            return result;
+        }
+
+        internal static void ProcessType(Type type, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile, HashSet<Type> visitedTypes)
+        {
+            var methods = GetAllMethodsAndConstructorsRecursive(type, visitedTypes);
+            foreach (var m in methods)
+            {
+                ProcessMethod(m, projectRoot, filters, pointsByFile);
             }
         }
 
