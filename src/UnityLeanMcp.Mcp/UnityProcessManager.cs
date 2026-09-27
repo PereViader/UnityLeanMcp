@@ -27,6 +27,7 @@ public class UnityProcessManager : IUnityProcessManager
     // deterministic in lifecycle tests without adding process concerns to the
     // public manager contract.
     internal Func<ProcessStartInfo, Process?>? ProcessStarter { get; init; }
+    internal string? LaunchMode { get; init; }
 
     public IUnityPathResolver PathResolver => _pathResolver;
     public IUnityExecutableLocator ExecutableLocator => _executableLocator;
@@ -723,6 +724,27 @@ public class UnityProcessManager : IUnityProcessManager
 
     public string? GetProjectEditorVersion() => (_executableLocator as UnityExecutableLocator)?.GetProjectEditorVersion();
 
+    internal string DetermineLaunchMode()
+    {
+        if (!string.IsNullOrWhiteSpace(LaunchMode))
+        {
+            return string.Equals(LaunchMode, "Batchmode", StringComparison.OrdinalIgnoreCase) ? "Batchmode" : "GUI";
+        }
+
+        string? batchmodeEnv = Environment.GetEnvironmentVariable("UNITY_BATCHMODE");
+        if (!string.IsNullOrWhiteSpace(batchmodeEnv))
+        {
+            return IsTruthy(batchmodeEnv) ? "Batchmode" : "GUI";
+        }
+
+        return "GUI";
+    }
+
+    private static bool IsTruthy(string value) =>
+        string.Equals(value, "1", StringComparison.Ordinal) ||
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Ensures the project has a live Unity socket, auto-starting Unity in interactive mode only when
     /// no project-scoped endpoint responds to PING and process discovery finds no existing Editor.
@@ -785,8 +807,10 @@ public class UnityProcessManager : IUnityProcessManager
         }
 
         string unityExe = locatorResult.ExecutablePath!;
+        string launchMode = DetermineLaunchMode();
+        bool isBatchmode = string.Equals(launchMode, "Batchmode", StringComparison.OrdinalIgnoreCase);
 
-        _logger.LogInformation("Auto-starting Unity Editor in interactive mode from '{UnityExe}'...", unityExe);
+        _logger.LogInformation("Auto-starting Unity Editor in {Mode} mode from '{UnityExe}'...", isBatchmode ? "batchmode" : "interactive", unityExe);
 
         Directory.CreateDirectory(_pathResolver.TempDir);
         try { File.Delete(_pathResolver.LogFile); } catch { }
@@ -813,10 +837,12 @@ public class UnityProcessManager : IUnityProcessManager
         var psi = new ProcessStartInfo
         {
             FileName = unityExe,
-            Arguments = $"-projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\"",
+            Arguments = isBatchmode
+                ? $"-batchmode -nographics -projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\""
+                : $"-projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\"",
             WorkingDirectory = projectRootArg,
             UseShellExecute = false,
-            CreateNoWindow = false
+            CreateNoWindow = isBatchmode
         };
 
         Process proc;
@@ -837,7 +863,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // files atomically. If the host crashes between those
                 // publications, IsUnityRunning can recover from the sidecar
                 // alone; a reused PID cannot satisfy its identity.
-                _processIdentityStore.Write(proc, unityExe, _pathResolver.ProjectRoot, "GUI");
+                _processIdentityStore.Write(proc, unityExe, _pathResolver.ProjectRoot, isBatchmode ? "Batchmode" : "GUI");
                 WriteTextAtomically(_pathResolver.PidFile, proc.Id.ToString());
             }
             catch (Exception ex)

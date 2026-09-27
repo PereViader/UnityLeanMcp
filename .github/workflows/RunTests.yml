@@ -108,6 +108,7 @@ jobs:
       - name: Run tests
         env:
           USE_UNITY_EDITOR_WRAPPER: true
+          UNITY_BATCHMODE: true
         run: |
           dotnet test src/UnityLeanMcp.Mcp.Tests/UnityLeanMcp.Mcp.Tests.csproj
 

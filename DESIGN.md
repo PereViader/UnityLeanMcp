@@ -152,13 +152,17 @@ Before process discovery or auto-start, `UnityProcessManager` probes the port re
 
 `UnityExecutableLocator` validates every configured, Unity Hub, and PATH candidate before returning it. Configured directory paths (e.g. `UNITY_PATH=/opt/unity` in containerized environments) automatically probe nested Editor binaries (`Editor/Unity`, `Unity`, `Editor/Unity.exe`, `Unity.exe`, `Unity.app/Contents/MacOS/Unity`) before evaluation. Validation uses the installed Editor layout rather than the executable filename alone: macOS candidates must be the binary inside `Unity.app/Contents/MacOS` with the managed `UnityEditor.dll` present, while Windows and Linux candidates must have the corresponding `Data/Managed/UnityEditor.dll` (or `UnityEngine.dll`) installation marker. POSIX candidates must also have an execute bit. This rejects same-named Unity CLI binaries and shims without executing untrusted candidates, and discovery preserves an actionable rejection diagnostic for auto-start failures. Discovery returns a strongly-typed immutable `UnityLocatorResult` (`ExecutablePath`, `Diagnostic`, `Success`) rather than mutating shared state or exposing mutable diagnostic properties on `IUnityExecutableLocator` (`LastDiagnostic`). This ensures atomic delivery of path or failure reasons, eliminates temporal coupling, and guarantees thread-safety when registered as a singleton service.
 
-### Interactive Mode Auto-Start
+### Interactive Mode Auto-Start & Explicit Batchmode Configuration
 
-`UnityProcessManager.EnsureUnityRunningAsync` auto-starts Unity in normal interactive GUI mode (`-projectPath "<path>" -logFile "<tempLog>"`) rather than headless batchmode (`-batchmode -nographics`).
-- **Inspectability & Developer Experience**: Auto-starting in normal interactive mode provides developers with full visibility into Unity's state via the Unity Console, Hierarchy, Inspector, Scene view, PlayMode rendering, and Profiler.
+`UnityProcessManager.EnsureUnityRunningAsync` auto-starts Unity in normal interactive GUI mode (`-projectPath "<path>" -logFile "<tempLog>"`) by default, and supports explicit configuration for headless batchmode (`-batchmode -nographics`):
+- **Inspectability & Developer Experience**: Auto-starting in normal interactive mode provides desktop developers with full visibility into Unity's state via the Unity Console, Hierarchy, Inspector, Scene view, PlayMode rendering, and Profiler.
 - **Lock Contention Elimination**: Prevents hidden background processes from holding `Temp/UnityLockfile` and colliding with user attempts to open the project in Unity Hub.
 - **Diagnostic Log Retention**: Passing `-logFile` to point to `Temp/unity_background_log.txt` preserves centralized transient storage under `Temp/` and allows `WaitForSocketReadinessAsync` to monitor early compilation and startup errors deterministically.
-- **Durable Process Mode Recording**: The identity sidecar (`.identity.json`) explicitly persists `Mode: "GUI"` (or `"Batchmode"` if launched externally/custom), ensuring termination protections in `UnityProcessManager.StopUnityAsync(force: true)` protect interactive auto-started sessions against accidental shutdown.
+- **Durable Process Mode Recording**: The identity sidecar (`.identity.json`) explicitly persists `Mode: "GUI"` (for interactive desktop auto-starts) or `Mode: "Batchmode"` (for headless/container environments or explicit configuration), ensuring termination protections in `UnityProcessManager.StopUnityAsync(force: true)` protect interactive auto-started sessions against accidental shutdown.
+- **Explicit Configuration over Heuristic Detection**: Heuristic detection of CI or headless environments (e.g. inspecting `DISPLAY` or `WAYLAND_DISPLAY` or checking CI variables) is intentionally avoided because it is unreliable across varying runner configurations, virtual displays (such as Xvfb), Docker containers, and SSH sessions. Instead, launch mode is configured explicitly via a single environment variable:
+  - When `UNITY_BATCHMODE` is set (`true`, `1`, `yes`), Unity auto-starts in headless batchmode (`-batchmode -nographics`) with `CreateNoWindow = true`.
+  - In all other cases (e.g. desktop developer machines), it defaults to normal interactive GUI mode.
+  - Programmatic property `UnityProcessManager.LaunchMode` is available internally for unit testing.
 
 ---
 

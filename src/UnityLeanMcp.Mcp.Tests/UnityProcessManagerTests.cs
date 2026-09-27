@@ -330,6 +330,7 @@ public class UnityProcessManagerTests
                 socketTransport: new DiscoverySocketTransport(isReady: false),
                 executableLocator: new FixedExecutableLocator())
             {
+                LaunchMode = "GUI",
                 ProcessStarter = psi =>
                 {
                     capturedPsi = psi;
@@ -361,6 +362,106 @@ public class UnityProcessManagerTests
             }
             catch { }
             try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_AutoStartsInBatchmodeWhenConfigured()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_batchmode_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Temp"));
+        int dummyPid = 0;
+
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            ProcessStartInfo? capturedPsi = null;
+            var dummyProc = StartDummyProcess();
+            dummyPid = dummyProc.Id;
+            using var cts = new CancellationTokenSource();
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: new DiscoverySocketTransport(isReady: false),
+                executableLocator: new FixedExecutableLocator())
+            {
+                LaunchMode = "Batchmode",
+                ProcessStarter = psi =>
+                {
+                    capturedPsi = psi;
+                    cts.Cancel();
+                    return dummyProc;
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cts.Token));
+
+            Assert.NotNull(capturedPsi);
+            Assert.Contains("-batchmode", capturedPsi!.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("-nographics", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("-projectPath", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("-logFile", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.True(capturedPsi.CreateNoWindow);
+
+            var store = new FileUnityProcessIdentityStore(resolver.PidFile);
+            Assert.True(store.TryRead(out var identity));
+            Assert.Equal("Batchmode", identity.Mode);
+            Assert.Equal(dummyPid, identity.ProcessId);
+        }
+        finally
+        {
+            try
+            {
+                using var p = Process.GetProcessById(dummyPid);
+                if (!p.HasExited) p.Kill(true);
+            }
+            catch { }
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void DetermineLaunchMode_RespectsExplicitAndEnvironmentConfiguration()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_mode_" + Guid.NewGuid().ToString("N"));
+        var resolver = new UnityPathResolver(projectRoot);
+
+        // 1. Explicit LaunchMode property overrides environment
+        var managerGui = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance)
+        {
+            LaunchMode = "GUI"
+        };
+        Assert.Equal("GUI", managerGui.DetermineLaunchMode());
+
+        var managerBatch = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance)
+        {
+            LaunchMode = "Batchmode"
+        };
+        Assert.Equal("Batchmode", managerBatch.DetermineLaunchMode());
+
+        // 2. UNITY_BATCHMODE environment variable
+        string? origBatch = Environment.GetEnvironmentVariable("UNITY_BATCHMODE");
+        try
+        {
+            Environment.SetEnvironmentVariable("UNITY_BATCHMODE", "true");
+            var pmEnv = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+            Assert.Equal("Batchmode", pmEnv.DetermineLaunchMode());
+
+            Environment.SetEnvironmentVariable("UNITY_BATCHMODE", "1");
+            Assert.Equal("Batchmode", pmEnv.DetermineLaunchMode());
+
+            Environment.SetEnvironmentVariable("UNITY_BATCHMODE", "yes");
+            Assert.Equal("Batchmode", pmEnv.DetermineLaunchMode());
+
+            Environment.SetEnvironmentVariable("UNITY_BATCHMODE", "false");
+            Assert.Equal("GUI", pmEnv.DetermineLaunchMode());
+
+            Environment.SetEnvironmentVariable("UNITY_BATCHMODE", null);
+            Assert.Equal("GUI", pmEnv.DetermineLaunchMode());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("UNITY_BATCHMODE", origBatch);
         }
     }
 

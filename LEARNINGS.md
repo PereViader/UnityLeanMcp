@@ -213,6 +213,15 @@ Shared history files are non-authoritative snapshots, not part of the operation'
 
 The `File.Move(source, destination, overwrite)` overload is not available in the Unity 2021.3-compatible API surface. For Editor-only shared-history publishing, use the platform-native move-overwrite operations (`MoveFileEx` on Windows and `rename` on Unix-like systems) so the package retains best-effort atomic replacement semantics without depending on a newer .NET API.
 
+### Headless Auto-Start in Containers vs. Heuristic Environment Detection
+
+On Linux, the Unity Editor in normal interactive mode depends on an active X11 or Wayland display server (`DISPLAY` or `WAYLAND_DISPLAY`). In containerized environments (such as Docker, GitHub Actions CI runners, or remote headless servers), no X server is available by default, causing GTK to fail immediately: `Error opening default X display. You must have a valid X server running. (Unity:...): Gtk-WARNING **: cannot open display:`.
+- **Heuristic Detection is Unreliable**: Attempting to auto-detect whether an environment is headless or CI by checking `DISPLAY`, `WAYLAND_DISPLAY`, or common CI environment variables (`CI`, `GITHUB_ACTIONS`) is inherently unreliable. Virtual displays (such as Xvfb), SSH terminal sessions, devcontainers, and custom test rigs easily mislead heuristics into choosing the wrong mode.
+- **Explicit Configuration over Detection**: Instead of heuristic guessing, `UnityProcessManager` relies strictly on explicit configuration via the `UNITY_BATCHMODE` environment variable:
+  - Setting `UNITY_BATCHMODE: true` in GitHub Actions workflow steps or runner environments launches Unity with `-batchmode -nographics` and `CreateNoWindow = true`.
+  - When unset, Unity defaults to normal interactive GUI mode for full inspector and console visibility.
+  - Using a single environment variable avoids filesystem search overhead, JSON configuration schemas, and argument plumbing across tools.
+
 ---
 
 ## 4. Unity Test Framework Quirks

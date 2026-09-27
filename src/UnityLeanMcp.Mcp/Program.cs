@@ -26,6 +26,7 @@ if (args.Contains("--help") || args.Contains("-h"))
     Console.WriteLine("  UNITY_LEAN_MCP_PROJECT_ROOT  Path to Unity project root directory.");
     Console.WriteLine("  UNITY_PATH                   Path to Unity Editor executable.");
     Console.WriteLine("  UNITY_EDITOR                 Path to Unity Editor executable.");
+    Console.WriteLine("  UNITY_BATCHMODE              Auto-start Unity in headless batchmode (true/1).");
     return 0;
 }
 
