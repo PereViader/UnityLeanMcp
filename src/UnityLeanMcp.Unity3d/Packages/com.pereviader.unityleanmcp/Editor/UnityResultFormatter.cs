@@ -18,7 +18,7 @@ namespace UnityLeanMcp
         public const int DefaultMaxDepth = 32;
         public const int DefaultMaxItems = 100;
         public const int DefaultMaxOutputCharacters = 64 * 1024;
-        public const int DefaultMaxOutputBytes = 256 * 1024;
+        public const int DefaultMaxOutputBytes = 64 * 1024;
 
         internal const string CycleTruncationMarker = "... (truncated: cycle detected)";
         internal const string DepthTruncationMarker = "... (truncated: maximum depth reached)";
@@ -470,6 +470,7 @@ namespace UnityLeanMcp
             s_Entries.Add(new FormatterEntry(new SceneFormatter(70), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new SerializedObjectFormatter(60), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new SerializedPropertyFormatter(50), ++s_OrderCounter));
+            s_Entries.Add(new FormatterEntry(new AnonymousTypeFormatter(45), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new EnumerableFormatter(40), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new UnityMathFormatter(35), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new JsonUtilityFallbackFormatter(-1000), ++s_OrderCounter));
@@ -702,13 +703,13 @@ namespace UnityLeanMcp
                             ? prop.enumNames[prop.enumValueIndex]
                             : prop.enumValueIndex.ToString();
                     case SerializedPropertyType.Vector2:
-                        return prop.vector2Value.ToString();
+                        return prop.vector2Value.ToString("F2", CultureInfo.InvariantCulture);
                     case SerializedPropertyType.Vector3:
-                        return prop.vector3Value.ToString();
+                        return prop.vector3Value.ToString("F2", CultureInfo.InvariantCulture);
                     case SerializedPropertyType.Vector4:
-                        return prop.vector4Value.ToString();
+                        return prop.vector4Value.ToString("F2", CultureInfo.InvariantCulture);
                     case SerializedPropertyType.Rect:
-                        return prop.rectValue.ToString();
+                        return prop.rectValue.ToString("F2", CultureInfo.InvariantCulture);
                     case SerializedPropertyType.ArraySize:
                         return prop.intValue.ToString();
                     case SerializedPropertyType.Character:
@@ -740,7 +741,9 @@ namespace UnityLeanMcp
             if (value is Transform t)
             {
                 if (t == null) return "null (Transform)";
-                return $"Transform \"{t.name}\" [children: {t.childCount}, localPos: {t.localPosition}, localRot: {t.localEulerAngles}]";
+                string pos = t.localPosition.ToString("F2", CultureInfo.InvariantCulture);
+                string rot = t.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
+                return $"Transform \"{t.name}\" [children: {t.childCount}, localPos: {pos}, localRot: {rot}]";
             }
             return null;
         }
@@ -883,7 +886,15 @@ namespace UnityLeanMcp
         {
             if (value is SerializedObject serializedObj)
             {
-                return $"SerializedObject on \"{serializedObj.targetObject?.name}\" ({serializedObj.targetObject?.GetType().Name})";
+                try
+                {
+                    var target = serializedObj.targetObject;
+                    return $"SerializedObject on \"{target?.name}\" ({target?.GetType().Name})";
+                }
+                catch
+                {
+                    return "SerializedObject (targetObject disposed or inaccessible)";
+                }
             }
             return null;
         }
@@ -916,6 +927,71 @@ namespace UnityLeanMcp
                     : $"SerializedProperty \"{prop.propertyPath}\" ({prop.propertyType})";
             }
             return null;
+        }
+
+        public override bool Equals(object obj) =>
+            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
+
+        public override int GetHashCode() =>
+            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
+    }
+
+    public class AnonymousTypeFormatter : IUnityTypeFormatter
+    {
+        public int Priority { get; }
+
+        public AnonymousTypeFormatter(int priority = 45)
+        {
+            Priority = priority;
+        }
+
+        public bool CanFormat(object value)
+        {
+            if (value == null) return false;
+            var type = value.GetType();
+            return type.IsSealed &&
+                   type.Namespace == null &&
+                   type.Name.Contains("AnonymousType") &&
+                   type.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false);
+        }
+
+        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
+        {
+            var type = value.GetType();
+            var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            if (props.Length == 0) return "{}";
+
+            var sb = new StringBuilder();
+            if (prettyPrint)
+            {
+                sb.AppendLine("{");
+                for (int i = 0; i < props.Length; i++)
+                {
+                    var prop = props[i];
+                    object propVal = null;
+                    try { propVal = prop.GetValue(value, null); } catch (Exception ex) { propVal = $"<error: {ex.Message}>"; }
+                    string childStr = formatChild != null ? formatChild(propVal) : UnityResultFormatter.FormatResult(propVal, false, prettyPrint);
+                    sb.Append("  ").Append(prop.Name).Append(" = ").Append(childStr);
+                    if (i < props.Length - 1) sb.Append(",");
+                    sb.AppendLine();
+                }
+                sb.Append("}");
+            }
+            else
+            {
+                sb.Append("{ ");
+                for (int i = 0; i < props.Length; i++)
+                {
+                    var prop = props[i];
+                    object propVal = null;
+                    try { propVal = prop.GetValue(value, null); } catch (Exception ex) { propVal = $"<error: {ex.Message}>"; }
+                    string childStr = formatChild != null ? formatChild(propVal) : UnityResultFormatter.FormatResult(propVal, false, prettyPrint);
+                    sb.Append(prop.Name).Append(" = ").Append(childStr);
+                    if (i < props.Length - 1) sb.Append(", ");
+                }
+                sb.Append(" }");
+            }
+            return sb.ToString();
         }
 
         public override bool Equals(object obj) =>

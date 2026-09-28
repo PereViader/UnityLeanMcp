@@ -12,6 +12,9 @@ namespace UnityLeanMcpTests
 
         [TestCase(".", "")]
         [TestCase("./", "")]
+        [TestCase("C:/Code/MyUnityProject", "")]
+        [TestCase("C:/Code/MyUnityProject/", "")]
+        [TestCase("C:\\Code\\MyUnityProject", "")]
         [TestCase("Assets/Scripts/Player.cs", "Assets/Scripts/Player.cs")]
         [TestCase("Assets\\Scripts\\Player.cs", "Assets/Scripts/Player.cs")]
         [TestCase("/Assets/Scripts/Player.cs", "Assets/Scripts/Player.cs")]
@@ -22,6 +25,18 @@ namespace UnityLeanMcpTests
         {
             string actual = GetCoverageHandler.NormalizePathRelativeToProject(input, DummyProjectRoot);
             Assert.That(actual, Is.EqualTo(expected));
+        }
+
+        [TestCase("2021.3.15f1", false)]
+        [TestCase("2022.3.20f1", false)]
+        [TestCase("6000.0.1f1", false)]
+        [TestCase("6000.6.9f1", false)]
+        [TestCase("6000.7.0f1", true)]
+        [TestCase("6000.8.0f1", true)]
+        [TestCase("7000.0.0f1", true)]
+        public void IsPlayModeCoverageSupported_EvaluatesUnityVersionsCorrectly(string version, bool expected)
+        {
+            Assert.That(RunTestsHandler.IsPlayModeCoverageSupported(version), Is.EqualTo(expected));
         }
 
         [Test]

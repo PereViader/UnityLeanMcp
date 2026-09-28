@@ -80,14 +80,41 @@ namespace UnityLeanMcp
                 }
             }
 
+            string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
+
+            // Validate that requested paths exist on disk before querying runtime stats
+            var nonExistentPaths = new List<string>();
+            foreach (var rawPath in args.paths)
+            {
+                if (!TryResolveExistingPath(rawPath, projectRoot, out _))
+                {
+                    string trimmed = rawPath.Trim();
+                    if (!nonExistentPaths.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                    {
+                        nonExistentPaths.Add(trimmed);
+                    }
+                }
+            }
+
+            if (nonExistentPaths.Count > 0)
+            {
+                if (nonExistentPaths.Count == 1)
+                {
+                    writer.WriteLine($"FAILURE Path does not exist: '{nonExistentPaths[0]}'.");
+                }
+                else
+                {
+                    writer.WriteLine($"FAILURE Specified paths do not exist: {string.Join(", ", nonExistentPaths.Select(p => $"'{p}'"))}.");
+                }
+                return;
+            }
+
             var coveredStats = Coverage.GetStatsForAllCoveredMethods();
             if (coveredStats == null || coveredStats.Length == 0)
             {
                 writer.WriteLine("FAILURE No coverage data recorded. Run 'unity_test' with coverage: true first.");
                 return;
             }
-
-            string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
 
             // Normalize requested filter paths
             var normalizedFilters = new List<string>();
@@ -107,29 +134,6 @@ namespace UnityLeanMcp
             if (normalizedFilters.Count == 0)
             {
                 writer.WriteLine("ERROR: No valid paths provided");
-                return;
-            }
-
-            // Validate that requested paths exist on disk
-            var nonExistentPaths = new List<string>();
-            foreach (var rawPath in args.paths)
-            {
-                if (!TryResolveExistingPath(rawPath, projectRoot, out _))
-                {
-                    nonExistentPaths.Add(rawPath.Trim());
-                }
-            }
-
-            if (nonExistentPaths.Count > 0)
-            {
-                if (nonExistentPaths.Count == 1)
-                {
-                    writer.WriteLine($"FAILURE Path does not exist: '{nonExistentPaths[0]}'.");
-                }
-                else
-                {
-                    writer.WriteLine($"FAILURE Specified paths do not exist: {string.Join(", ", nonExistentPaths.Select(p => $"'{p}'"))}.");
-                }
                 return;
             }
 
@@ -226,10 +230,10 @@ namespace UnityLeanMcp
                 int totalPoints = points.Count;
                 int coveredPoints = points.Count(p => p.hitCount > 0);
 
-                // Group points by line. A line is uncovered if none of its sequence points was hit.
+                // Group points by line. A line is uncovered if any of its sequence points was not hit.
                 var linesWithPoints = points.GroupBy(p => p.line);
                 var uncoveredLines = linesWithPoints
-                    .Where(g => g.All(p => p.hitCount == 0))
+                    .Where(g => g.Any(p => p.hitCount == 0))
                     .Select(g => (int)g.Key)
                     .OrderBy(l => l)
                     .ToArray();
@@ -259,10 +263,13 @@ namespace UnityLeanMcp
                 {
                     if (!reports.Any(r => r.path.Equals(filter, StringComparison.OrdinalIgnoreCase)))
                     {
-                        string fullPath = Path.Combine(projectRoot, filter);
-                        if (File.Exists(fullPath))
+                        if (!IsPathRootedCrossPlatform(filter))
                         {
-                            reports.Add(CreateEmptyFileReport(filter));
+                            string fullPath = Path.Combine(projectRoot, filter);
+                            if (File.Exists(fullPath))
+                            {
+                                reports.Add(CreateEmptyFileReport(filter));
+                            }
                         }
                     }
                 }
@@ -292,9 +299,17 @@ namespace UnityLeanMcp
         {
             if (string.IsNullOrEmpty(path)) return "";
             string p = path.Trim().Replace('\\', '/');
-            if (p.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            string normRoot = (projectRoot ?? "").Replace('\\', '/').TrimEnd('/');
+            if (!string.IsNullOrEmpty(normRoot))
             {
-                p = p.Substring(projectRoot.Length);
+                if (p.Equals(normRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    return "";
+                }
+                if (p.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    p = p.Substring(normRoot.Length + 1);
+                }
             }
             if (p.StartsWith("./"))
                 p = p.Substring(2);
@@ -325,14 +340,20 @@ namespace UnityLeanMcp
                 return false;
 
             string trimmed = rawPath.Trim();
+            string normRoot = (projectRoot ?? "").Replace('\\', '/').TrimEnd('/');
             try
             {
                 if (IsPathRootedCrossPlatform(trimmed))
                 {
                     fullPath = Path.GetFullPath(trimmed);
-                    if (File.Exists(fullPath) || Directory.Exists(fullPath))
+                    string normFull = fullPath.Replace('\\', '/');
+                    if (normFull.Equals(normRoot, StringComparison.OrdinalIgnoreCase) ||
+                        normFull.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase))
                     {
-                        return true;
+                        if (File.Exists(fullPath) || Directory.Exists(fullPath))
+                        {
+                            return true;
+                        }
                     }
 
                     // If a leading slash was used (e.g. "/Assets/Scripts"), check relative to projectRoot

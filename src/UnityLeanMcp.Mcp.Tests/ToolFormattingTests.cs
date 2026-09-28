@@ -1399,6 +1399,84 @@ public class ToolFormattingTests
     }
 
     [Fact]
+    public async Task UnityRunTests_PreExecutionFailure_PrioritizesFailureOverFilterMessage()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = false,
+                PassCount = 0,
+                FailCount = 0,
+                SkipCount = 0,
+                Message = "Test framework initialization failed."
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["SomeFilter"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Test run failed: Test framework initialization failed.", text);
+            Assert.DoesNotContain("No tests found matching filter", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_FailedOnly_ZeroTests_ReportsNoPreviouslyFailedTestsFound()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                PassCount = 0,
+                FailCount = 0,
+                SkipCount = 0
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, failedOnly: true);
+
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No previously failed tests found.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_InterruptedWithCancelledState_ReportsInterrupted()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                ResultState = "Cancelled",
+                Message = "Cancelled by user"
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Test run interrupted: Cancelled by user", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task UnityRunTests_ArrayParameters_PassThroughToClient()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
@@ -1948,6 +2026,56 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
+    public void ParseCompilerDiagnostics_NonCsErrors_ShaderAndMissingScript_ParsesSuccessfully()
+    {
+        string text = "Assets/Shaders/Water.shader(45): error undeclared identifier 'foo'\n" +
+                      "Assets/Prefabs/Player.prefab: error The referenced script on this Behaviour is missing!";
+
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Equal(2, diagnostics.Count);
+
+        Assert.Equal("Assets/Shaders/Water.shader", diagnostics[0].File);
+        Assert.Equal(45, diagnostics[0].Line);
+        Assert.Equal(0, diagnostics[0].Column);
+        Assert.Equal("error", diagnostics[0].Severity);
+        Assert.Equal("", diagnostics[0].Code);
+        Assert.Equal("undeclared identifier 'foo'", diagnostics[0].Message);
+
+        Assert.Equal("Assets/Prefabs/Player.prefab", diagnostics[1].File);
+        Assert.Equal(0, diagnostics[1].Line);
+        Assert.Equal(0, diagnostics[1].Column);
+        Assert.Equal("error", diagnostics[1].Severity);
+        Assert.Equal("", diagnostics[1].Code);
+        Assert.Equal("The referenced script on this Behaviour is missing!", diagnostics[1].Message);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_NonCsError_GeneratesClickableFileUri()
+    {
+        string text = "Assets/Shaders/Water.shader(45): error undeclared identifier 'foo'";
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Refresh failed.",
+            isSuccess: false);
+
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'foo'", formatted);
+        Assert.Contains("Refresh failed.", formatted);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_StackTraceWithPackageVersionAndHash_ExtractsCorrectLocation()
+    {
+        string stackTrace = "  at PackageNamespace.Class.Method () [0x00001] in Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs:42";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Code/MyProject");
+
+        Assert.Equal("Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs", file);
+        Assert.Equal(42, line);
+        Assert.Contains("file:///C:/Code/MyProject/Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs#L42", uri);
+    }
+
+    [Fact]
     public void FormatCompilerDiagnostics_WhenRawTextIsOversized_PreservesSuccessTrailerWithinLimit()
     {
         string diagnosticText = new string('r', McpOutputLimits.MaxFormattedOutputCharacters * 2);
@@ -2210,6 +2338,31 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             int err1Idx = text.IndexOf("Error1.cs#L10");
             Assert.True(warn1Idx < err1Idx, "Warnings must appear before Errors");
 
+            Assert.EndsWith("Error: Unity compilation failed.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRefresh_MessageContainingBusyIdentifier_DoesNotBypassCompilerDiagnosticFormatting()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.RefreshResultToReturn = new UnityRefreshResult
+            {
+                Success = false,
+                Message = "Assets/Scripts/Worker.cs(10,5): error CS0103: The name 'busy' does not exist in the current context"
+            };
+
+            var result = await tools.UnityRefreshAsync();
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Assets/Scripts/Worker.cs#L10: error CS0103", text);
             Assert.EndsWith("Error: Unity compilation failed.", text);
         }
         finally

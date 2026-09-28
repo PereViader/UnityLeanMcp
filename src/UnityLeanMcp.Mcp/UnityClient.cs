@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -559,6 +560,7 @@ public class UnityClient : IUnityClient
             resultMatcher: (r, opId) => r.OperationId == opId,
             pollExecutor: (opId, resultFile, ct) =>
             {
+                var evalSw = Stopwatch.StartNew();
                 var spec = new OperationPollingSpec<UnityEvalResult>
                 {
                     OperationId = opId,
@@ -569,13 +571,26 @@ public class UnityClient : IUnityClient
                     PollCommand = $"POLL_EVAL {opId}",
                     PollTimeoutSeconds = 5,
                     PollIntervalMs = 500,
-                    RequireDurableResult = true
+                    RequireDurableResult = true,
+                    OnPollTick = _ =>
+                    {
+                        if (progress != null && evalSw.ElapsedMilliseconds >= 1000)
+                        {
+                            progress.Report(new ProgressNotificationValue
+                            {
+                                Progress = 50,
+                                Total = 100,
+                                Message = $"Executing evaluation ({(evalSw.ElapsedMilliseconds / 1000.0):F0}s elapsed)..."
+                            });
+                        }
+                        return Task.CompletedTask;
+                    }
                 };
 
                 return _operationPoller.PollOperationUntilTerminalAsync(spec, ct);
             },
             progress: progress,
-            initialProgressMessage: null,
+            initialProgressMessage: "Executing evaluation...",
             onImmediateResult: null,
             cancellationToken: cancellationToken);
     }

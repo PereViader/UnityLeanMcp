@@ -28,11 +28,11 @@ public class DiagnosticFormatter : IDiagnosticFormatter
     public static IDiagnosticFormatter Default { get; } = new DiagnosticFormatter();
 
     private static readonly Regex s_StackTraceRegex = new(
-        @"(?:(?:in|\bat\b|\()\s*)?(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-]+[\\/])[^:\r\n()]+):(?:line\s+)?(?<line>\d+)\)?",
+        @"(?:(?:in|\bat\b|\()\s*)?(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+]+[\\/])[^:\r\n()]+):(?:line\s+)?(?<line>\d+)\)?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex s_CompilerDiagnosticRegex = new(
-        @"^(?<file>.+?)\((?<line>\d+),(?<col>\d+)\):\s*(?<severity>error|warning)\s+(?<code>[A-Z0-9]+):\s*(?<msg>.+)$",
+        @"^(?<file>.+?)(?:\((?<line>\d+)(?:,(?<col>\d+))?\))?:\s*(?<severity>error|warning)\s*(?:(?<code>[A-Z0-9]+):\s*)?(?<msg>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static bool IsPathRootedCrossPlatform(string? path)
@@ -331,13 +331,17 @@ public class DiagnosticFormatter : IDiagnosticFormatter
                 var match = s_CompilerDiagnosticRegex.Match(entry.Trim());
                 if (match.Success)
                 {
+                    int diagLine = match.Groups["line"].Success ? int.Parse(match.Groups["line"].Value) : 0;
+                    int column = match.Groups["col"].Success ? int.Parse(match.Groups["col"].Value) : 0;
+                    string code = match.Groups["code"].Success ? match.Groups["code"].Value : "";
+
                     diagnostics.Add(new StructuredCompilerDiagnostic
                     {
                         File = match.Groups["file"].Value,
-                        Line = int.Parse(match.Groups["line"].Value),
-                        Column = int.Parse(match.Groups["col"].Value),
+                        Line = diagLine,
+                        Column = column,
                         Severity = match.Groups["severity"].Value.ToLowerInvariant(),
-                        Code = match.Groups["code"].Value,
+                        Code = code,
                         Message = match.Groups["msg"].Value.Trim(),
                         Assembly = null
                     });

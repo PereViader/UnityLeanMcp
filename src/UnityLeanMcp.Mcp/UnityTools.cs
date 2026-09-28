@@ -74,7 +74,7 @@ public class UnityTools
                     : interruptedMessage;
                 sb.Append(msg);
             }
-            else if (result.Message?.Contains("busy", StringComparison.OrdinalIgnoreCase) == true)
+            else if (result.Message?.StartsWith("Unity is busy", StringComparison.OrdinalIgnoreCase) == true)
             {
                 sb.Append(result.Message);
             }
@@ -196,11 +196,12 @@ public class UnityTools
 
     private static readonly Regex s_CommonUnityTypesRegex = new(
         @"\b(" +
-        "GameObject|Transform|Vector2|Vector3|Vector4|Quaternion|Color|Color32|Bounds|Rect|" +
-        "Mathf|Time|Debug|Selection|AssetDatabase|EditorApplication|Component|MonoBehaviour|" +
-        "SceneManager|Object|ScriptableObject|Camera|Material|Mesh|Texture|Texture2D|Shader|" +
-        "Physics|Physics2D|Ray|RaycastHit|Input|Screen|Application|EditorUtility|PrefabUtility|" +
-        "Undo|Gizmos|Handles|EditorWindow" +
+        "GameObject|Transform|Vector2|Vector2Int|Vector3|Vector3Int|Vector4|Quaternion|Matrix4x4|" +
+        "Color|Color32|Bounds|BoundsInt|Rect|RectInt|Mathf|Time|Debug|Selection|AssetDatabase|" +
+        "EditorApplication|Component|MonoBehaviour|SceneManager|Object|ScriptableObject|Camera|" +
+        "Material|Mesh|Texture|Texture2D|RenderTexture|Sprite|Shader|Physics|Physics2D|Rigidbody|" +
+        "Rigidbody2D|Collider|Collider2D|Ray|RaycastHit|RaycastHit2D|Input|Screen|Application|" +
+        "EditorUtility|PrefabUtility|Undo|Gizmos|Handles|EditorWindow|AudioSource|AudioClip|Light" +
         @")\b",
         RegexOptions.Compiled);
 
@@ -308,7 +309,7 @@ public class UnityTools
             int totalTests = result.PassCount + result.FailCount + result.SkipCount;
             var failedTests = result.FailedTests ?? new List<FailedTestInfo>();
 
-            bool success = result.Success && result.FailCount == 0 && !(hasAnyFilter && totalTests == 0);
+            bool success = result.Success && result.FailCount == 0 && !(hasAnyFilter && totalTests == 0 && !failedOnly);
 
             output.Append(FormatTestOutcomeHeader(
                 result,
@@ -316,7 +317,8 @@ public class UnityTools
                 testNames,
                 groupNames,
                 categoryNames,
-                assemblyNames));
+                assemblyNames,
+                failedOnly));
 
             FormatTestFailures(output, failedTests, _pathResolver.ProjectRoot);
 
@@ -358,7 +360,8 @@ public class UnityTools
                 return Result(result.Message, isError: true);
             }
 
-            if (result.Files.Count == 0)
+            var files = result.Files ?? new List<CoverageFileResult>();
+            if (files.Count == 0)
             {
                 return Result("No compiled C# scripts found in the specified path(s).");
             }
@@ -370,10 +373,11 @@ public class UnityTools
             int aggregateTotalPoints = 0;
             int aggregateCoveredPoints = 0;
 
-            if (result.Files.Count > 1)
+            if (files.Count > 1)
             {
-                foreach (var file in result.Files)
+                foreach (var file in files)
                 {
+                    if (file == null) continue;
                     aggregateTotalPoints += file.TotalPoints;
                     aggregateCoveredPoints += file.CoveredPoints;
                 }
@@ -388,14 +392,15 @@ public class UnityTools
                     output.Append("/");
                     output.Append(aggregateTotalPoints.ToString());
                     output.Append(" points across ");
-                    output.Append(result.Files.Count.ToString());
+                    output.Append(files.Count.ToString());
                     output.AppendLine(" files)");
                     output.AppendLine();
                 }
             }
 
-            foreach (var file in result.Files)
+            foreach (var file in files)
             {
+                if (file == null) continue;
                 output.Append("• ");
                 output.Append(file.Path);
                 output.Append(": ");
@@ -479,7 +484,8 @@ public class UnityTools
         string[]? testNames,
         string[]? groupNames,
         string[]? categoryNames,
-        string[]? assemblyNames)
+        string[]? assemblyNames,
+        bool failedOnly = false)
     {
         if (result.ResultState == "CompileError")
         {
@@ -501,7 +507,11 @@ public class UnityTools
         bool hasAnyFilter = hasFilter || hasCategory || hasTestNames || hasAssemblyNames;
         int totalTests = result.PassCount + result.FailCount + result.SkipCount;
 
-        if (result.ResultState == "Interrupted")
+        bool isInterrupted = result.Interrupted ||
+            string.Equals(result.ResultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(result.ResultState, "Cancelled", StringComparison.OrdinalIgnoreCase);
+
+        if (isInterrupted)
         {
             headerOutput.Append("Test run interrupted: ");
             headerOutput.AppendTrimmedBounded(
@@ -510,14 +520,19 @@ public class UnityTools
                 McpOutputLimits.FailureMessageTruncationMarker);
             headerOutput.AppendLine();
         }
-        else if (!result.Success && !string.IsNullOrWhiteSpace(result.Message))
+        else if (!result.Success && totalTests == 0 && result.FailCount == 0)
         {
             headerOutput.Append("Test run failed: ");
+            string msg = !string.IsNullOrWhiteSpace(result.Message) ? result.Message : "Unknown runner error";
             headerOutput.AppendTrimmedBounded(
-                result.Message,
+                msg,
                 McpOutputLimits.MaxFailureMessageCharacters,
                 McpOutputLimits.FailureMessageTruncationMarker);
             headerOutput.AppendLine();
+        }
+        else if (failedOnly && totalTests == 0)
+        {
+            headerOutput.AppendLine("No previously failed tests found.");
         }
         else if (hasAnyFilter && totalTests == 0)
         {
@@ -577,7 +592,7 @@ public class UnityTools
                 headerOutput.AppendLine($"Tests Passed: {result.PassCount} passed{skipStr}.");
             }
         }
-        else if (result.Message?.Contains("busy", StringComparison.OrdinalIgnoreCase) == true)
+        else if (result.Message?.StartsWith("Unity is busy", StringComparison.OrdinalIgnoreCase) == true)
         {
             headerOutput.AppendTrimmedBounded(
                 result.Message,

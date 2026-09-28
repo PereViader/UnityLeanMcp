@@ -67,14 +67,16 @@ public class UnityTestRunResult : IOperationResult
     [JsonIgnore]
     public bool Interrupted
     {
-        get => ResultState == "Interrupted";
+        get => string.Equals(ResultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ResultState, "Cancelled", StringComparison.OrdinalIgnoreCase);
         set
         {
             if (value)
             {
                 ResultState = "Interrupted";
             }
-            else if (ResultState == "Interrupted")
+            else if (string.Equals(ResultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(ResultState, "Cancelled", StringComparison.OrdinalIgnoreCase))
             {
                 ResultState = Success ? "Passed" : (FailCount > 0 ? "Failed" : "");
             }

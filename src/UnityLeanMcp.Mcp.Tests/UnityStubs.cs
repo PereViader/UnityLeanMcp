@@ -51,3 +51,11 @@ namespace UnityEditor
         }
     }
 }
+
+namespace UnityLeanMcp
+{
+    internal static class UnityLeanMcpPaths
+    {
+        public static string ProjectRoot { get; set; } = System.IO.Directory.GetCurrentDirectory();
+    }
+}

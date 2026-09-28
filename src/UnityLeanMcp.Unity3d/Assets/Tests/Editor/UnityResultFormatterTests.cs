@@ -208,6 +208,46 @@ namespace UnityLeanMcpTests
             Assert.That(formatted, Is.EqualTo("... (truncated: maximum output size reached)"));
         }
 
+        [Test]
+        public void FormatResult_AnonymousType_FormatsPropertiesCleanly()
+        {
+            var value = new { Name = "Alice", Score = 42 };
+            string formatted = UnityResultFormatter.FormatResult(value, prettyPrint: true);
+
+            StringAssert.Contains("Name = Alice", formatted);
+            StringAssert.Contains("Score = 42", formatted);
+        }
+
+        [Test]
+        public void FormatResult_AnonymousType_PrettyPrintFalse_FormatsInline()
+        {
+            var value = new { Name = "Alice", Score = 42 };
+            string formatted = UnityResultFormatter.FormatResult(value, prettyPrint: false);
+
+            Assert.That(formatted, Is.EqualTo("{ Name = Alice, Score = 42 }"));
+        }
+
+        [Test]
+        public void FormatResult_AnonymousType_EmptyObject_ReturnsEmptyBraces()
+        {
+            var value = new { };
+            string formatted = UnityResultFormatter.FormatResult(value, prettyPrint: false);
+
+            Assert.That(formatted, Is.EqualTo("{}"));
+        }
+
+        [Test]
+        public void FormatResult_Vector3_UsesInvariantPeriodDecimalSeparator()
+        {
+            var v = new Vector3(1.5f, 2.75f, 3.25f);
+            string formatted = UnityResultFormatter.FormatResult(v, prettyPrint: false);
+
+            StringAssert.Contains("1.50", formatted);
+            StringAssert.Contains("2.75", formatted);
+            StringAssert.Contains("3.25", formatted);
+            StringAssert.DoesNotContain("1,50", formatted);
+        }
+
         private sealed class InfiniteEnumerable : IEnumerable
         {
             public IEnumerator GetEnumerator()

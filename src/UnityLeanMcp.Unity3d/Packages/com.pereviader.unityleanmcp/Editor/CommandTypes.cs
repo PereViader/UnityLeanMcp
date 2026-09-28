@@ -95,14 +95,16 @@ namespace UnityLeanMcp
         public bool Success { get => success; set => success = value; }
         public bool Interrupted
         {
-            get => resultState == "Interrupted";
+            get => string.Equals(resultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(resultState, "Cancelled", StringComparison.OrdinalIgnoreCase);
             set
             {
                 if (value)
                 {
                     resultState = "Interrupted";
                 }
-                else if (resultState == "Interrupted")
+                else if (string.Equals(resultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(resultState, "Cancelled", StringComparison.OrdinalIgnoreCase))
                 {
                     resultState = success ? "Passed" : (failCount > 0 ? "Failed" : "");
                 }

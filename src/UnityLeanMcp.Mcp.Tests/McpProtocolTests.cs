@@ -7,6 +7,7 @@ using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
+[Collection("UnityIntegration")]
 [Trait("Category", "UnityIntegration")]
 public class McpProtocolTests
 {

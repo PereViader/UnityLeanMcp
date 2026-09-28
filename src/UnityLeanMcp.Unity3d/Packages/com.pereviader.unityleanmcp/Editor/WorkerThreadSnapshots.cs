@@ -185,7 +185,9 @@ namespace UnityLeanMcp
             snapshot = new WorkerOperationResultSnapshot(
                 operationId,
                 GetBoolean(values, "success"),
-                GetBoolean(values, "interrupted") || string.Equals(GetString(values, "resultState"), "Interrupted", StringComparison.Ordinal),
+                GetBoolean(values, "interrupted") ||
+                string.Equals(GetString(values, "resultState"), "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(GetString(values, "resultState"), "Cancelled", StringComparison.OrdinalIgnoreCase),
                 GetString(values, "message"),
                 GetString(values, "payload"),
                 GetString(values, "resultState"),

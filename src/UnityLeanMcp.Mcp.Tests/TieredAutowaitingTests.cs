@@ -431,4 +431,100 @@ public class TieredAutowaitingTests
         Assert.Equal(8, result.Files[0].CoveredPoints);
         Assert.Equal(2, coverageAttempts);
     }
+
+    [Fact]
+    public async Task UnityClient_RefreshAsync_WhenBusyCompile_AutowaitsAndSucceeds()
+    {
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new Progress<ProgressNotificationValue>(p =>
+        {
+            lock (receivedProgress)
+            {
+                receivedProgress.Add(p);
+            }
+        });
+
+        int refreshAttempts = 0;
+        int compilePolls = 0;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (refreshAttempts == 1)
+                {
+                    if (compilePolls++ == 0)
+                    {
+                        return "COMPILING";
+                    }
+                    return null;
+                }
+                return null;
+            }
+            if (line.StartsWith("REFRESH"))
+            {
+                refreshAttempts++;
+                if (refreshAttempts == 1)
+                {
+                    return "BUSY compile";
+                }
+                else
+                {
+                    string[] parts = line.Split(' ');
+                    string opId = parts.Length > 1 ? parts[1] : "refresh-op";
+                    srv.WriteRefreshResult(opId, true);
+                    return "READY";
+                }
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.RefreshAsync(isRecompile: false, progress, cts.Token);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(2, refreshAttempts);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Compiling script assemblies"));
+        }
+    }
+
+    [Fact]
+    public async Task UnityClient_RefreshAsync_WhenBusyForeignOperation_ExpiresGracePeriod_FailsFastWithDiagnosticMessage()
+    {
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new Progress<ProgressNotificationValue>(p =>
+        {
+            lock (receivedProgress)
+            {
+                receivedProgress.Add(p);
+            }
+        });
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                return "BUSY test op_test_123";
+            }
+            if (line.StartsWith("REFRESH"))
+            {
+                return "BUSY test op_test_123";
+            }
+            return null;
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.RefreshAsync(isRecompile: false, progress, cts.Token);
+
+        Assert.False(result.Success);
+        Assert.Contains("Unity is busy executing 'test' (id: op_test_123). If this operation is hung, kill the Unity process owning this project to recover.", result.Message);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
+        }
+    }
 }

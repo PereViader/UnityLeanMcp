@@ -70,7 +70,7 @@ namespace UnityLeanMcp
                 if (cts.IsCancellationRequested)
                 {
                     OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, "Evaluation was canceled.", 0, null, null, interrupted: true);
-                    writer.WriteLine("FAILURE Evaluation was canceled.");
+                    writer.WriteLine($"INTERRUPTION {ProtocolCodec.EscapeLine("Evaluation was canceled.")}");
                     return;
                 }
 
@@ -79,7 +79,7 @@ namespace UnityLeanMcp
                 {
                     string msg = "The 'eval' command is not supported on this Unity version (" + status.UnsupportedReason + ")";
                     OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, msg, 0, null, null);
-                    writer.WriteLine($"FAILURE {msg}");
+                    writer.WriteLine($"FAILURE {ProtocolCodec.EscapeLine(msg)}");
                     return;
                 }
 
@@ -92,15 +92,14 @@ namespace UnityLeanMcp
                 {
                     string combinedErrors = string.Join("\n", errors);
                     OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, combinedErrors, 0, null, null);
-                    string singleLineErrors = string.Join(" | ", errors);
-                    writer.WriteLine($"FAILURE {singleLineErrors}");
+                    writer.WriteLine($"FAILURE {ProtocolCodec.EscapeLine(combinedErrors)}");
                     return;
                 }
 
                 if (cts.IsCancellationRequested)
                 {
                     OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, "Evaluation was canceled.", 0, null, null, interrupted: true);
-                    writer.WriteLine("FAILURE Evaluation was canceled.");
+                    writer.WriteLine($"INTERRUPTION {ProtocolCodec.EscapeLine("Evaluation was canceled.")}");
                     return;
                 }
 
@@ -140,6 +139,12 @@ namespace UnityLeanMcp
             {
                 Debug.LogError($"UnityLeanMcp: Unhandled exception during Eval: {ex}");
                 OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, ex.ToString(), 0, null, null);
+                try
+                {
+                    writer.WriteLine($"FAILURE {ProtocolCodec.EscapeLine(ex.Message)}");
+                    writer.Flush();
+                }
+                catch { }
             }
         }
 

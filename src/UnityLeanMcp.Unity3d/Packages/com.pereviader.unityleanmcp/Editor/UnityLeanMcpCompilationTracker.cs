@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -344,12 +345,31 @@ namespace UnityLeanMcp
             }
 
             WriteActiveErrorsToFile();
+            var diagnostics = GetCapturedDiagnosticsSnapshot();
+            bool hasErrors = EditorUtility.scriptCompilationFailed || diagnostics.Any(d => d.Contains(": error"));
+            if (!hasErrors)
+            {
+                string errorsPath = UnityLeanMcpPaths.DiagnosticsFile;
+                if (File.Exists(errorsPath))
+                {
+                    try
+                    {
+                        var lines = File.ReadAllLines(errorsPath);
+                        if (lines.Any(l => l.Contains(": error") || l.StartsWith("error ")))
+                        {
+                            hasErrors = true;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
             var result = new UnityRefreshResult
             {
                 operationId = operation.operationId,
-                success = !EditorUtility.scriptCompilationFailed,
+                success = !hasErrors,
                 interrupted = false,
-                message = EditorUtility.scriptCompilationFailed ? "Compilation failed" : ""
+                message = hasErrors ? "Compilation failed" : ""
             };
             string json = JsonUtility.ToJson(result, true);
             UnityLeanMcpOperationStore.WriteAtomic(
@@ -449,49 +469,53 @@ namespace UnityLeanMcp
             {
                 string errorsPath = UnityLeanMcpPaths.DiagnosticsFile;
                 var diagnostics = GetCapturedDiagnosticsSnapshot();
+                var seenDiagnostics = new HashSet<string>(diagnostics, StringComparer.Ordinal);
 
-                if (diagnostics.Count == 0)
+                EnsureLogReflectionCached();
+
+                if (s_LogEntriesType != null && s_LogEntryType != null && s_GetCountMethod != null && s_GetEntryInternalMethod != null && s_ConditionField != null && s_ModeField != null)
                 {
-                    EnsureLogReflectionCached();
-
-                    if (s_LogEntriesType != null && s_LogEntryType != null && s_GetCountMethod != null && s_GetEntryInternalMethod != null && s_ConditionField != null && s_ModeField != null)
+                    s_StartGettingEntriesMethod?.Invoke(null, null);
+                    try
                     {
-                        s_StartGettingEntriesMethod?.Invoke(null, null);
-                        try
+                        int count = (int) s_GetCountMethod.Invoke(null, null);
+                        var logEntry = Activator.CreateInstance(s_LogEntryType);
+                        var parameters = new object[] { 0, logEntry };
+
+                        for (int i = 0; i < count; i++)
                         {
-                            int count = (int) s_GetCountMethod.Invoke(null, null);
-                            var logEntry = Activator.CreateInstance(s_LogEntryType);
-                            var parameters = new object[] { 0, logEntry };
+                            parameters[0] = i;
+                            s_GetEntryInternalMethod.Invoke(null, parameters);
+                            var currentEntry = parameters[1];
 
-                            for (int i = 0; i < count; i++)
+                            string message = (string) s_ConditionField.GetValue(currentEntry);
+                            int mode = (int) s_ModeField.GetValue(currentEntry);
+                            bool isCompileError = (mode & (1 << 11)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("error CS"));
+                            bool isCompileWarning = (mode & (1 << 12)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("warning CS"));
+                            bool isNonCsError = (mode & (1 << 0)) != 0 || (mode & (1 << 4)) != 0 || (mode & (1 << 6)) != 0 ||
+                                                (!string.IsNullOrEmpty(message) && (
+                                                    message.Contains("Shader error in") ||
+                                                    message.Contains("The referenced script on this Behaviour is missing") ||
+                                                    message.Contains("AssetPostprocessor")));
+
+                            if (isCompileError || isCompileWarning || isNonCsError)
                             {
-                                parameters[0] = i;
-                                s_GetEntryInternalMethod.Invoke(null, parameters);
-                                var currentEntry = parameters[1];
+                                string file = s_FileField != null ? (string) s_FileField.GetValue(currentEntry) : "";
+                                int line = s_LineField != null ? (int) s_LineField.GetValue(currentEntry) : 0;
+                                int column = s_ColumnField != null ? (int) s_ColumnField.GetValue(currentEntry) : 0;
 
-                                string message = (string) s_ConditionField.GetValue(currentEntry);
-                                int mode = (int) s_ModeField.GetValue(currentEntry);
-                                bool isCompileError = (mode & (1 << 11)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("error CS"));
-                                bool isCompileWarning = (mode & (1 << 12)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("warning CS"));
-
-                                if (isCompileError || isCompileWarning)
+                                bool isError = isCompileError || isNonCsError;
+                                string formatted = FormatCompilerDiagnostic(message, file, line, column, isError);
+                                if (!string.IsNullOrEmpty(formatted) && seenDiagnostics.Add(formatted))
                                 {
-                                    string file = s_FileField != null ? (string) s_FileField.GetValue(currentEntry) : "";
-                                    int line = s_LineField != null ? (int) s_LineField.GetValue(currentEntry) : 0;
-                                    int column = s_ColumnField != null ? (int) s_ColumnField.GetValue(currentEntry) : 0;
-
-                                    string formatted = FormatCompilerDiagnostic(message, file, line, column, isCompileError);
-                                    if (!string.IsNullOrEmpty(formatted))
-                                    {
-                                        diagnostics.Add(formatted);
-                                    }
+                                    diagnostics.Add(formatted);
                                 }
                             }
                         }
-                        finally
-                        {
-                            s_EndGettingEntriesMethod?.Invoke(null, null);
-                        }
+                    }
+                    finally
+                    {
+                        s_EndGettingEntriesMethod?.Invoke(null, null);
                     }
                 }
 

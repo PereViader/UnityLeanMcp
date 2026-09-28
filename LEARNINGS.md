@@ -552,3 +552,22 @@ In a real Unity Editor or mock server environment, dispatching a mutating `REFRE
 ### Avoiding Premature `READY` in Polling Interceptors
 
 When intercepting polling commands (such as `POLL_REFRESH`) in mock servers, returning `READY` without writing a correlated operation result file causes `WaitForCompilationToSettleAsync` to treat the response as unproven and loop indefinitely until cancellation. Under the correlated refresh contract, newly submitted refresh operations require a durable result file to prove completion unless explicitly waiting on an observed active compilation. Mock handlers that do not supply an explicit terminal result should return `null` to delegate to default mock server completion logic that safely writes the result file and issues `READY`.
+
+### Roslyn Syntax AST: `Span` vs `FullSpan` and Trivia Overwrite
+When analyzing C# syntax trees using Roslyn APIs (e.g. `SyntaxNode`), `node.Span` represents the text span covering strictly the syntax token (e.g. from the `using` keyword to the terminating semicolon `;`). In contrast, `node.FullSpan` includes all leading and trailing trivia—including preceding comments, XML documentation, blank lines, and indentation whitespace.
+- If code blanks out hoisted or extracted syntax nodes by overwriting character spans in the source buffer with spaces, using `FullSpan` overwrites and destroys all comments, docstrings, and headers preceding the directive.
+- Always use `Span` (the character boundaries of the node itself) when blanking nodes to preserve line and column offsets without obliterating preceding commentary.
+
+### Non-CS Error Blind Spots in `AssetDatabase.Refresh()`
+`AssetDatabase.Refresh()` compiles not only C# scripts but also imports assets, compiles shaders (`.shader`, `.hlsl`), and invokes `AssetPostprocessor` hooks.
+- Historically, compilation error checkers filtered `LogEntries` strictly for Roslyn compiler diagnostics (`error CS...`), silently ignoring non-CS errors.
+- A project with a broken shader or missing MonoBehaviour script binding reported a false-positive `success: true` refresh.
+- Refresh operations must capture all error-level diagnostics logged during the refresh window, and demote operation success whenever any error-level diagnostic is present.
+
+### Substring Matching False Positives on Protocol Words
+Checking `result.Message.Contains("busy")` to detect server busy state creates false positives whenever user code references identifiers, methods, classes, or fields named `busy` (e.g. `error CS0103: The name 'busy' does not exist in the current context`).
+- Protocol status checks on formatted strings or result messages must check exact prefixes (e.g. `result.Message.StartsWith("Unity is busy")`) or evaluate structured typed status fields rather than loose substring searches.
+
+### Missing `using System.Linq;` in Package Files Linked Across Environments
+Files shared between .NET 10 projects (which enable `<ImplicitUsings>enable</ImplicitUsings>`) and Unity packages (which compile under Unity's standard C# compiler without global usings) must explicitly declare all required namespaces (such as `using System.Linq;`). Relying on implicit usings causes compilation failures when the file is compiled inside Unity.
+

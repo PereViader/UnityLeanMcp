@@ -491,7 +491,7 @@ namespace UnityLeanMcp
                 if (string.IsNullOrEmpty(simpleName)) return null;
 
                 // 1. Check Library/ScriptAssemblies/<simpleName>.dll (where all project .asmdef assemblies reside)
-                string scriptPath = Path.GetFullPath(Path.Combine("Library", "ScriptAssemblies", simpleName + ".dll"));
+                string scriptPath = Path.GetFullPath(Path.Combine(UnityLeanMcpPaths.ProjectRoot, "Library", "ScriptAssemblies", simpleName + ".dll"));
                 if (File.Exists(scriptPath))
                 {
                     return Assembly.LoadFrom(scriptPath);
@@ -696,17 +696,17 @@ namespace UnityLeanMcp
                                 if (nodes != null)
                                 {
                                     var spansToRemove = new List<(int start, int length, string text)>();
-                                    PropertyInfo fullSpanProp = null;
+                                    PropertyInfo spanProp = null;
 
                                     foreach (var node in nodes)
                                     {
                                         if (node == null) continue;
                                         if (node.GetType().Name == "UsingDirectiveSyntax")
                                         {
-                                            if (fullSpanProp == null) fullSpanProp = node.GetType().GetProperty("FullSpan");
-                                            if (fullSpanProp != null)
+                                            if (spanProp == null) spanProp = node.GetType().GetProperty("Span");
+                                            if (spanProp != null)
                                             {
-                                                object span = fullSpanProp.GetValue(node, null);
+                                                object span = spanProp.GetValue(node, null);
                                                 int start = (int)span.GetType().GetProperty("Start").GetValue(span, null);
                                                 int length = (int)span.GetType().GetProperty("Length").GetValue(span, null);
                                                 string directiveText = node.ToString().Trim();

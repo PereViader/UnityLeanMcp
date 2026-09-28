@@ -105,9 +105,17 @@ namespace UnityLeanMcp
                 }
 
                 string resultState = result.ResultState ?? "";
-                bool isCancelled = resultState == "Cancelled" ||
-                                   resultState.IndexOf("Cancel", StringComparison.OrdinalIgnoreCase) >= 0;
                 var runState = RunTestsHandler.ReadRunningState();
+                bool wasCancellationRequested = runState != null && runState.status == OperationStatus.Cancelling;
+                bool isCancelled = resultState == "Cancelled" ||
+                                   resultState.IndexOf("Cancel", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                   wasCancellationRequested;
+
+                if (wasCancellationRequested && (string.IsNullOrEmpty(resultState) || resultState == "Passed" || resultState == "Failed"))
+                {
+                    resultState = "Cancelled";
+                }
+
                 bool transportInterrupted = runState != null &&
                     (runState.status == "Reloading" || runState.status == "ShuttingDown");
                 bool isFailed = result.FailCount > 0 || result.TestStatus == TestStatus.Failed || isCancelled;

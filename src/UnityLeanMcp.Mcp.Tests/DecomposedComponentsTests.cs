@@ -844,6 +844,18 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public void RoslynCompilerHelper_ExtractUsingDirectives_WhenPrecededByComment_PreservesPrecedingComment()
+    {
+        string source = "// Preceding header comment\nusing System;\nreturn 42;";
+        bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectives(source, out var usings, out var methodBody);
+
+        Assert.True(found);
+        Assert.Single(usings);
+        Assert.Equal("using System;", usings[0]);
+        Assert.Contains("// Preceding header comment", methodBody);
+    }
+
+    [Fact]
     public async Task RoslynCompilerHelper_EnsureInitialized_RetriesAfterFailureAndSerializesConcurrentCallers()
     {
         string originalContentsPath = UnityEditor.EditorApplication.applicationContentsPath;

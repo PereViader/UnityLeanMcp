@@ -64,11 +64,6 @@ namespace UnityLeanMcp
 
             if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
             {
-                if (!string.IsNullOrEmpty(operationId))
-                {
-                    return "IDLE";
-                }
-
                 string diagnosticsPath = UnityLeanMcpPaths.DiagnosticsFile;
                 if (File.Exists(diagnosticsPath) && new FileInfo(diagnosticsPath).Length > 0)
                 {

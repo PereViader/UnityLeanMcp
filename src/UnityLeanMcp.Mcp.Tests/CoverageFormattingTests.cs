@@ -554,6 +554,29 @@ public class CoverageFormattingTests
         }
     }
 
+    [Fact]
+    public async Task UnityCoverageAsync_WhenResultFilesNull_HandlesNullSafely()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.CoverageResultToReturn = new CoverageResult
+            {
+                Success = true,
+                Files = null!
+            };
+
+            var result = await tools.UnityCoverageAsync(["Assets/Scripts/Player.cs"]);
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No compiled C# scripts found", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
 
     private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()
     {

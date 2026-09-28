@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using UnityEditor;
@@ -28,9 +29,9 @@ namespace UnityLeanMcp
         private static string s_CancellationMonitorRunId;
         private static bool s_CancellationMonitorRegistered;
 
-        internal static bool IsPlayModeCoverageSupported()
+        internal static bool IsPlayModeCoverageSupported(string version = null)
         {
-            string version = Application.unityVersion;
+            version ??= Application.unityVersion;
             if (string.IsNullOrEmpty(version))
             {
                 return false;
@@ -265,8 +266,15 @@ namespace UnityLeanMcp
                 if (testArgs.failedOnly)
                 {
                     failedTests = GetPreviouslyFailedTestNames();
+                    if (testArgs.testNames != null && testArgs.testNames.Length > 0)
+                    {
+                        failedTests = failedTests.Intersect(testArgs.testNames, StringComparer.Ordinal).ToList();
+                    }
                     if (failedTests.Count == 0)
                     {
+                        string msg = testArgs.testNames != null && testArgs.testNames.Length > 0
+                            ? "No previously failed tests found matching the specified test filter."
+                            : "No previously failed tests found.";
                         var emptyResult = new UnityTestRunResult
                         {
                             runId = operationId,
@@ -274,13 +282,13 @@ namespace UnityLeanMcp
                             failCount = 0,
                             passCount = 0,
                             skipCount = 0,
-                            message = "No previously failed tests found.",
+                            message = msg,
                             resultState = "Passed",
                             failedTests = new List<FailedTestInfo>()
                         };
                         UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(operationId), JsonUtility.ToJson(emptyResult, true), operationId);
                         UnityLeanMcpOperationStore.Complete(operationId);
-                        writer.WriteLine("SUCCESS No previously failed tests found.");
+                        writer.WriteLine($"SUCCESS {msg}");
                         writer.Flush();
                         return;
                     }
@@ -472,7 +480,9 @@ namespace UnityLeanMcp
                     RegisterCallbacks();
                 }
 
-                string[] effectiveTestNames = NonEmptyOrNull(explicitTestNames) ?? NonEmptyOrNull(args.testNames);
+                string[] effectiveTestNames = explicitTestNames != null && args.testNames != null && args.testNames.Length > 0
+                    ? explicitTestNames.Intersect(args.testNames, StringComparer.Ordinal).ToArray()
+                    : NonEmptyOrNull(explicitTestNames) ?? NonEmptyOrNull(args.testNames);
 
                 var filter = new Filter
                 {
