@@ -7,7 +7,6 @@ public class UnityPathResolver : IUnityPathResolver
 {
     public string ProjectRoot { get; }
     public string TempDir => Path.Combine(ProjectRoot, "Temp");
-    public string OperationFile => Path.Combine(TempDir, "unity_lean_mcp_operation.json");
     public string CompilationErrorsFile => Path.Combine(TempDir, "unity_compilation_errors.txt");
     public string PortFile => Path.Combine(TempDir, "unity_lean_mcp_port.txt");
     public string LogFile => Path.Combine(TempDir, "unity_background_log.txt");
@@ -25,6 +24,9 @@ public class UnityPathResolver : IUnityPathResolver
         UnityOperationKind.Eval => string.IsNullOrEmpty(operationId)
             ? Path.Combine(TempDir, "unity_eval_result.json")
             : Path.Combine(TempDir, $"unity_eval_{operationId}.json"),
+        UnityOperationKind.Coverage => string.IsNullOrEmpty(operationId)
+            ? Path.Combine(TempDir, "unity_coverage_result.json")
+            : Path.Combine(TempDir, $"unity_coverage_{operationId}.json"),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 

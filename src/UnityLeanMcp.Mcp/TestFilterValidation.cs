@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 
 namespace UnityLeanMcp.Mcp;
 
@@ -27,6 +28,19 @@ internal static class TestFilterValidation
                 {
                     error = CreateError(parameterName, 1, includeIndex ? i : null);
                     return false;
+                }
+
+                if (parameterName == "groupNames")
+                {
+                    try
+                    {
+                        _ = new Regex(values[i]);
+                    }
+                    catch (ArgumentException exception)
+                    {
+                        error = $"Invalid test filter 'groupNames[{i}]': invalid .NET regular expression: {exception.Message}";
+                        return false;
+                    }
                 }
             }
         }

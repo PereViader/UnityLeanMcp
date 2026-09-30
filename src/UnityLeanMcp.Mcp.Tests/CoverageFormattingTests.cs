@@ -441,7 +441,7 @@ public class CoverageFormattingTests
         });
 
         var transport = new UnitySocketTransport();
-        string? response = await transport.SendCommandAsync(server.Port, "PING", timeoutSeconds: 0, cts.Token);
+        string? response = await transport.SendCommandAsync(server.Port, server.ProjectRoot, "PING", timeoutSeconds: 0, cts.Token);
         Assert.Equal("PONG", response);
     }
 

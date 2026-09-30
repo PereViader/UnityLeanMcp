@@ -11,8 +11,8 @@ namespace UnityLeanMcp.Mcp;
 
 public interface IUnitySocketTransport
 {
-    Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default);
-    Task<bool> IsSocketReadyAsync(int port, int timeoutSeconds = 2, CancellationToken cancellationToken = default);
+    Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default);
+    Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds = 2, CancellationToken cancellationToken = default);
 }
 
 public class UnitySocketTransport : IUnitySocketTransport
@@ -24,7 +24,7 @@ public class UnitySocketTransport : IUnitySocketTransport
         _logger = logger;
     }
 
-    public virtual async Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
+    public virtual async Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
     {
         if (port <= 0 || port > 65535)
         {
@@ -48,7 +48,7 @@ public class UnitySocketTransport : IUnitySocketTransport
             using var reader = new StreamReader(stream, Encoding.UTF8);
             using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
-            await writer.WriteLineAsync(command.AsMemory(), cts.Token);
+            await writer.WriteLineAsync(UnityLeanMcp.ProjectCommandEnvelope.Encode(projectRoot, command).AsMemory(), cts.Token);
             string? line = await reader.ReadLineAsync(cts.Token);
             return line?.Trim();
         }
@@ -63,9 +63,9 @@ public class UnitySocketTransport : IUnitySocketTransport
         }
     }
 
-    public virtual async Task<bool> IsSocketReadyAsync(int port, int timeoutSeconds = 2, CancellationToken cancellationToken = default)
+    public virtual async Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds = 2, CancellationToken cancellationToken = default)
     {
-        string? response = await SendCommandAsync(port, "PING", timeoutSeconds, cancellationToken);
+        string? response = await SendCommandAsync(port, projectRoot, "PING", timeoutSeconds, cancellationToken);
         return response == "PONG";
     }
 }

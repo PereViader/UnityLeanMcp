@@ -59,72 +59,27 @@ if [ ! -f "$BUILD_DIR/MCP~/UnityLeanMcp.Mcp.dll" ]; then
   exit 1
 fi
 
-# 6. Sync newly built binaries to $PACKAGE_SRC/MCP~ (handling Windows locked assemblies)
+# Stage a complete replacement before touching the installed package. Directory
+# renames either succeed or leave the old installation available for recovery.
 echo "Syncing newly built binaries to $PACKAGE_SRC/MCP~..."
-mkdir -p "$PACKAGE_SRC/MCP~"
-
-# Remove old .old files if possible
-rm -f "$PACKAGE_SRC/MCP~/"*.old "$PACKAGE_SRC/MCP~/"*.old.* 2>/dev/null || true
-
-# If UnityLeanMcp.Mcp.dll (or any .dll / .pdb) exists and cannot be overwritten directly due to a running host,
-# rename it to .old per LEARNINGS.md ("Windows Locked Assembly Renaming Workaround").
-shopt -s nullglob
-for locked_candidate in "$PACKAGE_SRC/MCP~"/*.dll "$PACKAGE_SRC/MCP~"/*.pdb; do
-  if [ -f "$locked_candidate" ] && ! ( : >> "$locked_candidate" ) 2>/dev/null; then
-    fname="$(basename "$locked_candidate")"
-    echo "Notice: $fname is locked by a running process. Renaming to $fname.old..."
-    old_target="$locked_candidate.old"
-    rm -f "$old_target" 2>/dev/null || true
-    if [ -f "$old_target" ]; then
-      old_target="$locked_candidate.old.$$"
-    fi
-    mv -f "$locked_candidate" "$old_target" 2>/dev/null || true
-  fi
-done
-shopt -u nullglob
-
-# Copy files from $BUILD_DIR/MCP~ into $PACKAGE_SRC/MCP~
-if ! cp -R "$BUILD_DIR/MCP~/." "$PACKAGE_SRC/MCP~/" 2>/dev/null; then
-  echo "Notice: Direct recursive copy failed. Copying with locked assembly fallback..."
-  shopt -s dotglob nullglob
-  for src_file in "$BUILD_DIR/MCP~"/*; do
-    fname="$(basename "$src_file")"
-    dest_file="$PACKAGE_SRC/MCP~/$fname"
-    if [ -d "$src_file" ]; then
-      cp -R "$src_file" "$dest_file" 2>/dev/null || true
-    elif [ -f "$dest_file" ]; then
-      if ! cp -f "$src_file" "$dest_file" 2>/dev/null; then
-        echo "Notice: $fname failed copy. Renaming to $fname.old..."
-        old_file="$dest_file.old"
-        rm -f "$old_file" 2>/dev/null || true
-        if [ -f "$old_file" ]; then
-          old_file="$dest_file.old.$$"
-        fi
-        mv -f "$dest_file" "$old_file" 2>/dev/null || true
-        cp -f "$src_file" "$dest_file" 2>/dev/null || echo "Warning: Could not copy $fname"
-      fi
-    else
-      cp -f "$src_file" "$dest_file" 2>/dev/null || true
-    fi
-  done
-  shopt -u dotglob nullglob
+staging="$(mktemp -d "$PACKAGE_SRC/.mcp-stage.XXXXXX~")"
+backup="$staging.previous~"
+trap 'rm -rf "$staging"' EXIT
+cp -R "$BUILD_DIR/MCP~/." "$staging/"
+diff -r "$BUILD_DIR/MCP~" "$staging"
+if [ -d "$PACKAGE_SRC/MCP~" ]; then
+  mv "$PACKAGE_SRC/MCP~" "$backup"
 fi
-
-# Attempt to remove old .old files if unlocked, or leave them
-rm -f "$PACKAGE_SRC/MCP~/"*.old "$PACKAGE_SRC/MCP~/"*.old.* 2>/dev/null || true
-
-# Clean up obsolete files in $PACKAGE_SRC/MCP~ that are no longer part of the build
-shopt -s dotglob nullglob
-for item in "$PACKAGE_SRC/MCP~"/*; do
-  fname="$(basename "$item")"
-  if [[ "$fname" == *.old* ]]; then
-    continue
+if ! mv "$staging" "$PACKAGE_SRC/MCP~"; then
+  echo "Error: Cannot publish MCP package; restoring previous installation." >&2
+  if [ -d "$backup" ]; then
+    mv "$backup" "$PACKAGE_SRC/MCP~" || echo "Error: Previous installation retained at $backup; restore it manually." >&2
   fi
-  if [ ! -e "$BUILD_DIR/MCP~/$fname" ]; then
-    echo "Removing obsolete file from package MCP~: $fname"
-    rm -rf "$item" 2>/dev/null || true
-  fi
-done
-shopt -u dotglob nullglob
+  exit 1
+fi
+trap - EXIT
+if [ -d "$backup" ]; then
+  rm -rf "$backup" || echo "Notice: Previous loaded binaries retained at $backup" >&2
+fi
 
 echo "=== Build completed successfully! ==="

@@ -14,6 +14,40 @@ namespace UnityLeanMcp
     {
         private static readonly Dictionary<string, List<string>> s_AssemblyDiagnostics = new Dictionary<string, List<string>>();
         private static readonly object s_DiagnosticsLock = new object();
+        private const string ScopedDiagnosticsKey = "UnityLeanMcp_RefreshDiagnostics";
+        [Serializable]
+        private sealed class ScopedDiagnostics
+        {
+            public string operationId;
+            public List<string> messages = new List<string>();
+        }
+        private static ScopedDiagnostics s_ScopedDiagnostics = new ScopedDiagnostics();
+
+        private static void CaptureOperationError(string message, string stackTrace, LogType type)
+        {
+            if (type != LogType.Error && type != LogType.Exception && type != LogType.Assert) return;
+            // Publication diagnostics are infrastructure failures, not errors from asset import.
+            if (message != null && message.StartsWith("UnityLeanMcp:", StringComparison.Ordinal)) return;
+            var active = UnityCommandGate.ReadSnapshot();
+            if (active == null || (active.Kind != OperationKinds.Refresh && active.Kind != OperationKinds.Recompile)) return;
+            string formatted = FormatCompilerDiagnostic(message, "", 0, 0, true);
+            if (string.IsNullOrEmpty(formatted)) return;
+            lock (s_DiagnosticsLock)
+            {
+                if (s_ScopedDiagnostics.operationId != active.OperationId)
+                    s_ScopedDiagnostics = new ScopedDiagnostics { operationId = active.OperationId };
+                if (!s_ScopedDiagnostics.messages.Contains(formatted)) s_ScopedDiagnostics.messages.Add(formatted);
+            }
+        }
+
+        private static void PersistScopedDiagnostics()
+        {
+            lock (s_DiagnosticsLock)
+            {
+                SessionState.SetString(ScopedDiagnosticsKey, JsonUtility.ToJson(s_ScopedDiagnostics));
+            }
+        }
+
 
         private const int CompilationRequestIdleFrameThreshold = 3;
 
@@ -115,6 +149,14 @@ namespace UnityLeanMcp
             UnityLeanMcpPaths.EnsureInitialized();
             UnityLeanMcpOperationStore.EnsureInitialized();
             EnsureLogReflectionCached();
+            string scopedJson = SessionState.GetString(ScopedDiagnosticsKey, "");
+            if (!string.IsNullOrEmpty(scopedJson))
+            {
+                try { s_ScopedDiagnostics = JsonUtility.FromJson<ScopedDiagnostics>(scopedJson) ?? new ScopedDiagnostics(); }
+                catch { s_ScopedDiagnostics = new ScopedDiagnostics(); }
+            }
+            Application.logMessageReceivedThreaded -= CaptureOperationError;
+            Application.logMessageReceivedThreaded += CaptureOperationError;
             UpdateCompilationState();
             var operation = UnityLeanMcpOperationStore.Read();
             bool resumingCompilation = operation != null &&
@@ -206,6 +248,9 @@ namespace UnityLeanMcp
             var diagnostics = new List<string>();
             lock (s_DiagnosticsLock)
             {
+                var active = UnityCommandGate.ReadSnapshot();
+                if (active != null && s_ScopedDiagnostics.operationId == active.OperationId && s_ScopedDiagnostics.messages != null)
+                    diagnostics.AddRange(s_ScopedDiagnostics.messages);
                 foreach (var list in s_AssemblyDiagnostics.Values)
                 {
                     if (list != null && list.Count > 0)
@@ -313,75 +358,53 @@ namespace UnityLeanMcp
         /// </summary>
         internal static void ObserveOperationUntilSettled()
         {
-            var operation = UnityLeanMcpOperationStore.Read();
-            if (operation == null || (operation.kind != OperationKinds.Refresh && operation.kind != OperationKinds.Recompile))
+            var snap = UnityCommandGate.ReadSnapshot();
+            if (snap == null || (snap.Kind != OperationKinds.Refresh && snap.Kind != OperationKinds.Recompile))
             {
                 s_ObservedOperationId = null;
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
                 return;
             }
 
-            if (operation.editorSessionId != UnityLeanMcpOperationStore.EditorSessionId || operation.status == OperationStatus.Interrupted)
+            if (snap.Status == OperationStatus.Interrupted || snap.Status == OperationStatus.Requested)
             {
                 return;
             }
 
-            if (s_ObservedOperationId != operation.operationId)
+            if (UnityCommandGate.HasPendingResult(snap.OperationId)) return;
+
+            if (s_ObservedOperationId != snap.OperationId)
             {
-                s_ObservedOperationId = operation.operationId;
+                s_ObservedOperationId = snap.OperationId;
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
             }
 
             if (s_RefreshPending || s_CompilationRequested || EditorApplication.isCompiling || EditorApplication.isUpdating)
             {
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
-                UnityLeanMcpOperationStore.Update(operation.operationId, OperationStatus.WaitingForUnity);
+                UnityCommandGate.Update(snap.OperationId, OperationStatus.WaitingForUnity);
                 return;
             }
 
-            if (Interlocked.Increment(ref s_SettledUpdateCount) < 2)
+            if (Interlocked.Increment(ref s_SettledUpdateCount) < 10)
             {
                 return;
             }
 
-            WriteActiveErrorsToFile();
-            var diagnostics = GetCapturedDiagnosticsSnapshot();
-            bool hasErrors = EditorUtility.scriptCompilationFailed || diagnostics.Any(d => d.Contains(": error"));
-            if (!hasErrors)
-            {
-                string errorsPath = UnityLeanMcpPaths.DiagnosticsFile;
-                if (File.Exists(errorsPath))
-                {
-                    try
-                    {
-                        var lines = File.ReadAllLines(errorsPath);
-                        if (lines.Any(l => l.Contains(": error") || l.StartsWith("error ")))
-                        {
-                            hasErrors = true;
-                        }
-                    }
-                    catch { }
-                }
-            }
+            var diagnostics = WriteActiveErrorsToFile();
+            bool hasErrors = EditorUtility.scriptCompilationFailed || diagnostics.Any(d => d.Contains(": error") || d.StartsWith("error ", StringComparison.Ordinal));
 
             var result = new UnityRefreshResult
             {
-                operationId = operation.operationId,
+                operationId = snap.OperationId,
                 success = !hasErrors,
                 interrupted = false,
-                message = hasErrors ? "Compilation failed" : ""
+                message = diagnostics.Count > 0 ? string.Join("\n", diagnostics) : (hasErrors ? "Compilation failed" : "")
             };
             string json = JsonUtility.ToJson(result, true);
-            UnityLeanMcpOperationStore.WriteAtomic(
-                UnityLeanMcpPaths.GetRefreshResultFile(operation.operationId),
-                json,
-                operation.operationId);
-            UnityLeanMcpOperationStore.TryWriteStaticHistory(
-                UnityLeanMcpPaths.RefreshResultFile,
-                json,
-                operation.operationId);
+            UnityCommandGate.PublishResult(UnityCommandGate.ReadSnapshot()?.Kind, snap.OperationId,
+                UnityLeanMcpPaths.GetRefreshResultFile(snap.OperationId), json);
             s_RefreshRequired = false;
-            UnityLeanMcpOperationStore.Complete(operation.operationId);
             s_ObservedOperationId = null;
             Interlocked.Exchange(ref s_SettledUpdateCount, 0);
         }
@@ -415,15 +438,8 @@ namespace UnityLeanMcp
                 message = message
             };
             string json = JsonUtility.ToJson(result, true);
-            UnityLeanMcpOperationStore.WriteAtomic(
-                UnityLeanMcpPaths.GetRefreshResultFile(operationId),
-                json,
-                operationId);
-            UnityLeanMcpOperationStore.TryWriteStaticHistory(
-                UnityLeanMcpPaths.RefreshResultFile,
-                json,
-                operationId);
-            UnityLeanMcpOperationStore.Complete(operationId);
+            UnityCommandGate.PublishResult(UnityCommandGate.ReadSnapshot()?.Kind, operationId,
+                UnityLeanMcpPaths.GetRefreshResultFile(operationId), json);
         }
 
         public static void ClearActiveEntries()
@@ -443,7 +459,12 @@ namespace UnityLeanMcp
         {
             lock (s_DiagnosticsLock)
             {
-                s_AssemblyDiagnostics.Clear();
+                // Compiler diagnostics describe the current assembly state. A no-op
+                // refresh after failed compilation has no new compiler callbacks;
+                // retain that evidence until the assembly callback replaces it.
+                // Only operation-scoped asset/runtime errors restart here.
+                s_ScopedDiagnostics = new ScopedDiagnostics { operationId = UnityCommandGate.ReadSnapshot()?.OperationId };
+                SessionState.EraseString(ScopedDiagnosticsKey);
             }
         }
 
@@ -463,12 +484,13 @@ namespace UnityLeanMcp
             }
         }
 
-        public static void WriteActiveErrorsToFile()
+        public static List<string> WriteActiveErrorsToFile()
         {
+            var diagnostics = GetCapturedDiagnosticsSnapshot();
             try
             {
+                PersistScopedDiagnostics();
                 string errorsPath = UnityLeanMcpPaths.DiagnosticsFile;
-                var diagnostics = GetCapturedDiagnosticsSnapshot();
                 var seenDiagnostics = new HashSet<string>(diagnostics, StringComparer.Ordinal);
 
                 EnsureLogReflectionCached();
@@ -492,19 +514,15 @@ namespace UnityLeanMcp
                             int mode = (int) s_ModeField.GetValue(currentEntry);
                             bool isCompileError = (mode & (1 << 11)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("error CS"));
                             bool isCompileWarning = (mode & (1 << 12)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("warning CS"));
-                            bool isNonCsError = (mode & (1 << 0)) != 0 || (mode & (1 << 4)) != 0 || (mode & (1 << 6)) != 0 ||
-                                                (!string.IsNullOrEmpty(message) && (
-                                                    message.Contains("Shader error in") ||
-                                                    message.Contains("The referenced script on this Behaviour is missing") ||
-                                                    message.Contains("AssetPostprocessor")));
-
-                            if (isCompileError || isCompileWarning || isNonCsError)
+                            // Non-compiler errors are captured only while this operation owns
+                            // the gate. Historical gameplay logs must never poison a refresh.
+                            if (isCompileError || isCompileWarning)
                             {
                                 string file = s_FileField != null ? (string) s_FileField.GetValue(currentEntry) : "";
                                 int line = s_LineField != null ? (int) s_LineField.GetValue(currentEntry) : 0;
                                 int column = s_ColumnField != null ? (int) s_ColumnField.GetValue(currentEntry) : 0;
 
-                                bool isError = isCompileError || isNonCsError;
+                                bool isError = isCompileError;
                                 string formatted = FormatCompilerDiagnostic(message, file, line, column, isError);
                                 if (!string.IsNullOrEmpty(formatted) && seenDiagnostics.Add(formatted))
                                 {
@@ -525,7 +543,8 @@ namespace UnityLeanMcp
                 }
                 else if (EditorUtility.scriptCompilationFailed)
                 {
-                    WriteFallbackDiagnosticsIfCompilationFailed("Unity editor reports scriptCompilationFailed is true, but no compiler diagnostics were captured.");
+                    diagnostics.Add("UnityLeanMcp(1,1): error UC0001: Unity editor reports scriptCompilationFailed is true, but no compiler diagnostics were captured.");
+                    WriteDiagnosticsFileAtomically(errorsPath, diagnostics);
                 }
                 else
                 {
@@ -537,6 +556,7 @@ namespace UnityLeanMcp
                 Debug.LogError($"UnityLeanMcp: Failed to write active compilation errors: {e}");
                 WriteFallbackDiagnosticsIfCompilationFailed($"Unity editor reports scriptCompilationFailed is true, but UnityLeanMcp failed to capture compiler diagnostics: {e.Message}");
             }
+            return diagnostics;
         }
 
         private static void WriteDiagnosticsFileAtomically(string errorsPath, IEnumerable<string> lines)

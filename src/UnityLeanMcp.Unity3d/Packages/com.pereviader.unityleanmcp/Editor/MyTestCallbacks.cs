@@ -104,7 +104,7 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                string resultState = result.ResultState ?? "";
+                string resultState = result?.ResultState ?? "";
                 var runState = RunTestsHandler.ReadRunningState();
                 bool wasCancellationRequested = runState != null && runState.status == OperationStatus.Cancelling;
                 bool isCancelled = resultState == "Cancelled" ||
@@ -118,10 +118,13 @@ namespace UnityLeanMcp
 
                 bool transportInterrupted = runState != null &&
                     (runState.status == "Reloading" || runState.status == "ShuttingDown");
-                bool isFailed = result.FailCount > 0 || result.TestStatus == TestStatus.Failed || isCancelled;
+                int failCount = result?.FailCount ?? (isCancelled ? 1 : 0);
+                int passCount = result?.PassCount ?? 0;
+                int skipCount = result?.SkipCount ?? 0;
+                bool isFailed = failCount > 0 || (result != null && result.TestStatus == TestStatus.Failed) || isCancelled;
 
                 bool success = !isFailed;
-                string message = isCancelled ? (!string.IsNullOrEmpty(result.Message) ? result.Message : "Test run was cancelled or interrupted.")
+                string message = isCancelled ? (!string.IsNullOrEmpty(result?.Message) ? result.Message : "Test run was cancelled or interrupted.")
                                : "";
 
                 if (transportInterrupted && isCancelled)
@@ -130,11 +133,36 @@ namespace UnityLeanMcp
                     resultState = "Interrupted";
                 }
 
-                FinalizeTestRun(success, result.FailCount, result.PassCount, result.SkipCount, message, resultState);
+                if (result != null)
+                {
+                    m_FailedTests.Clear();
+                    CollectFailures(result);
+                }
+                FinalizeTestRun(success, failCount, passCount, skipCount, message, resultState);
             }
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Exception in RunFinished callback: {ex}");
+            }
+        }
+
+        private void CollectFailures(ITestResultAdaptor result)
+        {
+            if (result.HasChildren)
+            {
+                foreach (var child in result.Children)
+                    CollectFailures(child);
+            }
+            else if (result.TestStatus == TestStatus.Failed)
+            {
+                m_FailedTests.Add(new FailedTestInfo
+                {
+                    name = result.Name,
+                    fullName = result.FullName,
+                    message = result.Message,
+                    stackTrace = result.StackTrace,
+                    duration = result.Duration
+                });
             }
         }
 
@@ -190,12 +218,7 @@ namespace UnityLeanMcp
                 };
 
                 string json = JsonUtility.ToJson(runResult, true);
-                UnityLeanMcpOperationStore.WriteAtomic(resultsPath, json, runResult.runId);
-                UnityLeanMcpOperationStore.TryWriteStaticHistory(
-                    UnityLeanMcpPaths.TestResultsFile,
-                    json,
-                    runResult.runId);
-                RunTestsHandler.CleanupTestRun(runResult.runId);
+                UnityCommandGate.PublishResult(OperationKinds.Test, runResult.runId, resultsPath, json);
                 m_RunId = null;
                 Debug.Log($"UnityLeanMcp: Playmode/Editmode tests completed. Success: {runResult.success}, Failed: {runResult.failCount}, Passed: {runResult.passCount}, Skipped: {runResult.skipCount}");
             }
@@ -229,14 +252,7 @@ namespace UnityLeanMcp
             else if (result.TestStatus == TestStatus.Failed)
             {
                 m_FailCount++;
-                m_FailedTests.Add(new FailedTestInfo
-                {
-                    name = result.Name,
-                    fullName = result.FullName,
-                    message = result.Message,
-                    stackTrace = result.StackTrace,
-                    duration = result.Duration
-                });
+                CollectFailures(result);
             }
             else if (result.TestStatus == TestStatus.Skipped)
             {

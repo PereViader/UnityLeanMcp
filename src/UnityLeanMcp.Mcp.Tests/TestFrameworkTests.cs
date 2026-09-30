@@ -34,7 +34,7 @@ public class TestFrameworkTests
         var result = await client.CallToolAsync("unity_test", new { mode = "editmode" });
 
         Assert.True(result.IsError, result.Text);
-        Assert.Contains("CS", result.Text);
+        Assert.True(result.Text.Contains("CS", StringComparison.Ordinal), result.Text);
     }
 
     [Fact]

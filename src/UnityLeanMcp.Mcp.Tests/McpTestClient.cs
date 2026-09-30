@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -20,11 +20,11 @@ public class McpTestClient : IAsyncDisposable
     private int _nextId = 1;
     private bool _initialized;
 
-    public McpTestClient(string? projectRoot = null)
+    public McpTestClient(string? projectRoot = null, string? serverDllPath = null)
     {
         string root = GetRepoRoot();
         string unityRoot = projectRoot ?? Path.Combine(root, "src", "UnityLeanMcp.Unity3d");
-        string dllPath = GetMcpServerDllPath();
+        string dllPath = serverDllPath ?? GetMcpServerDllPath();
 
         var psi = new ProcessStartInfo
         {

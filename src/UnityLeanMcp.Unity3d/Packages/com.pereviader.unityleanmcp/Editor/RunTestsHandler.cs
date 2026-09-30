@@ -133,7 +133,9 @@ namespace UnityLeanMcp
                 s_Callbacks.BindRun(runningState.runId);
                 if (IsCancellationRequested(runningState.runId) || runningState.status == OperationStatus.Cancelling)
                 {
-                    CancelActiveTestRunOnMainThread(runningState.runId);
+                    // Test Runner restores its jobs in an unordered load initializer.
+                    // Resume cancellation on an update, after that restoration finishes.
+                    BeginCancellationMonitoring(runningState.runId);
                 }
             }
         }
@@ -143,7 +145,7 @@ namespace UnityLeanMcp
             return TryGetTestRunnerActiveState(out bool isActive) && isActive;
         }
 
-        private static bool TryGetTestRunnerActiveState(out bool isActive)
+        internal static bool TryGetTestRunnerActiveState(out bool isActive)
         {
             isActive = false;
             try
@@ -172,20 +174,6 @@ namespace UnityLeanMcp
 
         public void Handle(string payload, StreamWriter writer)
         {
-            if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
-            {
-                writer.WriteLine("FAILURE Compilation failed");
-                return;
-            }
-
-            if (UnityLeanMcpCompilationTracker.IsCompiling ||
-                UnityLeanMcpCompilationTracker.RefreshPending ||
-                UnityLeanMcpCompilationTracker.RefreshRequired)
-            {
-                writer.WriteLine("BUSY compile");
-                return;
-            }
-
             if (string.IsNullOrEmpty(payload))
             {
                 writer.WriteLine("ERROR: Missing arguments");
@@ -201,6 +189,26 @@ namespace UnityLeanMcp
             }
 
             string operationId = requestParts[0];
+            if (File.Exists(UnityLeanMcpPaths.GetTestResultsFile(operationId)))
+            {
+                writer.WriteLine("RUNNING");
+                return;
+            }
+
+            if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
+            {
+                writer.WriteLine("FAILURE Compilation failed");
+                return;
+            }
+
+            if (UnityLeanMcpCompilationTracker.IsCompiling ||
+                UnityLeanMcpCompilationTracker.RefreshPending ||
+                UnityLeanMcpCompilationTracker.RefreshRequired)
+            {
+                writer.WriteLine("BUSY compile");
+                return;
+            }
+
             string remainder = requestParts[1].Trim();
 
             if (!remainder.StartsWith("{", StringComparison.Ordinal))
@@ -286,8 +294,7 @@ namespace UnityLeanMcp
                             resultState = "Passed",
                             failedTests = new List<FailedTestInfo>()
                         };
-                        UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(operationId), JsonUtility.ToJson(emptyResult, true), operationId);
-                        UnityLeanMcpOperationStore.Complete(operationId);
+                        UnityCommandGate.PublishResult(OperationKinds.Test, operationId, UnityLeanMcpPaths.GetTestResultsFile(operationId), JsonUtility.ToJson(emptyResult, true));
                         writer.WriteLine($"SUCCESS {msg}");
                         writer.Flush();
                         return;
@@ -310,15 +317,13 @@ namespace UnityLeanMcp
                 {
                     try
                     {
-                        Coverage.ResetAll();
-                        Coverage.enabled = true;
+                        InitializeCoverage(operationId);
                     }
                     catch (Exception ex)
                     {
                         writer.WriteLine($"FAILURE Failed to initialize code coverage: {ex.Message}");
                         writer.Flush();
-                        DeleteRunningStateIfOwned(operationId);
-                        UnityLeanMcpOperationStore.Complete(operationId);
+                        WriteInterruptedResult("Failed to initialize code coverage: " + ex.Message, operationId);
                         return;
                     }
                 }
@@ -330,10 +335,6 @@ namespace UnityLeanMcp
             }
             catch (Exception ex)
             {
-                if (testArgs.coverage)
-                {
-                    try { Coverage.enabled = false; } catch { }
-                }
                 Debug.LogError($"UnityLeanMcp: Unhandled exception during RunTests: {ex}");
                 WriteInterruptedResult("Failed to start test run: " + ex.Message, operationId);
             }
@@ -372,6 +373,19 @@ namespace UnityLeanMcp
                     {
                         error = $"Invalid test filter '{parameterName}[{i}]': value must not be empty or whitespace-only.";
                         return false;
+                    }
+
+                    if (parameterName == "groupNames")
+                    {
+                        try
+                        {
+                            _ = new System.Text.RegularExpressions.Regex(values[i]);
+                        }
+                        catch (ArgumentException exception)
+                        {
+                            error = $"Invalid test filter 'groupNames[{i}]': invalid .NET regular expression: {exception.Message}";
+                            return false;
+                        }
                     }
                 }
             }
@@ -626,8 +640,7 @@ namespace UnityLeanMcp
 
             try
             {
-                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(runId), JsonUtility.ToJson(result, true), runId);
-                CleanupTestRun(runId);
+                UnityCommandGate.PublishResult(OperationKinds.Test, runId, UnityLeanMcpPaths.GetTestResultsFile(runId), JsonUtility.ToJson(result, true));
             }
             catch (Exception ex)
             {
@@ -750,8 +763,7 @@ namespace UnityLeanMcp
 
             try
             {
-                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.GetTestResultsFile(runId), JsonUtility.ToJson(result, true), runId);
-                CleanupTestRun(runId);
+                UnityCommandGate.PublishResult(OperationKinds.Test, runId, UnityLeanMcpPaths.GetTestResultsFile(runId), JsonUtility.ToJson(result, true));
             }
             catch (Exception ex)
             {
@@ -759,13 +771,31 @@ namespace UnityLeanMcp
             }
         }
 
+        internal static void InitializeCoverage(string runId)
+        {
+            GetCoverageHandler.ClearCapturedCoverage();
+            // Record restoration state before changing the native profiler. Terminal
+            // cleanup also restores it if enabling/resetting coverage fails.
+            SessionState.SetString("UnityLeanMcp_CoverageOwner", runId + (Coverage.enabled ? ":enabled" : ":disabled"));
+            Coverage.enabled = true;
+            // Unity rejects ResetAll while coverage is disabled.
+            Coverage.ResetAll();
+        }
+
+        internal static void RestoreCoverage(string runId)
+        {
+            string state = SessionState.GetString("UnityLeanMcp_CoverageOwner", "");
+            if (state == runId + ":enabled" || state == runId + ":disabled")
+            {
+                GetCoverageHandler.CaptureCoverage(runId);
+                Coverage.enabled = state == runId + ":enabled";
+                SessionState.EraseString("UnityLeanMcp_CoverageOwner");
+            }
+        }
+
         internal static void CleanupTestRun(string runId)
         {
-            try
-            {
-                Coverage.enabled = false;
-            }
-            catch { }
+            RestoreCoverage(runId);
             ClearCancellationRequest(runId);
             StopCancellationMonitoring(runId);
             DeleteRunningStateIfOwned(runId);
@@ -840,7 +870,7 @@ namespace UnityLeanMcp
                 return;
             }
 
-            TryCompleteCancellationIfRunnerTerminal(runId);
+            CancelActiveTestRunOnMainThread(runId);
         }
 
         private static void TryCompleteCancellationIfRunnerTerminal(string runId)

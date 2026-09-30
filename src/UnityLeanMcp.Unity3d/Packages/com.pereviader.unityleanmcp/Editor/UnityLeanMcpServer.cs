@@ -126,6 +126,7 @@ namespace UnityLeanMcp
                 }
 
                 UnityLeanMcpPaths.EnsureInitialized();
+                UnityCommandGate.InitializeMainThread();
                 UnityLeanMcpOperationStore.EnsureInitialized();
                 UnityLeanMcpCompilationTracker.EnsureInitialized();
                 UnityLeanMcpDispatcher.EnsureInitialized();
@@ -210,6 +211,7 @@ namespace UnityLeanMcp
         {
             var operation = UnityLeanMcpOperationStore.Read();
             OperationLifecycleRegistry.NotifyQuitting(operation);
+            // Lifecycle handlers release ownership only after publishing a durable result.
             StopServer();
         }
 
@@ -283,7 +285,9 @@ namespace UnityLeanMcp
 
                 int port = ((IPEndPoint) listener.LocalEndpoint).Port;
 
-                WritePortFile(port);
+                while (_isRunning && !WritePortFile(port))
+                    Thread.Sleep(100);
+                if (!_isRunning) return;
                 WorkerDiagnosticsLogger.Info(
                     UnityLeanMcpPaths.LogFile,
                     $"Socket server started on 127.0.0.1:{port}");
@@ -386,6 +390,46 @@ namespace UnityLeanMcp
             }
         }
 
+        private static void ExecuteMainThreadCommand(ICommandHandler handler, string payload, StreamWriter writer)
+        {
+            if (handler.ExecutionTarget == CommandExecutionTarget.EditModeOnly)
+            {
+                // Worker preflight can become stale while waiting in the dispatcher.
+                // In particular, never stop PlayMode belonging to an active test run.
+                var active = UnityCommandGate.ReadSnapshot();
+                if (active != null)
+                {
+                    if (active.OperationId == ExtractOperationId(payload))
+                    {
+                        handler.Handle(payload, writer);
+                        return;
+                    }
+
+                    writer.WriteLine($"BUSY {active.Kind} {active.OperationId}");
+                    return;
+                }
+
+                if (!RunTestsHandler.TryGetTestRunnerActiveState(out bool testRunActive) || testRunActive)
+                {
+                    writer.WriteLine("BUSY test");
+                    return;
+                }
+
+                if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
+                {
+                    // This command has not been accepted. Do not retain an action across
+                    // exit: its domain may disappear, or the caller may cancel meanwhile.
+                    // A live caller reissues the same ID after the transition settles.
+                    writer.WriteLine("BUSY playmode");
+                    writer.Flush();
+                    EditorApplication.isPlaying = false;
+                    return;
+                }
+            }
+
+            handler.Handle(payload, writer);
+        }
+
         private static void ProcessClient(TcpClient client)
         {
             s_ActiveClients.TryAdd(client, 0);
@@ -412,6 +456,12 @@ namespace UnityLeanMcp
                     if(string.IsNullOrEmpty(line))
                     {
                         writer.WriteLine("ERROR: Empty command");
+                        return;
+                    }
+
+                    if (!ProjectCommandEnvelope.TryDecode(line, UnityLeanMcpPaths.ProjectRoot, out line))
+                    {
+                        writer.WriteLine("ERROR: Unity project identity mismatch or missing project envelope");
                         return;
                     }
 
@@ -442,7 +492,7 @@ namespace UnityLeanMcp
                             }
                         }
                     }
-                    else if (handler.ExecutionTarget != CommandExecutionTarget.WorkerThread)
+                    else if (handler.ExecutionTarget != CommandExecutionTarget.WorkerThread && !(handler is ExitHandler))
                     {
                         var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
                         if (activeOp != null)
@@ -476,29 +526,17 @@ namespace UnityLeanMcp
                             Exception dispatchException = null;
                             UnityLeanMcpDispatcher.Enqueue(() =>
                             {
-                                Action executeAction = () =>
+                                try
                                 {
-                                    try
-                                    {
-                                        handler.Handle(payload, writer);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        dispatchException = ex;
-                                    }
-                                    finally
-                                    {
-                                        finishedEvent.Set();
-                                    }
-                                };
-
-                                if (handler.ExecutionTarget == CommandExecutionTarget.EditModeOnly)
-                                {
-                                    CommandHelper.RunActionAfterStoppingPlaymode(executeAction);
+                                    ExecuteMainThreadCommand(handler, payload, writer);
                                 }
-                                else
+                                catch (Exception ex)
                                 {
-                                    executeAction();
+                                    dispatchException = ex;
+                                }
+                                finally
+                                {
+                                    finishedEvent.Set();
                                 }
                             });
                             int completedIndex = WaitHandle.WaitAny(requestWaitHandles);
@@ -572,14 +610,14 @@ namespace UnityLeanMcp
                 $"Reloading={_isReloading}, Exception={exception}");
         }
 
-        private static void WritePortFile(int port)
+        private static bool WritePortFile(int port)
         {
             try
             {
                 string path = UnityLeanMcpPaths.PortFile;
                 if (string.IsNullOrEmpty(path))
                 {
-                    return;
+                    return false;
                 }
 
                 string directory = Path.GetDirectoryName(path);
@@ -588,12 +626,14 @@ namespace UnityLeanMcp
                     Directory.CreateDirectory(directory);
                 }
                 UnityLeanMcpOperationStore.WriteAtomic(path, port.ToString(), "port");
+                return true;
             }
             catch(Exception e)
             {
                 WorkerDiagnosticsLogger.Error(
                     UnityLeanMcpPaths.LogFile,
                     $"Failed to write port file: {e}");
+                return false;
             }
         }
 

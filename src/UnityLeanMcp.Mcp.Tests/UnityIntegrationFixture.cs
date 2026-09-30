@@ -146,7 +146,7 @@ public class UnityIntegrationFixture : IAsyncLifetime
                         }
                         catch
                         {
-                            // Best-effort rename per LEARNINGS.md
+                            // Best-effort rename; see docs/process-and-transport.md#atomic-publication-and-contention.
                         }
                     }
                 }

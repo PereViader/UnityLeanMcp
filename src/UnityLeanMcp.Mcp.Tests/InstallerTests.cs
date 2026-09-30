@@ -1,3 +1,4 @@
+using static UnityLeanMcp.McpConfigurationWriter;
 using System;
 using System.IO;
 using System.Linq;
@@ -9,235 +10,46 @@ namespace UnityLeanMcp.Mcp.Tests;
 [Trait("Category", "Unit")]
 public class InstallerTests
 {
-    private static string FindRepositoryRoot(string assetsPath)
+    [Fact]
+    public void UpdateOrWriteMcpConfig_PreservesIsoLookingStringsExactly()
     {
-        var dir = new DirectoryInfo(assetsPath);
-        while (dir != null)
+        string directory = Path.Combine(Path.GetTempPath(), "mcp_dates_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "mcp.json");
+        string[] values = { "2026-10-01T12:34:56.000Z", "2026-10-01T12:34:56+02:00" };
+        try
         {
-            string gitDir = Path.Combine(dir.FullName, ".git");
-            if (Directory.Exists(gitDir) || File.Exists(gitDir))
-            {
-                return dir.FullName;
-            }
-            dir = dir.Parent;
-        }
+            File.WriteAllText(path, JsonSerializer.Serialize(new { inputs = values }));
 
-        return Path.GetFullPath(Path.Combine(assetsPath, ".."));
+            UpdateOrWriteMcpConfig(path, directory);
+
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            Assert.Equal(values, document.RootElement.GetProperty("inputs").EnumerateArray()
+                .Select(value => value.GetString()).ToArray());
+            Assert.True(document.RootElement.GetProperty("mcpServers").TryGetProperty("unity-lean-mcp", out _));
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
-    private static void UpdateOrWriteMcpConfig(
-        string configPath,
-        string mcpDir,
-        string rootKey = "mcpServers",
-        string? repositoryRoot = null)
+    [Theory]
+    [InlineData("{\"inputs\": [\"keep\"],")]
+    [InlineData("{\"inputs\": [\"keep\"]} {\"unexpected\": true}")]
+    public void UpdateOrWriteMcpConfig_InvalidJsonLeavesOriginalBytesUnchanged(string original)
     {
-        string dir = Path.GetDirectoryName(configPath)!;
-        if (!Directory.Exists(dir))
+        string directory = Path.Combine(Path.GetTempPath(), "mcp_invalid_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "mcp.json");
+        try
         {
-            Directory.CreateDirectory(dir);
+            File.WriteAllText(path, original);
+            byte[] originalBytes = File.ReadAllBytes(path);
+
+            Assert.NotNull(Record.Exception(() => UpdateOrWriteMcpConfig(path, directory)));
+
+            Assert.Equal(originalBytes, File.ReadAllBytes(path));
+            Assert.Equal(new[] { path }, Directory.GetFiles(directory));
         }
-
-        string formattedMcpDir = mcpDir.Replace('\\', '/');
-        if (!formattedMcpDir.EndsWith("/"))
-        {
-            formattedMcpDir += "/";
-        }
-
-        string effectiveCwd = formattedMcpDir;
-        if (!string.IsNullOrEmpty(repositoryRoot) &&
-            McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(
-                repositoryRoot,
-                formattedMcpDir,
-                configPath,
-                out string workspaceRelativePath))
-        {
-            effectiveCwd = workspaceRelativePath;
-        }
-
-        string serverJsonSnippet =
-            "    \"unity-lean-mcp\": {\n" +
-            "      \"command\": \"dotnet\",\n" +
-            "      \"args\": [\n" +
-            "        \"UnityLeanMcp.Mcp.dll\"\n" +
-            "      ],\n" +
-            $"      \"cwd\": \"{effectiveCwd}\"\n" +
-            "    }";
-
-        string normalizedPath = configPath.Replace('\\', '/');
-        string effectiveRootKey = rootKey;
-        if (normalizedPath.EndsWith("/.vscode/mcp.json"))
-        {
-            effectiveRootKey = "servers";
-        }
-
-        if (!File.Exists(configPath))
-        {
-            string newContent =
-                "{\n" +
-                $"  \"{effectiveRootKey}\": {{\n" +
-                serverJsonSnippet.TrimStart() + "\n" +
-                "  }\n" +
-                "}\n";
-            File.WriteAllText(configPath, newContent, System.Text.Encoding.UTF8);
-            return;
-        }
-
-        string existing = File.ReadAllText(configPath, System.Text.Encoding.UTF8).Trim();
-        if (string.IsNullOrWhiteSpace(existing))
-        {
-            string newContent =
-                "{\n" +
-                $"  \"{effectiveRootKey}\": {{\n" +
-                serverJsonSnippet.TrimStart() + "\n" +
-                "  }\n" +
-                "}\n";
-            File.WriteAllText(configPath, newContent, System.Text.Encoding.UTF8);
-            return;
-        }
-
-        // If unity-lean-mcp already exists, replace its block
-        const string targetServerKey = "\"unity-lean-mcp\"";
-
-        if (existing.Contains(targetServerKey))
-        {
-            int unityIndex = existing.IndexOf(targetServerKey, StringComparison.Ordinal);
-            int openBrace = existing.IndexOf('{', unityIndex);
-            if (openBrace != -1)
-            {
-                int depth = 1;
-                int closeBrace = -1;
-                for (int i = openBrace + 1; i < existing.Length; i++)
-                {
-                    if (existing[i] == '{') depth++;
-                    else if (existing[i] == '}')
-                    {
-                        depth--;
-                        if (depth == 0)
-                        {
-                            closeBrace = i;
-                            break;
-                        }
-                    }
-                }
-
-                if (closeBrace != -1)
-                {
-                    string before = existing.Substring(0, unityIndex);
-                    string after = existing.Substring(closeBrace + 1);
-                    string updated = before + serverJsonSnippet.TrimStart() + after;
-                    File.WriteAllText(configPath, updated, System.Text.Encoding.UTF8);
-                    return;
-                }
-            }
-        }
-
-        int sectionIndex = existing.IndexOf($"\"{effectiveRootKey}\"", StringComparison.Ordinal);
-        if (sectionIndex == -1 && effectiveRootKey == "servers")
-        {
-            sectionIndex = existing.IndexOf("\"mcpServers\"", StringComparison.Ordinal);
-        }
-        else if (sectionIndex == -1 && effectiveRootKey == "mcpServers")
-        {
-            sectionIndex = existing.IndexOf("\"servers\"", StringComparison.Ordinal);
-        }
-
-        if (sectionIndex != -1)
-        {
-            int openBrace = existing.IndexOf('{', sectionIndex);
-            if (openBrace != -1)
-            {
-                string before = existing.Substring(0, openBrace + 1);
-                string after = existing.Substring(openBrace + 1);
-                string separator = after.TrimStart().StartsWith("}") ? "\n" : ",\n";
-                string updated = before + "\n" + serverJsonSnippet + separator + after.TrimStart();
-                File.WriteAllText(configPath, updated, System.Text.Encoding.UTF8);
-                return;
-            }
-        }
-
-        string fallbackContent =
-            "{\n" +
-            $"  \"{effectiveRootKey}\": {{\n" +
-            serverJsonSnippet.TrimStart() + "\n" +
-            "  }\n" +
-            "}\n";
-        File.WriteAllText(configPath, fallbackContent, System.Text.Encoding.UTF8);
-    }
-
-    private static void AppendCodexMcpConfig(string configPath, string mcpDir)
-    {
-        string dir = Path.GetDirectoryName(configPath)!;
-        if (!Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        string formattedMcpDir = mcpDir.Replace('\\', '/');
-        if (!formattedMcpDir.EndsWith("/"))
-        {
-            formattedMcpDir += "/";
-        }
-
-        string codexTomlSnippet =
-            "[mcp_servers.unity-lean-mcp]\n" +
-            "command = \"dotnet\"\n" +
-            "args = [\"UnityLeanMcp.Mcp.dll\"]\n" +
-            $"cwd = \"{formattedMcpDir}\"\n" +
-            "tool_timeout_sec = 1800\n";
-
-        if (!File.Exists(configPath))
-        {
-            File.WriteAllText(configPath, codexTomlSnippet, System.Text.Encoding.UTF8);
-            return;
-        }
-
-        string existing = File.ReadAllText(configPath, System.Text.Encoding.UTF8);
-        const string targetHeader = "[mcp_servers.unity-lean-mcp]";
-        int headerIndex = existing.IndexOf(targetHeader, StringComparison.Ordinal);
-
-        if (headerIndex != -1)
-        {
-            int nextSectionIndex = -1;
-            var nextMatch = System.Text.RegularExpressions.Regex.Match(
-                existing.Substring(headerIndex + targetHeader.Length),
-                @"(?m)^\[");
-            if (nextMatch.Success)
-            {
-                nextSectionIndex = headerIndex + targetHeader.Length + nextMatch.Index;
-            }
-
-            string before = existing.Substring(0, headerIndex);
-            string after = nextSectionIndex != -1 ? existing.Substring(nextSectionIndex) : string.Empty;
-
-            var sbReplace = new System.Text.StringBuilder();
-            sbReplace.Append(before);
-            sbReplace.Append(codexTomlSnippet);
-            if (!string.IsNullOrEmpty(after))
-            {
-                if (!sbReplace.ToString().EndsWith("\n\n"))
-                {
-                    sbReplace.AppendLine();
-                }
-                sbReplace.Append(after.TrimStart('\r', '\n'));
-            }
-
-            string newText = sbReplace.ToString();
-            if (newText != existing)
-            {
-                File.WriteAllText(configPath, newText, System.Text.Encoding.UTF8);
-            }
-            return;
-        }
-
-        var sb = new System.Text.StringBuilder();
-        sb.Append(existing);
-        if (!existing.EndsWith("\n"))
-        {
-            sb.AppendLine();
-        }
-        sb.AppendLine();
-        sb.Append(codexTomlSnippet);
-        File.WriteAllText(configPath, sb.ToString(), System.Text.Encoding.UTF8);
+        finally { Directory.Delete(directory, true); }
     }
 
     [Fact]
@@ -849,7 +661,11 @@ public class InstallerTests
         try
         {
             string resolved = UnityLeanMcp.McpConfigurationPaths.FindMcpDirectory(tempPackage);
-            string expected = UnityLeanMcp.McpConfigurationPaths.NormalizeDirectoryPath(mcpLowerDir);
+            // On a case-insensitive filesystem the preferred uppercase candidate
+            // resolves to this same directory. Detect filesystem behavior, not OS name.
+            string candidate = Directory.Exists(Path.Combine(tempPackage, "MCP~"))
+                ? Path.Combine(tempPackage, "MCP~") : mcpLowerDir;
+            string expected = UnityLeanMcp.McpConfigurationPaths.NormalizeDirectoryPath(candidate);
             Assert.Equal(expected, resolved);
         }
         finally

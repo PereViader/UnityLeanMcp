@@ -123,7 +123,7 @@ public sealed class AutoRefreshEfficiencyTests
 
         public Task<string?> SendCommandAsync(
             int port,
-            string command,
+            string projectRoot, string command,
             int timeoutSeconds = 10,
             CancellationToken cancellationToken = default)
         {
@@ -205,7 +205,7 @@ public sealed class AutoRefreshEfficiencyTests
 
         public Task<bool> IsSocketReadyAsync(
             int port,
-            int timeoutSeconds = 2,
+            string projectRoot, int timeoutSeconds = 2,
             CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 }

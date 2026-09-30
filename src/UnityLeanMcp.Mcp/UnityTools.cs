@@ -417,7 +417,7 @@ public class UnityTools
                 output.Append(file.CoveredPoints.ToString());
                 output.Append("/");
                 output.Append(file.TotalPoints.ToString());
-                output.AppendLine(" points)");
+                output.Append(" points)");
 
                 if (file.UncoveredLines != null && file.UncoveredLines.Length > 0)
                 {

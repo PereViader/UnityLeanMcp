@@ -10,38 +10,6 @@ namespace UnityLeanMcp
 {
     internal static class CommandHelper
     {
-        public static void RunActionAfterStoppingPlaymode(Action action)
-        {
-            if (EditorApplication.isPlayingOrWillChangePlaymode)
-            {
-                Debug.Log("UnityLeanMcp: Stopping PlayMode before executing command...");
-                EditorApplication.isPlaying = false;
-
-                EditorApplication.CallbackFunction checkPlaymode = null;
-                checkPlaymode = () =>
-                {
-                    if (!EditorApplication.isPlayingOrWillChangePlaymode)
-                    {
-                        EditorApplication.update -= checkPlaymode;
-                        Debug.Log("UnityLeanMcp: PlayMode stopped. Executing command...");
-                        try
-                        {
-                            action();
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogException(e);
-                        }
-                    }
-                };
-                EditorApplication.update += checkPlaymode;
-            }
-            else
-            {
-                action();
-            }
-        }
-
         // Shared protocol helpers
         public static string FormatResult(object result, bool isVoidStatement = false, bool prettyPrint = true) =>
             UnityResultFormatter.FormatResult(result, isVoidStatement, prettyPrint);

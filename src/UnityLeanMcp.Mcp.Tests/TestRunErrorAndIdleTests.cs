@@ -118,6 +118,25 @@ public class TestRunErrorAndIdleTests
     }
 
     [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenRegexIsInvalid_ReturnsBeforeRefreshOrTestExecution()
+    {
+        int commandCount = 0;
+        await using var server = await MockUnityServer.StartAsync(command =>
+        {
+            Interlocked.Increment(ref commandCount);
+            return null;
+        });
+
+        var result = await server.Client.RunTestsAsync(null, ["Valid.*", "["], null, null, "editmode");
+
+        Assert.False(result.Success);
+        Assert.Equal("InvalidInput", result.ResultState);
+        Assert.Contains("Invalid test filter 'groupNames[1]'", result.Message);
+        Assert.Contains("invalid .NET regular expression:", result.Message);
+        Assert.Equal(0, commandCount);
+    }
+
+    [Fact]
     public async Task UnityClient_RunTestsAsync_WhenInitialResponseIsError_ReturnsImmediatelyWithoutHanging()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));

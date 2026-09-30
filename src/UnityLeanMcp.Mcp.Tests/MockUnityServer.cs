@@ -137,6 +137,11 @@ public sealed class MockUnityServer : IAsyncDisposable, IDisposable
             {
                 string? line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
                 if (line == null) return;
+                if (!UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line, ProjectRoot, out line))
+                {
+                    await writer.WriteLineAsync("ERROR: Unity project identity mismatch or missing project envelope");
+                    return;
+                }
 
                 string? response = null;
                 if (_asyncHandler != null)

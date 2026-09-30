@@ -1,14 +1,106 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using NUnit.Framework;
 using UnityLeanMcp;
+using Coverage = UnityEngine.TestTools.Coverage;
 
 namespace UnityLeanMcpTests
 {
     public class GetCoverageHandlerTests
     {
         private const string DummyProjectRoot = "C:/Code/MyUnityProject/";
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void QueryAfterRecordingPreservesCapturedHitsAndProfilerSetting(bool originallyEnabled)
+        {
+            bool original = Coverage.enabled;
+            string previousOwner = UnityEditor.SessionState.GetString("UnityLeanMcp_CoverageOwner", "");
+            string previousSnapshot = UnityEditor.SessionState.GetString(GetCoverageHandler.CapturedCoverageKey, "");
+            string runId = Guid.NewGuid().ToString("N");
+            string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
+            var paths = new List<string> { Path.Combine(projectRoot, "Assets/Tests/Editor/GetCoverageHandlerTests.cs") };
+            var method = typeof(GetCoverageHandlerTests).GetMethod(nameof(CoverageQuerySample));
+            try
+            {
+                Coverage.enabled = originallyEnabled;
+                RunTestsHandler.InitializeCoverage(runId);
+                Assert.That(CoverageQuerySample(10), Is.EqualTo(11));
+                var recordedPoints = Coverage.GetSequencePointsFor(method).Where(p => p.line > 0 && p.line != 0xfeefee).ToArray();
+                Assert.That(recordedPoints.All(p => p.hitCount > 0), Is.True, "Fixture must record real native coverage.");
+                Assert.That(recordedPoints, Is.Not.Empty);
+                RunTestsHandler.RestoreCoverage(runId);
+                Assert.That(Coverage.enabled, Is.EqualTo(originallyEnabled));
+                string capturedJson = UnityEditor.SessionState.GetString(GetCoverageHandler.CapturedCoverageKey, "");
+                Assert.That(capturedJson, Is.Not.Empty, "Completed coverage must survive a managed domain reload.");
+
+                // Remove all coverage state, then restore only the native session
+                // payload that survives reload. Query must not rely on a static cache.
+                GetCoverageHandler.ClearCapturedCoverage();
+                UnityEditor.SessionState.SetString(GetCoverageHandler.CapturedCoverageKey, capturedJson);
+
+                // The completed report must survive destruction of native counters.
+                Coverage.enabled = true;
+                Coverage.ResetAll();
+                // A publication retry after reload must not overwrite the persisted
+                // result with freshly reset native counters for the same run.
+                GetCoverageHandler.CaptureCoverage(runId);
+                Assert.That(UnityEditor.SessionState.GetString(GetCoverageHandler.CapturedCoverageKey, ""), Is.EqualTo(capturedJson));
+                Coverage.enabled = originallyEnabled;
+
+                using (var stream = new MemoryStream())
+                using (var writer = new StreamWriter(stream))
+                {
+                    GetCoverageHandler.WriteCoverage(paths, projectRoot, writer);
+                    writer.Flush();
+                    Assert.That(Coverage.enabled, Is.EqualTo(originallyEnabled));
+                    string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).TrimStart('\uFEFF');
+                    Assert.That(response, Does.StartWith("SUCCESS "));
+                    var report = UnityEngine.JsonUtility.FromJson<CoverageResponsePayload>(
+                        ProtocolCodec.UnescapeLine(response.Substring("SUCCESS ".Length).TrimEnd()));
+                    Assert.That(report.files.Single().coveredPoints, Is.GreaterThan(0));
+                    foreach (var point in recordedPoints)
+                        Assert.That(report.files.Single().uncoveredLines.Contains((int)point.line), Is.False);
+                }
+            }
+            finally
+            {
+                Coverage.enabled = original;
+                UnityEditor.SessionState.SetString("UnityLeanMcp_CoverageOwner", previousOwner);
+                UnityEditor.SessionState.SetString(GetCoverageHandler.CapturedCoverageKey, previousSnapshot);
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FailedCoverageQueryRestoresProfilerSetting(bool originallyEnabled)
+        {
+            bool original = Coverage.enabled;
+            try
+            {
+                Coverage.enabled = originallyEnabled;
+                using (var stream = new MemoryStream())
+                using (var writer = new FailingCoverageWriter(stream))
+                {
+                    Assert.Throws<IOException>(() => GetCoverageHandler.WriteCoverage(
+                        new List<string> { "Assets/Tests/Editor/GetCoverageHandlerTests.cs" },
+                        UnityLeanMcpPaths.ProjectRoot, writer));
+                    Assert.That(Coverage.enabled, Is.EqualTo(originallyEnabled));
+                }
+            }
+            finally { Coverage.enabled = original; }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        public static int CoverageQuerySample(int value) => value + 1;
+
+        private sealed class FailingCoverageWriter : StreamWriter
+        {
+            public FailingCoverageWriter(Stream stream) : base(stream) { }
+            public override void WriteLine(string value) => throw new IOException("Injected coverage output failure.");
+        }
 
         [TestCase(".", "")]
         [TestCase("./", "")]
@@ -25,6 +117,24 @@ namespace UnityLeanMcpTests
         {
             string actual = GetCoverageHandler.NormalizePathRelativeToProject(input, DummyProjectRoot);
             Assert.That(actual, Is.EqualTo(expected));
+        }
+
+        [TestCase("Assets/Child/../Player.cs", "Assets/Player.cs")]
+        [TestCase("Assets/Child/..", "Assets/Player.cs")]
+        public void ExistingPathWithDotSegmentsMatchesCanonicalSource(string requested, string source)
+        {
+            string root = Path.Combine(Path.GetTempPath(), "coverage-canonical-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(root, "Assets", "Child"));
+            File.WriteAllText(Path.Combine(root, "Assets", "Player.cs"), "// fixture");
+            try
+            {
+                Assert.That(GetCoverageHandler.TryResolveExistingPath(requested, root, out _), Is.True);
+                string filter = GetCoverageHandler.NormalizePathRelativeToProject(requested, root);
+                if (!filter.EndsWith(".cs")) filter += "/";
+                Assert.That(GetCoverageHandler.MatchesAnyFilter(source, new List<string> { filter }), Is.True);
+                Assert.That(GetCoverageHandler.MatchesAnyFilter("AssetsOther/Player.cs", new List<string> { filter }), Is.False);
+            }
+            finally { Directory.Delete(root, true); }
         }
 
         [TestCase("2021.3.15f1", false)]

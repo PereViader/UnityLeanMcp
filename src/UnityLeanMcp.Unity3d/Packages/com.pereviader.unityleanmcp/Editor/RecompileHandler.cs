@@ -7,6 +7,6 @@ namespace PereViader.UnityLeanMcp.Editor
     {
         protected override string OperationKind => OperationKinds.Recompile;
         protected override string StatusWord => "RECOMPILING";
-        protected override void ExecuteCompilation() => CompilationPipeline.RequestScriptCompilation();
+        protected override void ExecuteCompilation() => CompilationPipeline.RequestScriptCompilation(RequestScriptCompilationOptions.CleanBuildCache);
     }
 }

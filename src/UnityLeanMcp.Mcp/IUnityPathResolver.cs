@@ -4,7 +4,6 @@ public interface IUnityPathResolver
 {
     string ProjectRoot { get; }
     string TempDir { get; }
-    string OperationFile { get; }
     string CompilationErrorsFile { get; }
     string PortFile { get; }
     string LogFile { get; }

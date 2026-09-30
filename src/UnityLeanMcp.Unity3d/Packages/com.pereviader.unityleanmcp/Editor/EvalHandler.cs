@@ -22,6 +22,20 @@ namespace UnityLeanMcp
 
         public void Handle(string payload, StreamWriter writer)
         {
+            string[] requestParts = (payload ?? "").Split(new[] { ' ' }, 2);
+            if (requestParts.Length < 2 || string.IsNullOrWhiteSpace(requestParts[1]))
+            {
+                writer.WriteLine("ERROR: Missing operation id or code snippet");
+                return;
+            }
+
+            string operationId = requestParts[0];
+            if (File.Exists(UnityLeanMcpPaths.GetEvalResultFile(operationId)))
+            {
+                writer.WriteLine("RUNNING");
+                return;
+            }
+
             if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
             {
                 writer.WriteLine("FAILURE Compilation failed");
@@ -36,14 +50,6 @@ namespace UnityLeanMcp
                 return;
             }
 
-            string[] requestParts = (payload ?? "").Split(new[] { ' ' }, 2);
-            if (requestParts.Length < 2 || string.IsNullOrWhiteSpace(requestParts[1]))
-            {
-                writer.WriteLine("ERROR: Missing operation id or code snippet");
-                return;
-            }
-
-            string operationId = requestParts[0];
             string rawCode = ProtocolCodec.UnescapeLine(requestParts[1].Trim());
             var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKinds.Eval, OperationStatus.Compiling, out var existing);
             if (begin == BeginOperationResult.Invalid)

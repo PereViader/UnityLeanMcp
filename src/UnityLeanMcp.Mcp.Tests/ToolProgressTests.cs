@@ -225,7 +225,7 @@ public class ToolProgressTests
             return null;
         });
 
-        await using var client = new McpTestClient(server.ProjectRoot);
+        await using var client = new McpTestClient(server.ProjectRoot, typeof(UnityClient).Assembly.Location);
 
         // Test 1: unity_refresh
         var refreshResult = await client.CallToolAsync(

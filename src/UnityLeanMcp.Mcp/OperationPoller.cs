@@ -17,7 +17,6 @@ public sealed class OperationPollingSpec<TResult> where TResult : class, IOperat
     public required string PollCommand { get; init; }
     public int PollTimeoutSeconds { get; init; } = 5;
     public int PollIntervalMs { get; init; } = 500;
-    public bool CheckOperationStoreForInterruption { get; init; } = true;
     public bool ShouldCancelOnAborted { get; init; } = true;
     /// <summary>
     /// Requires a matching durable result before accepting a protocol success.
@@ -100,15 +99,38 @@ public class OperationPoller : IOperationPoller
     public async Task CancelOperationAsync(string opId, string kind, CancellationToken cancellationToken = default)
     {
         _logger?.LogInformation("Cancellation requested. Sending CANCEL_OPERATION for {OpId} ({Kind})...", opId, kind);
-        try
+        while (true)
         {
-            int port = _processManager.ReadPortFile();
-            await _socketTransport.SendCommandAsync(port, $"CANCEL_OPERATION {opId}", 3, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (HasTerminalResult(opId, kind)) return;
+            try
+            {
+                int port = _processManager.ReadPortFile();
+                string? response = await _socketTransport.SendCommandAsync(port, _pathResolver.ProjectRoot, $"CANCEL_OPERATION {opId}", 3, cancellationToken);
+                if (response is "CANCELLED" or "NO_OPERATION" or "NOT_CANCELABLE" ||
+                    response?.StartsWith("MISMATCH ", StringComparison.Ordinal) == true)
+                    return;
+            }
+            catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
+            {
+                _logger?.LogTrace(ex, "Failed to send CANCEL_OPERATION command for {OpId}", opId);
+            }
+            if (!_processManager.IsUnityRunning(out _))
+                return;
+            await Task.Delay(500, cancellationToken);
         }
-        catch (Exception ex)
+    }
+
+    private bool HasTerminalResult(string opId, string kind)
+    {
+        if (!Enum.TryParse<UnityOperationKind>(kind, true, out var operationKind)) return false;
+        string path = _pathResolver.GetResultFilePath(operationKind, opId);
+        return operationKind switch
         {
-            _logger?.LogTrace(ex, "Failed to send CANCEL_OPERATION command for {OpId}", opId);
-        }
+            UnityOperationKind.Test => TryReadJsonFile<UnityTestRunResult>(path, r => r.OperationId == opId) != null,
+            UnityOperationKind.Refresh or UnityOperationKind.Recompile => TryReadJsonFile<UnityRefreshResult>(path, r => r.OperationId == opId) != null,
+            _ => TryReadJsonFile<UnityOperationResult>(path, r => r.OperationId == opId) != null
+        };
     }
 
     public virtual async Task<TResult> PollOperationUntilTerminalAsync<TResult>(
@@ -133,26 +155,10 @@ public class OperationPoller : IOperationPoller
                     return result!;
                 }
 
-                // 3. Operation store check for interruption
-                if (spec.CheckOperationStoreForInterruption)
-                {
-                    var opState = TryReadJsonFile<UnityLeanMcpOperationState>(_pathResolver.OperationFile, o => o.OperationId == spec.OperationId);
-                    if (opState != null && opState.Status == "Interrupted")
-                    {
-                        return new TResult
-                        {
-                            OperationId = spec.OperationId,
-                            Success = false,
-                            Interrupted = true,
-                            Message = "Unity operation was interrupted by domain reload or editor restart."
-                        };
-                    }
-                }
-
-                // 4. Poll socket
+                // 3. Poll socket
                 int port = _processManager.ReadPortFile();
                 string? pollResp = port > 0
-                    ? await _socketTransport.SendCommandAsync(port, spec.PollCommand, spec.PollTimeoutSeconds, cancellationToken)
+                    ? await _socketTransport.SendCommandAsync(port, _pathResolver.ProjectRoot, spec.PollCommand, spec.PollTimeoutSeconds, cancellationToken)
                     : null;
 
                 if (pollResp == null)

@@ -9,6 +9,7 @@ namespace UnityLeanMcp
         public const string Recompile = "recompile";
         public const string Test = "test";
         public const string Eval = "eval";
+        public const string Coverage = "coverage";
     }
 
     internal static class OperationStatus

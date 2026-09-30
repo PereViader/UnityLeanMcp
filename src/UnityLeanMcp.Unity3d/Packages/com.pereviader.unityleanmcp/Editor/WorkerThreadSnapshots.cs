@@ -7,14 +7,6 @@ using System.Threading;
 
 namespace UnityLeanMcp
 {
-    internal enum OperationStateReadStatus
-    {
-        Valid,
-        Missing,
-        Invalid,
-        Unavailable
-    }
-
     /// <summary>
     /// Immutable data read by socket worker threads. This type deliberately has
     /// no Unity dependencies so a worker can inspect durable state while the
@@ -94,57 +86,6 @@ namespace UnityLeanMcp
 
     internal static class WorkerThreadSnapshots
     {
-        internal static OperationStateReadStatus ReadOperationState(string path, out WorkerOperationStateSnapshot snapshot)
-        {
-            snapshot = null;
-            FileReadStatus fileStatus = TryReadFileWithStatus(path, out string json);
-            if (fileStatus == FileReadStatus.Missing)
-            {
-                return OperationStateReadStatus.Missing;
-            }
-
-            if (fileStatus == FileReadStatus.Unavailable)
-            {
-                return OperationStateReadStatus.Unavailable;
-            }
-
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                return OperationStateReadStatus.Invalid;
-            }
-
-            Dictionary<string, object> values;
-            try
-            {
-                values = new JsonObjectReader(json).ReadObject();
-            }
-            catch (Exception)
-            {
-                return OperationStateReadStatus.Invalid;
-            }
-
-            string operationId = GetString(values, "operationId");
-            string kind = GetString(values, "kind");
-            if (!IsValidToken(operationId) || !IsValidToken(kind))
-            {
-                return OperationStateReadStatus.Invalid;
-            }
-
-            snapshot = new WorkerOperationStateSnapshot(
-                operationId,
-                kind,
-                GetString(values, "status"),
-                GetString(values, "editorSessionId"),
-                GetString(values, "startedUtc"),
-                GetString(values, "updatedUtc"));
-            return OperationStateReadStatus.Valid;
-        }
-
-        internal static bool TryReadOperationState(string path, out WorkerOperationStateSnapshot snapshot)
-        {
-            return ReadOperationState(path, out snapshot) == OperationStateReadStatus.Valid;
-        }
-
         internal static bool TryReadTestRunState(string path, out WorkerTestRunStateSnapshot snapshot)
         {
             snapshot = null;
@@ -318,7 +259,7 @@ namespace UnityLeanMcp
                 if (File.Exists(path))
                 {
                     // A marker for another run can only be stale here: the
-                    // operation journal serializes test runs. Remove it so a
+                    // operation gate serializes test runs. Remove it so a
                     // newly accepted request is not lost after a crash.
                     File.Delete(path);
                 }

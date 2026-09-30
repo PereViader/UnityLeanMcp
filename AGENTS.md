@@ -1,9 +1,10 @@
 # Development Guidelines
 
-- Design every change to work reliably on Windows, Linux, and macOS.
-- Prefer simple, transactional designs. Keep operations easy to reason about and recover from so that complexity does not introduce subtle, difficult-to-diagnose bugs.
-- Treat Unity's domain reload as asynchronous and externally triggered. Unity may reload the domain at any time—not only in response to UnityLeanMcp—because the user can interact with the Unity Editor while an operation is running, or Unity can detect script changes in the background. Code must therefore tolerate interruption and reinitialization without relying on uninterrupted process state.
-- Avoid bounded timeouts. Never use arbitrary timeouts to cut off operations; execution flow must remain deterministic and reliable regardless of environmental timing or duration. Delays should only be used when strictly necessary for reliability—not as operation timeouts, but as short delays to allow external operations or services to warm up and settle. If a backing operation remains active indefinitely, the code (including MCP tools) must also remain active; operations should never time out for unknown reasons, and should only finish when the backing operation completes, fails, or is stopped.
-- Do not preserve, emulate, or add compatibility behavior for older clients, protocol revisions, or deprecated APIs. Remove obsolete commands, overloads, adapters, and their tests rather than translating old requests or providing fallbacks.
-- Read and adhere to both [DESIGN.md](DESIGN.md) (for architectural decisions) and [LEARNINGS.md](LEARNINGS.md) (to avoid repeating known mistakes, platform quirks, and edge cases) before making changes.
-- Record any new design decisions in [DESIGN.md](DESIGN.md), and record any new relevant learnings, edge cases, platform quirks, or framework behaviors in [LEARNINGS.md](LEARNINGS.md) to persist them for future tasks.
+- Support Windows, Linux, and macOS. Avoid assumptions about filesystem casing, path syntax, process discovery, or file sharing.
+- Prefer simple, transactional operations with explicit ownership, recoverable state, and clear completion conditions.
+- Treat Unity domain reloads as asynchronous and externally triggered. Persist recovery state before work that can be interrupted; do not rely on uninterrupted managed execution.
+- Do not end an operation solely because time has elapsed. Wait until backing work completes, fails, or is stopped. Honor caller cancellation without claiming the backing work has finished. Use delays only for polling, retry pacing, or lifecycle settlement, never as operation deadlines.
+- Support the current client and protocol only. Remove replaced commands, deprecated APIs, overloads, adapters, and their tests instead of adding compatibility fallbacks. This does not remove support for the package's declared Unity versions.
+- Use [docs/README.md](docs/README.md) for architecture and topic navigation. Read only the linked sections relevant to the change.
+- Update the owning documentation section when a change introduces or invalidates a lasting decision or non-obvious learning. Edit the relevant section instead of appending a change log. Keep each rule in one place; omit implementation inventories, unsupported guarantees, and routine refactor history.
+- Run GitHub CLI (`gh`) commands outside the sandbox.

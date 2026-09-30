@@ -12,9 +12,21 @@ namespace UnityLeanMcp
 {
     internal class GetCoverageHandler : ICommandHandler
     {
+        // Native counters can be lost when Coverage.enabled becomes false. Keep
+        // the completed report in native session state before restoring the flag:
+        // Test Runner cleanup can unlock a pending reload after RunFinished.
+        internal const string CapturedCoverageKey = "UnityLeanMcp_CapturedCoverage";
+
+        [Serializable]
+        private sealed class CapturedCoverage
+        {
+            public string runId;
+            public List<CoverageFileReport> files;
+        }
+
         public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.MainThread;
         public bool IsMutating => false;
-        public bool RequiresCompilationSettled => true;
+        public bool RequiresCompilationSettled => false;
 
         public void Handle(string payload, StreamWriter writer)
         {
@@ -24,27 +36,6 @@ namespace UnityLeanMcp
                 writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
                 return;
             }
-
-            if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
-            {
-                writer.WriteLine("FAILURE Compilation failed");
-                return;
-            }
-
-            if (UnityLeanMcpCompilationTracker.IsCompiling ||
-                UnityLeanMcpCompilationTracker.RefreshPending ||
-                UnityLeanMcpCompilationTracker.RefreshRequired)
-            {
-                writer.WriteLine("BUSY compile");
-                return;
-            }
-
-            if (CompilationPipeline.codeOptimization == CodeOptimization.Release)
-            {
-                writer.WriteLine("FAILURE Cannot query code coverage: Unity script optimization is set to Release mode. Switch Unity to Debug mode before running tests and inspecting coverage.");
-                return;
-            }
-
 
             string trimmedPayload = (payload ?? "").Trim();
             if (string.IsNullOrEmpty(trimmedPayload))
@@ -84,15 +75,20 @@ namespace UnityLeanMcp
 
             // Validate that requested paths exist on disk before querying runtime stats
             var nonExistentPaths = new List<string>();
+            var resolvedPaths = new List<string>();
             foreach (var rawPath in args.paths)
             {
-                if (!TryResolveExistingPath(rawPath, projectRoot, out _))
+                if (!TryResolveExistingPath(rawPath, projectRoot, out string fullPath))
                 {
                     string trimmed = rawPath.Trim();
                     if (!nonExistentPaths.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
                     {
                         nonExistentPaths.Add(trimmed);
                     }
+                }
+                else
+                {
+                    resolvedPaths.Add(fullPath);
                 }
             }
 
@@ -109,8 +105,16 @@ namespace UnityLeanMcp
                 return;
             }
 
-            var coveredStats = Coverage.GetStatsForAllCoveredMethods();
-            if (coveredStats == null || coveredStats.Length == 0)
+            WriteCoverage(resolvedPaths, projectRoot, writer);
+        }
+
+        internal static void WriteCoverage(List<string> resolvedPaths, string projectRoot, StreamWriter writer)
+        {
+            string capturedJson = SessionState.GetString(CapturedCoverageKey, "");
+            var captured = string.IsNullOrEmpty(capturedJson)
+                ? null
+                : JsonUtility.FromJson<CapturedCoverage>(capturedJson);
+            if (captured?.files == null)
             {
                 writer.WriteLine("FAILURE No coverage data recorded. Run 'unity_test' with coverage: true first.");
                 return;
@@ -118,7 +122,7 @@ namespace UnityLeanMcp
 
             // Normalize requested filter paths
             var normalizedFilters = new List<string>();
-            foreach (var rawPath in args.paths)
+            foreach (var rawPath in resolvedPaths)
             {
                 string p = NormalizePathRelativeToProject(rawPath, projectRoot);
 
@@ -137,6 +141,37 @@ namespace UnityLeanMcp
                 return;
             }
 
+            var reports = captured.files.Where(r => MatchesAnyFilter(r.path, normalizedFilters)).ToList();
+            foreach (string filter in normalizedFilters)
+            {
+                if (filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
+                    !reports.Any(r => r.path.Equals(filter, StringComparison.OrdinalIgnoreCase)))
+                {
+                    reports.Add(CreateEmptyFileReport(filter));
+                }
+            }
+
+            string json = JsonUtility.ToJson(new CoverageResponsePayload
+            {
+                files = reports.OrderBy(r => r.path, StringComparer.OrdinalIgnoreCase).ToList()
+            });
+            writer.WriteLine($"SUCCESS {ProtocolCodec.EscapeLine(json)}");
+        }
+
+        internal static void ClearCapturedCoverage() => SessionState.EraseString(CapturedCoverageKey);
+
+        internal static void CaptureCoverage(string runId)
+        {
+            string previousJson = SessionState.GetString(CapturedCoverageKey, "");
+            if (!string.IsNullOrEmpty(previousJson) &&
+                JsonUtility.FromJson<CapturedCoverage>(previousJson)?.runId == runId)
+                return;
+
+            if (!Coverage.enabled)
+                return;
+
+            string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
+            var normalizedFilters = new List<string> { "" };
 
             // Find assemblies containing scripts that match any requested filter
             var allAssemblies = CompilationPipeline.GetAssemblies();
@@ -256,34 +291,9 @@ namespace UnityLeanMcp
                 }
             }
 
-            // Also check if an exact .cs file filter exists on disk even if not in compiled assembly source files
-            foreach (var filter in normalizedFilters)
-            {
-                if (!string.IsNullOrEmpty(filter) && filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!reports.Any(r => r.path.Equals(filter, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        if (!IsPathRootedCrossPlatform(filter))
-                        {
-                            string fullPath = Path.Combine(projectRoot, filter);
-                            if (File.Exists(fullPath))
-                            {
-                                reports.Add(CreateEmptyFileReport(filter));
-                            }
-                        }
-                    }
-                }
-            }
-
             reports = reports.OrderBy(r => r.path, StringComparer.OrdinalIgnoreCase).ToList();
 
-            var response = new CoverageResponsePayload
-            {
-                files = reports
-            };
-
-            string json = JsonUtility.ToJson(response);
-            writer.WriteLine($"SUCCESS {ProtocolCodec.EscapeLine(json)}");
+            SessionState.SetString(CapturedCoverageKey, JsonUtility.ToJson(new CapturedCoverage { runId = runId, files = reports }));
         }
 
         private static CoverageFileReport CreateEmptyFileReport(string path) =>
@@ -298,6 +308,8 @@ namespace UnityLeanMcp
         internal static string NormalizePathRelativeToProject(string path, string projectRoot)
         {
             if (string.IsNullOrEmpty(path)) return "";
+            if (TryResolveExistingPath(path, projectRoot, out string canonicalPath))
+                path = canonicalPath;
             string p = path.Trim().Replace('\\', '/');
             string normRoot = (projectRoot ?? "").Replace('\\', '/').TrimEnd('/');
             if (!string.IsNullOrEmpty(normRoot))

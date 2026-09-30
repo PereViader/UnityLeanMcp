@@ -504,7 +504,7 @@ public class UnityProcessManagerTests
                     using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
                     {
                         string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) return;
+                        if (line == null || !UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line, tempDir, out line)) return;
 
                         if (line == "PING")
                         {
@@ -596,7 +596,7 @@ public class UnityProcessManagerTests
                         }
 
                         string? line = await reader.ReadLineAsync(cts.Token);
-                        if (line == null) return;
+                        if (line == null || !UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line, tempDir, out line)) return;
 
                         if (line == "PING")
                         {
@@ -669,6 +669,7 @@ public class UnityProcessManagerTests
                     using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
                     {
                         string? line = await reader.ReadLineAsync(cts.Token);
+                        UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line!, tempDir, out line);
                         if (line == "PING") await writer.WriteLineAsync("PONG".AsMemory(), cts.Token);
                         else if (line != null && line.StartsWith("POLL_REFRESH")) await writer.WriteLineAsync("READY".AsMemory(), cts.Token);
                     }
@@ -728,8 +729,7 @@ public class UnityProcessManagerTests
             });
 
             Assert.Contains("NewBroken.cs", ex.Message);
-            try { proc.WaitForExit(3000); } catch { }
-            Assert.True(proc.HasExited, "Started process should have been killed when compilation error was detected.");
+            Assert.False(proc.HasExited, "Compilation errors must leave the Editor available for the developer to fix them.");
         }
         finally
         {
@@ -1178,10 +1178,8 @@ public class UnityProcessManagerTests
         string lockFilePath = Path.Combine(tempSubDir, "UnityLockfile");
         using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
 
-        string operationFile = Path.Combine(tempSubDir, "unity_lean_mcp_operation.json");
         string testRunningFile = Path.Combine(tempSubDir, "unity_test_running.txt");
         string refreshResultFile = Path.Combine(tempSubDir, "unity_refresh_result.json");
-        File.WriteAllText(operationFile, "operation");
         File.WriteAllText(testRunningFile, "running");
         File.WriteAllText(refreshResultFile, "refresh history");
 
@@ -1200,7 +1198,6 @@ public class UnityProcessManagerTests
             Assert.False(stopped, "StopUnityAsync must refuse to stop an unattributed Editor.");
             Assert.False(proc1.HasExited, "proc1 should NOT have been killed by StopUnityAsync.");
             Assert.False(proc2.HasExited, "proc2 should NOT have been killed by StopUnityAsync.");
-            Assert.True(File.Exists(operationFile), "Operation state must be preserved when Editor ownership is unproven.");
             Assert.True(File.Exists(testRunningFile), "Test-running state must be preserved when Editor ownership is unproven.");
             Assert.True(File.Exists(refreshResultFile), "Shared refresh history must be preserved.");
         }
@@ -1329,10 +1326,8 @@ public class UnityProcessManagerTests
         string lockFilePath = Path.Combine(tempSubDir, "UnityLockfile");
         using var lockStream = File.Open(lockFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
 
-        string operationFile = Path.Combine(tempSubDir, "unity_lean_mcp_operation.json");
         string testRunningFile = Path.Combine(tempSubDir, "unity_test_running.txt");
         string refreshResultFile = Path.Combine(tempSubDir, "unity_refresh_result.json");
-        File.WriteAllText(operationFile, "operation");
         File.WriteAllText(testRunningFile, "running");
         File.WriteAllText(refreshResultFile, "refresh history");
 
@@ -1345,13 +1340,12 @@ public class UnityProcessManagerTests
             Assert.Equal("GUI", procManager.GetUnityMode());
 
             procManager.PurgeOperationState();
-            Assert.True(File.Exists(operationFile), "PurgeOperationState must preserve state while Unity is running.");
+            Assert.True(File.Exists(testRunningFile), "PurgeOperationState must preserve state while Unity is running.");
 
             bool stopped = await procManager.StopUnityAsync(force: false);
 
             Assert.False(stopped);
             Assert.False(proc.HasExited, "proc should NOT have been killed when force is false.");
-            Assert.True(File.Exists(operationFile), "Operation state must be preserved after GUI-stop refusal.");
             Assert.True(File.Exists(testRunningFile), "Running marker must be preserved after GUI-stop refusal.");
             Assert.True(File.Exists(refreshResultFile), "Shared refresh history must be preserved.");
         }
@@ -1370,7 +1364,6 @@ public class UnityProcessManagerTests
 
         Assert.Equal(Path.GetFullPath(projectRoot), resolver.ProjectRoot);
         Assert.Equal(Path.Combine(resolver.ProjectRoot, "Temp"), resolver.TempDir);
-        Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_operation.json"), resolver.OperationFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_compilation_errors.txt"), resolver.CompilationErrorsFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_port.txt"), resolver.PortFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_background_log.txt"), resolver.LogFile);
@@ -1405,7 +1398,6 @@ public class UnityProcessManagerTests
 
         Assert.Same(resolver, pm.PathResolver);
         Assert.Equal(resolver.ProjectRoot, pm.PathResolver.ProjectRoot);
-        Assert.Equal(resolver.OperationFile, pm.PathResolver.OperationFile);
         Assert.Equal(resolver.TempDir, pm.PathResolver.TempDir);
         Assert.Equal(resolver.PortFile, pm.PathResolver.PortFile);
         Assert.Equal(resolver.StartupLockFile, pm.PathResolver.StartupLockFile);
@@ -1707,14 +1699,14 @@ public class UnityProcessManagerTests
 
         public Task<string?> SendCommandAsync(
             int port,
-            string command,
+            string projectRoot, string command,
             int timeoutSeconds = 10,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<string?>(_isReady && command == "PING" ? "PONG" : null);
 
         public Task<bool> IsSocketReadyAsync(
             int port,
-            int timeoutSeconds = 2,
+            string projectRoot, int timeoutSeconds = 2,
             CancellationToken cancellationToken = default)
         {
             ReadinessProbeCount++;

@@ -9,7 +9,6 @@ namespace UnityLeanMcp
         private static string s_ProjectRoot;
         private static string s_TempDir;
         private static string s_PortFile;
-        private static string s_OperationFile;
         private static string s_DiagnosticsFile;
         private static string s_RefreshResultFile;
         private static string s_TestRunningFile;
@@ -41,14 +40,6 @@ namespace UnityLeanMcp
             {
                 if (string.IsNullOrEmpty(s_PortFile)) EnsureInitialized();
                 return s_PortFile;
-            }
-        }
-        public static string OperationFile
-        {
-            get
-            {
-                if (string.IsNullOrEmpty(s_OperationFile)) EnsureInitialized();
-                return s_OperationFile;
             }
         }
         public static string DiagnosticsFile
@@ -106,6 +97,9 @@ namespace UnityLeanMcp
         public static string GetEvalResultFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? EvalResultFile : Path.Combine(TempDir, $"unity_eval_{operationId}.json");
 
+        public static string GetCoverageResultFile(string operationId) =>
+            string.IsNullOrEmpty(operationId) ? Path.Combine(TempDir, "unity_coverage_result.json") : Path.Combine(TempDir, $"unity_coverage_{operationId}.json");
+
         public static string GetTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
 
@@ -125,6 +119,11 @@ namespace UnityLeanMcp
             if (string.Equals(kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
             {
                 return GetEvalResultFile(operationId);
+            }
+
+            if (string.Equals(kind, OperationKinds.Coverage, StringComparison.OrdinalIgnoreCase))
+            {
+                return GetCoverageResultFile(operationId);
             }
 
             throw new ArgumentOutOfRangeException(nameof(kind), kind, $"Unknown operation kind: {kind}");
@@ -153,7 +152,6 @@ namespace UnityLeanMcp
             if (string.IsNullOrEmpty(s_ProjectRoot)) return;
             s_TempDir = Path.Combine(s_ProjectRoot, "Temp");
             s_PortFile = Path.Combine(s_TempDir, "unity_lean_mcp_port.txt");
-            s_OperationFile = Path.Combine(s_TempDir, "unity_lean_mcp_operation.json");
             s_DiagnosticsFile = Path.Combine(s_TempDir, "unity_compilation_errors.txt");
             s_RefreshResultFile = Path.Combine(s_TempDir, "unity_refresh_result.json");
             s_TestRunningFile = Path.Combine(s_TempDir, "unity_test_running.txt");

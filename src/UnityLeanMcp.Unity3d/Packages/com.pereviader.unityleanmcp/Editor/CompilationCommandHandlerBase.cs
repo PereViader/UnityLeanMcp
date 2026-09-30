@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using UnityEngine;
 using UnityLeanMcp;
 
 namespace PereViader.UnityLeanMcp.Editor
@@ -35,8 +37,14 @@ namespace PereViader.UnityLeanMcp.Editor
                 return;
             }
 
-            writer.WriteLine(StatusWord);
-            writer.Flush();
+            // A disconnected caller must not prevent already admitted work.
+            try
+            {
+                writer.WriteLine(StatusWord);
+                writer.Flush();
+            }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
 
             if (begin == BeginOperationResult.AlreadyStarted)
             {
@@ -51,6 +59,13 @@ namespace PereViader.UnityLeanMcp.Editor
             try
             {
                 ExecuteCompilation();
+            }
+            catch (Exception ex)
+            {
+                UnityLeanMcpCompilationTracker.CompilationRequested = false;
+                var result = new UnityRefreshResult { operationId = operationId, success = false, message = ex.ToString() };
+                UnityCommandGate.PublishResult(OperationKind, operationId,
+                    UnityLeanMcpPaths.GetRefreshResultFile(operationId), JsonUtility.ToJson(result, true));
             }
             finally
             {

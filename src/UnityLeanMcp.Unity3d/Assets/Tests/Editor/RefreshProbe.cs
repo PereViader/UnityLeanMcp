@@ -7,8 +7,11 @@ namespace Tests
 {
     public static class RefreshProbe
     {
+        public static readonly string DomainToken = System.Guid.NewGuid().ToString("N");
+
         public static string PollRefreshWhileBusy()
         {
+            string projectRoot = UnityLeanMcp.UnityLeanMcpPaths.ProjectRoot;
             int port = 0;
             string portFile = Path.Combine(Directory.GetCurrentDirectory(), "Temp", "unity_lean_mcp_port.txt");
             if (File.Exists(portFile))
@@ -32,7 +35,7 @@ namespace Tests
                     using var reader = new StreamReader(stream, Encoding.UTF8);
                     using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
-                    writer.WriteLine("POLL_REFRESH");
+                    writer.WriteLine(UnityLeanMcp.ProjectCommandEnvelope.Encode(projectRoot, "POLL_REFRESH"));
                     bgResponse = reader.ReadLine();
                 }
                 catch (System.Exception ex)

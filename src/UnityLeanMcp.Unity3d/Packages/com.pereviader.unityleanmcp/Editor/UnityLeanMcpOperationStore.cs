@@ -26,20 +26,20 @@ namespace UnityLeanMcp
     }
 
     /// <summary>
-    /// Durable, project-scoped ownership for commands which may outlive their
-    /// socket or managed AppDomain. All mutations happen on Unity's main thread.
+    /// In-memory and session-backed gate for Unity operations, eliminating on-disk operation journals.
+    /// Delegates active state management to UnityCommandGate.
+    /// Provides atomic write utilities for result and diagnostic files.
     /// </summary>
     internal static class UnityLeanMcpOperationStore
     {
         private const string EditorSessionKey = "UnityLeanMcp.EditorSessionId";
-        private static readonly OperationStateCache s_CachedState = new OperationStateCache();
-        private static string s_EditorSessionId;
+        private static volatile string s_EditorSessionId;
 
-        internal static string OperationFilePath => UnityLeanMcpPaths.OperationFile;
+        internal static string EditorSessionId => s_EditorSessionId ?? "";
 
-        internal static string EditorSessionId
+        internal static void EnsureInitialized()
         {
-            get
+            try
             {
                 if (string.IsNullOrEmpty(s_EditorSessionId))
                 {
@@ -51,17 +51,7 @@ namespace UnityLeanMcp
                     }
                     s_EditorSessionId = value;
                 }
-
-                return s_EditorSessionId;
-            }
-        }
-
-        internal static void EnsureInitialized()
-        {
-            try
-            {
-                _ = EditorSessionId;
-                Read();
+                UnityCommandGate.InitializeMainThread();
             }
             catch (Exception ex)
             {
@@ -71,142 +61,83 @@ namespace UnityLeanMcp
 
         internal static BeginOperationResult TryBegin(string operationId, string kind, string status, out UnityLeanMcpOperationState existing)
         {
+            var res = UnityCommandGate.TryBegin(kind, operationId, status, out var busyReason);
             existing = Read();
-            if (!IsValidToken(operationId) || !IsValidToken(kind))
+            if (res == BeginGateResult.Busy && existing == null)
             {
-                return BeginOperationResult.Invalid;
-            }
-
-            if (existing != null)
-            {
-                if (existing.operationId == operationId && existing.kind == kind)
+                string[] parts = (busyReason ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                existing = new UnityLeanMcpOperationState
                 {
-                    return BeginOperationResult.AlreadyStarted;
-                }
-
-                return BeginOperationResult.Busy;
+                    kind = parts.Length > 0 ? parts[0] : "compile",
+                    operationId = parts.Length > 1 ? parts[1] : "",
+                    status = OperationStatus.Running,
+                    editorSessionId = EditorSessionId,
+                    startedUtc = DateTime.UtcNow.ToString("o"),
+                    updatedUtc = DateTime.UtcNow.ToString("o")
+                };
             }
 
-            string now = DateTime.UtcNow.ToString("o");
-            var state = new UnityLeanMcpOperationState
+            return res switch
             {
-                operationId = operationId,
-                kind = kind,
-                status = status,
-                editorSessionId = EditorSessionId,
-                startedUtc = now,
-                updatedUtc = now
+                BeginGateResult.Started => BeginOperationResult.Started,
+                BeginGateResult.AlreadyStarted => BeginOperationResult.AlreadyStarted,
+                BeginGateResult.Busy => BeginOperationResult.Busy,
+                _ => BeginOperationResult.Invalid
             };
-            Write(state);
-            existing = state;
-            return BeginOperationResult.Started;
         }
 
         internal static UnityLeanMcpOperationState Read()
         {
-            try
+            var snap = UnityCommandGate.ReadSnapshot();
+            if (snap == null) return null;
+            return new UnityLeanMcpOperationState
             {
-                string json;
-                WorkerThreadSnapshots.FileReadStatus fileStatus =
-                    WorkerThreadSnapshots.TryReadFileWithStatus(OperationFilePath, out json);
-                if (fileStatus == WorkerThreadSnapshots.FileReadStatus.Missing)
-                {
-                    s_CachedState.Clear();
-                    return null;
-                }
-
-                if (fileStatus == WorkerThreadSnapshots.FileReadStatus.Unavailable)
-                {
-                    return FromWorkerSnapshot(s_CachedState.GetCached());
-                }
-
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    s_CachedState.Clear();
-                    return null;
-                }
-
-                var state = JsonUtility.FromJson<UnityLeanMcpOperationState>(json);
-                if (state == null || !IsValidToken(state.operationId) || !IsValidToken(state.kind))
-                {
-                    QuarantineMalformedRecord();
-                    s_CachedState.Clear();
-                    return null;
-                }
-
-                SetCachedState(state);
-                return state;
-            }
-            catch (Exception ex)
-            {
-                s_CachedState.Clear();
-                Debug.LogError($"UnityLeanMcp: Failed to read operation journal: {ex}");
-                return null;
-            }
+                operationId = snap.OperationId,
+                kind = snap.Kind,
+                status = snap.Status,
+                editorSessionId = EditorSessionId,
+                startedUtc = new DateTime(snap.StartTime > 0 ? snap.StartTime : DateTime.UtcNow.Ticks, DateTimeKind.Utc).ToString("o"),
+                updatedUtc = DateTime.UtcNow.ToString("o")
+            };
         }
 
         internal static WorkerOperationStateSnapshot ReadThreadSafeSnapshot()
         {
-            s_CachedState.Read(OperationFilePath, out var snapshot);
-            return snapshot;
+            var snap = UnityCommandGate.ReadSnapshot();
+            if (snap == null) return null;
+            return new WorkerOperationStateSnapshot(
+                snap.OperationId,
+                snap.Kind,
+                snap.Status,
+                EditorSessionId,
+                new DateTime(snap.StartTime > 0 ? snap.StartTime : DateTime.UtcNow.Ticks, DateTimeKind.Utc).ToString("o"),
+                DateTime.UtcNow.ToString("o"));
         }
 
         internal static bool Update(string operationId, string status)
         {
-            var state = Read();
-            if (state == null || state.operationId != operationId)
-            {
-                return false;
-            }
-
-            state.status = status;
-            state.updatedUtc = DateTime.UtcNow.ToString("o");
-            Write(state);
-            return true;
+            return UnityCommandGate.Update(operationId, status);
         }
 
         internal static bool Complete(string operationId)
         {
-            var state = Read();
-            if (state == null || state.operationId != operationId)
-            {
-                return false;
-            }
-
-            try
-            {
-                File.Delete(OperationFilePath);
-                s_CachedState.Clear();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"UnityLeanMcp: Failed to complete operation '{operationId}': {ex}");
-                return false;
-            }
+            UnityCommandGate.Complete(operationId);
+            return true;
         }
 
         internal static bool IsOwnedBy(string operationId, string kind)
         {
-            var state = Read();
-            return state != null && state.operationId == operationId && state.kind == kind;
+            return UnityCommandGate.IsOwnedBy(operationId, kind);
         }
 
-        internal static void Write(UnityLeanMcpOperationState state)
-        {
-            Directory.CreateDirectory(UnityLeanMcpPaths.TempDir);
-            WriteAtomic(OperationFilePath, JsonUtility.ToJson(state, true), state.operationId);
-            SetCachedState(state);
-        }
-
-        internal static void WriteAtomic(string path, string content, string operationId)
+        internal static void WriteAtomic(string path, string content, string operationId, int attempts = 5)
         {
             string tempPath = path + "." + (operationId ?? Guid.NewGuid().ToString("N")) + ".tmp";
             try
             {
                 File.WriteAllText(tempPath, content, new UTF8Encoding(false));
                 Exception lastException = null;
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < attempts; i++)
                 {
                     try
                     {
@@ -216,7 +147,7 @@ namespace UnityLeanMcp
                     catch (IOException ex)
                     {
                         lastException = ex;
-                        if (i < 4)
+                        if (i < attempts - 1)
                         {
                             System.Threading.Thread.Sleep(10);
                         }
@@ -224,14 +155,14 @@ namespace UnityLeanMcp
                     catch (UnauthorizedAccessException ex)
                     {
                         lastException = ex;
-                        if (i < 4)
+                        if (i < attempts - 1)
                         {
                             System.Threading.Thread.Sleep(10);
                         }
                     }
                 }
 
-                throw new IOException($"Failed to atomically write '{path}' after 5 attempts.", lastException);
+                throw new IOException($"Failed to atomically write '{path}' after {attempts} attempts.", lastException);
             }
             finally
             {
@@ -256,68 +187,6 @@ namespace UnityLeanMcp
 
             Debug.LogWarning($"UnityLeanMcp: Failed to update static history for operation '{operationId}': {failure.Message}");
             return false;
-        }
-
-        private static bool IsValidToken(string value)
-        {
-            if (string.IsNullOrEmpty(value) || value.Length > 128)
-            {
-                return false;
-            }
-
-            foreach (char c in value)
-            {
-                if (!(char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.'))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private static void SetCachedState(UnityLeanMcpOperationState state)
-        {
-            s_CachedState.Set(ToWorkerSnapshot(state));
-        }
-
-        private static UnityLeanMcpOperationState FromWorkerSnapshot(WorkerOperationStateSnapshot state)
-        {
-            if (state == null) return null;
-            return new UnityLeanMcpOperationState
-            {
-                operationId = state.OperationId,
-                kind = state.Kind,
-                status = state.Status,
-                editorSessionId = state.EditorSessionId,
-                startedUtc = state.StartedUtc,
-                updatedUtc = state.UpdatedUtc
-            };
-        }
-
-        private static WorkerOperationStateSnapshot ToWorkerSnapshot(UnityLeanMcpOperationState state)
-        {
-            if (state == null) return null;
-            return new WorkerOperationStateSnapshot(
-                state.operationId,
-                state.kind,
-                state.status,
-                state.editorSessionId,
-                state.startedUtc,
-                state.updatedUtc);
-        }
-
-        private static void QuarantineMalformedRecord()
-        {
-            try
-            {
-                string quarantinePath = OperationFilePath + ".invalid." + Guid.NewGuid().ToString("N");
-                File.Move(OperationFilePath, quarantinePath);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"UnityLeanMcp: Failed to quarantine malformed operation journal: {ex}");
-            }
         }
     }
 }

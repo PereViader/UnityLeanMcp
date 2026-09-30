@@ -90,13 +90,15 @@ namespace UnityLeanMcp
                     payload = null,
                     logs = null
                 };
-                UnityLeanMcpOperationStore.WriteAtomic(resultFilePath, JsonUtility.ToJson(result, true), opId);
-                UnityLeanMcpOperationStore.Complete(opId);
-                ReleaseActiveOperation(opId);
+                UnityCommandGate.PublishResult(operationKind, opId, resultFilePath, JsonUtility.ToJson(result, true));
             }
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Failed to persist interrupted {operationKind} result: {ex}");
+            }
+            finally
+            {
+                ReleaseActiveOperation(opId);
             }
         }
 
@@ -324,11 +326,6 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                if (!Directory.Exists(UnityLeanMcpPaths.TempDir))
-                {
-                    Directory.CreateDirectory(UnityLeanMcpPaths.TempDir);
-                }
-
                 var runResult = new UnityOperationResult
                 {
                     operationId = operationId,
@@ -340,8 +337,7 @@ namespace UnityLeanMcp
                     logs = logs
                 };
                 string json = JsonUtility.ToJson(runResult, true);
-                UnityLeanMcpOperationStore.WriteAtomic(resultFilePath, json, operationId);
-                UnityLeanMcpOperationStore.Complete(operationId);
+                UnityCommandGate.PublishResult(operationKind, operationId, resultFilePath, json);
             }
             catch (Exception ex)
             {

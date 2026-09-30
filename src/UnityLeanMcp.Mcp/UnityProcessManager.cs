@@ -42,7 +42,6 @@ public class UnityProcessManager : IUnityProcessManager
 
         string[] files =
         {
-            _pathResolver.OperationFile,
             _pathResolver.TestRunningFile,
             _pathResolver.PidFile,
             GetPidIdentityFilePath(),
@@ -977,16 +976,6 @@ public class UnityProcessManager : IUnityProcessManager
                     }
                     catch { }
 
-                    if (!startedProcess.HasExited)
-                    {
-                        try
-                        {
-                            startedProcess.Kill(true);
-                            startedProcess.WaitForExit();
-                        }
-                        catch { }
-                    }
-
                     throw new UnityCompilationException(
                         string.Join(Environment.NewLine, errorLines),
                         errorLines);
@@ -1016,7 +1005,7 @@ public class UnityProcessManager : IUnityProcessManager
     public virtual async Task<bool> IsSocketReadyAsync(int timeoutSeconds = 2, CancellationToken cancellationToken = default)
     {
         int port = ReadPortFile();
-        return await _socketTransport.IsSocketReadyAsync(port, timeoutSeconds, cancellationToken);
+        return await _socketTransport.IsSocketReadyAsync(port, PathResolver.ProjectRoot, timeoutSeconds, cancellationToken);
     }
 
     public virtual async Task<string?> ProbeSocketCommandAsync(string command, int timeoutSeconds = 2, CancellationToken cancellationToken = default)
@@ -1032,7 +1021,7 @@ public class UnityProcessManager : IUnityProcessManager
             return null;
         }
 
-        return await _socketTransport.SendCommandAsync(port, command, timeoutSeconds, cancellationToken);
+        return await _socketTransport.SendCommandAsync(port, PathResolver.ProjectRoot, command, timeoutSeconds, cancellationToken);
     }
 
     public int ReadPortFile()

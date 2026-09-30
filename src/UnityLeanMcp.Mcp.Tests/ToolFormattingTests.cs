@@ -1639,6 +1639,39 @@ public class ToolFormattingTests
         }
     }
 
+    [Theory]
+    [InlineData("[")]
+    [InlineData("(")]
+    [InlineData("*Movement*")]
+    public async Task UnityRunTests_InvalidRegex_ReturnsIndexedParseErrorBeforeCallingClient(string pattern)
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["Valid.*", pattern]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Invalid test filter 'groupNames[1]'", text);
+            Assert.Contains("invalid .NET regular expression:", text);
+            Assert.Contains(pattern, text);
+            Assert.Equal(0, client.RunTestsCallCount);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData("testNames")]
+    [InlineData("categoryNames")]
+    [InlineData("assemblyNames")]
+    public void LiteralTestFilters_DoNotRequireValidRegex(string filterName)
+    {
+        Assert.True(TestFilterValidation.TryValidate(filterName, ["[", "("], out _));
+    }
+
     [Fact]
     public async Task UnityRunTests_ValidArrayFilters_PassThroughWithoutBroadening()
     {
@@ -1720,7 +1753,7 @@ public class ToolFormattingTests
                 Message = "Regex parsing error: Quantifier * following nothing"
             };
 
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["*Movement*"]);
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["Movement.*"]);
 
             Assert.True(result.IsError);
             string text = GetResultText(result);

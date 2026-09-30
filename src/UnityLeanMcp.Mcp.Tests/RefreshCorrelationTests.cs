@@ -12,6 +12,60 @@ namespace UnityLeanMcp.Mcp.Tests;
 public sealed class RefreshCorrelationTests
 {
     [Fact]
+    public async Task RefreshAsync_ForeignCompilationBecomesIdle_RetriesOwnAdmission()
+    {
+        string tempDir = CreateTempProject();
+        try
+        {
+            var manager = new TestProcessManager(tempDir);
+            int attempts = 0;
+            var transport = new RecordingSocketTransport(command =>
+            {
+                if (command == "POLL_REFRESH") return "IDLE";
+                Assert.StartsWith("REFRESH ", command);
+                if (++attempts == 1) return "BUSY refresh foreign-id";
+                string id = command.Split(' ')[1];
+                File.WriteAllText(manager.PathResolver.GetResultFilePath(UnityOperationKind.Refresh, id),
+                    System.Text.Json.JsonSerializer.Serialize(new UnityRefreshResult { OperationId = id, Success = true }));
+                return "REFRESHING";
+            });
+            var client = new UnityClient(manager, manager.PathResolver, NullLogger<UnityClient>.Instance,
+                transport, options: new UnityClientOptions(PollIntervalMs: 1));
+            Assert.True((await client.RefreshAsync()).Success);
+            Assert.Equal(2, attempts);
+        }
+        finally { Directory.Delete(tempDir, true); }
+    }
+
+    [Fact]
+    public async Task RefreshAsync_LostInitialDispatchRetriesSameIdAndConsumesCorrelatedResult()
+    {
+        string tempDir = CreateTempProject();
+        try
+        {
+            var manager = new TestProcessManager(tempDir);
+            int attempts = 0;
+            string? firstCommand = null;
+            var transport = new RecordingSocketTransport(command =>
+            {
+                Assert.StartsWith("REFRESH ", command);
+                if (++attempts == 1) { firstCommand = command; return null; }
+                Assert.Equal(firstCommand, command);
+                string id = command.Split(' ')[1];
+                File.WriteAllText(manager.PathResolver.GetResultFilePath(UnityOperationKind.Refresh, id),
+                    System.Text.Json.JsonSerializer.Serialize(new UnityRefreshResult { OperationId = id, Success = true }));
+                return null;
+            });
+            var client = new UnityClient(manager, manager.PathResolver, NullLogger<UnityClient>.Instance,
+                transport, options: new UnityClientOptions(PollIntervalMs: 1));
+            var result = await client.RefreshAsync();
+            Assert.True(result.Success);
+            Assert.Equal(2, attempts);
+        }
+        finally { Directory.Delete(tempDir, true); }
+    }
+
+    [Fact]
     public async Task RefreshAsync_ReadyWithoutCorrelatedResult_DoesNotUseStaleStaticResultOrSynthesizeSuccess()
     {
         string tempDir = CreateTempProject();
@@ -99,7 +153,7 @@ public sealed class RefreshCorrelationTests
                 {
                     OperationId = spec.OperationId,
                     Success = true,
-                    Message = "current result"
+                    Message = "Assets/Current.cs(4,2): warning CS0168: current diagnostic"
                 };
                 File.WriteAllText(spec.ResultFilePath, System.Text.Json.JsonSerializer.Serialize(currentResult));
 
@@ -281,6 +335,41 @@ public sealed class RefreshCorrelationTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefreshAsync_CorrelatedResultIgnoresDiagnosticsFromLaterOperation(bool immediate)
+    {
+        string root = CreateTempProject();
+        try
+        {
+            var manager = new TestProcessManager(root);
+            string? operationId = null;
+            var transport = new RecordingSocketTransport(command =>
+            {
+                if (command.StartsWith("REFRESH "))
+                {
+                    operationId = command.Split(' ')[1];
+                    if (!immediate) return "REFRESHING";
+                }
+                else Assert.Equal("POLL_REFRESH " + operationId, command);
+                File.WriteAllText(manager.PathResolver.GetResultFilePath(UnityOperationKind.Refresh, operationId!),
+                    System.Text.Json.JsonSerializer.Serialize(new UnityRefreshResult
+                    { OperationId = operationId!, Success = true, Message = "Assets/Own.cs(1,1): warning CS0168: own diagnostic" }));
+                // Another operation owns shared history before this result is consumed.
+                File.WriteAllText(manager.PathResolver.CompilationErrorsFile,
+                    "Assets/Later.cs(1,1): error CS1002: foreign diagnostic");
+                return "READY";
+            });
+            var client = new UnityClient(manager, manager.PathResolver, NullLogger<UnityClient>.Instance, transport);
+            var result = await client.RefreshAsync();
+            Assert.True(result.Success);
+            Assert.Contains("own diagnostic", result.Message);
+            Assert.DoesNotContain("foreign diagnostic", result.Message);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static string CreateTempProject()
     {
         string tempDir = Path.Combine(Path.GetTempPath(), "unity_refresh_correlation_" + Guid.NewGuid().ToString("N"));
@@ -311,7 +400,7 @@ public sealed class RefreshCorrelationTests
     {
         public Task<string?> SendCommandAsync(
             int port,
-            string command,
+            string projectRoot, string command,
             int timeoutSeconds = 10,
             CancellationToken cancellationToken = default)
         {
@@ -330,7 +419,7 @@ public sealed class RefreshCorrelationTests
 
         public Task<bool> IsSocketReadyAsync(
             int port,
-            int timeoutSeconds = 2,
+            string projectRoot, int timeoutSeconds = 2,
             CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 
@@ -347,7 +436,7 @@ public sealed class RefreshCorrelationTests
 
         public Task<string?> SendCommandAsync(
             int port,
-            string command,
+            string projectRoot, string command,
             int timeoutSeconds = 10,
             CancellationToken cancellationToken = default)
         {
@@ -357,7 +446,7 @@ public sealed class RefreshCorrelationTests
 
         public Task<bool> IsSocketReadyAsync(
             int port,
-            int timeoutSeconds = 2,
+            string projectRoot, int timeoutSeconds = 2,
             CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 }

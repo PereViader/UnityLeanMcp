@@ -214,7 +214,7 @@ public class TestRunProgressTests
             return null;
         });
 
-        await using var client = new McpTestClient(server.ProjectRoot);
+        await using var client = new McpTestClient(server.ProjectRoot, typeof(UnityClient).Assembly.Location);
         var toolResult = await client.CallToolAsync(
             "unity_test",
             new { mode = "editmode" },

@@ -8,23 +8,6 @@ namespace UnityLeanMcp.Mcp.Tests;
 public class WorkerThreadSnapshotsTests
 {
     [Fact]
-    public void ReadsOperationStateWithoutUnitySerialization()
-    {
-        string path = CreateTempFile("{\"operationId\":\"op-1\",\"kind\":\"eval\",\"status\":\"Executing\",\"editorSessionId\":\"session\",\"startedUtc\":\"now\",\"updatedUtc\":\"later\"}");
-        try
-        {
-            Assert.True(WorkerThreadSnapshots.TryReadOperationState(path, out var snapshot));
-            Assert.Equal("op-1", snapshot.OperationId);
-            Assert.Equal("eval", snapshot.Kind);
-            Assert.Equal("Executing", snapshot.Status);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
-    [Fact]
     public void ReadsOperationResultAndPreservesEscapedPayload()
     {
         string path = CreateTempFile("{\"operationId\":\"op-2\",\"success\":true,\"payload\":\"line 1\\nline 2\\\\path\",\"failedTests\":[{\"message\":\"ignored\"}]}");
@@ -122,7 +105,7 @@ public class WorkerThreadSnapshotsTests
         string path = CreateTempFile("{\"operationId\":");
         try
         {
-            Assert.False(WorkerThreadSnapshots.TryReadOperationState(path, out _));
+            Assert.False(WorkerThreadSnapshots.TryReadOperationResult(path, out _));
         }
         finally
         {

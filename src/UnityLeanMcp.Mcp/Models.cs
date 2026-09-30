@@ -212,27 +212,6 @@ public class UnityStatusResult
     public string? Details { get; set; }
 }
 
-public class UnityLeanMcpOperationState
-{
-    [JsonPropertyName("operationId")]
-    public string OperationId { get; set; } = "";
-
-    [JsonPropertyName("kind")]
-    public string Kind { get; set; } = "";
-
-    [JsonPropertyName("status")]
-    public string Status { get; set; } = "";
-
-    [JsonPropertyName("editorSessionId")]
-    public string EditorSessionId { get; set; } = "";
-
-    [JsonPropertyName("startedUtc")]
-    public string StartedUtc { get; set; } = "";
-
-    [JsonPropertyName("updatedUtc")]
-    public string UpdatedUtc { get; set; } = "";
-}
-
 public class UnityCompilationException : System.Exception
 {
     public List<string> ErrorLines { get; }
@@ -325,4 +304,3 @@ public class CoverageResult
     [JsonPropertyName("message")]
     public string Message { get; set; } = "";
 }
-

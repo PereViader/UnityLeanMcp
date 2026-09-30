@@ -14,6 +14,25 @@ namespace UnityLeanMcp.Mcp.Tests;
 public class DecomposedComponentsTests
 {
     [Fact]
+    public async Task UnityClient_GetStatusAsync_WhenPollIsLostAfterPing_DoesNotReportReady()
+    {
+        var resolver = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var manager = new StubProcessManager(resolver, isRunning: true);
+        var client = new UnityClient(manager, resolver, NullLogger<UnityClient>.Instance,
+            socketTransport: new StatusSnapshotTransport(true, losePoll: true));
+        Assert.Equal("Running Unreachable", await client.GetStatusAsync());
+    }
+
+    private sealed class StatusSnapshotTransport(bool connected, bool losePoll = false) : IUnitySocketTransport
+    {
+        public Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(connected ? (command == "PING" ? "PONG" : losePoll ? null : "READY") : null);
+        public Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds = 2,
+            CancellationToken cancellationToken = default) => Task.FromResult(connected);
+    }
+
+    [Fact]
     public async Task UnityClient_GetStatusAsync_WhenProjectSocketRespondsPong_ReturnsReadyWithoutProcessEvidence()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_status_socket_" + Guid.NewGuid().ToString("N"));
@@ -25,7 +44,7 @@ public class DecomposedComponentsTests
                 processManager,
                 resolver,
                 NullLogger<UnityClient>.Instance,
-                socketTransport: new StubSocketTransport("PONG"));
+                socketTransport: new StatusSnapshotTransport(true));
 
             string status = await client.GetStatusAsync();
 
@@ -123,7 +142,7 @@ public class DecomposedComponentsTests
             using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
             string? cmd = await reader.ReadLineAsync(cts.Token);
-            if (cmd == "PING")
+            if (UnityLeanMcp.ProjectCommandEnvelope.TryDecode(cmd!, Path.GetTempPath(), out var command) && command == "PING")
             {
                 await writer.WriteLineAsync("PONG");
             }
@@ -137,7 +156,7 @@ public class DecomposedComponentsTests
         {
             var transport = new UnitySocketTransport(NullLogger.Instance);
 
-            bool isReady = await transport.IsSocketReadyAsync(port, timeoutSeconds: 2, cts.Token);
+            bool isReady = await transport.IsSocketReadyAsync(port, Path.GetTempPath(), timeoutSeconds: 2, cts.Token);
             Assert.True(isReady);
         }
         finally
@@ -145,6 +164,36 @@ public class DecomposedComponentsTests
             listener.Stop();
             await serverTask;
         }
+    }
+
+    [Fact]
+    public async Task UnitySocketTransport_RejectsStalePortForAnotherProjectBeforeDispatch()
+    {
+        int dispatches = 0;
+        await using var server = await MockUnityServer.StartAsync((_, _) =>
+        {
+            Interlocked.Increment(ref dispatches);
+            return "PONG";
+        });
+        var transport = new UnitySocketTransport(NullLogger.Instance);
+        string otherProject = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Assert.False(await transport.IsSocketReadyAsync(server.Port, otherProject));
+        string? result = await transport.SendCommandAsync(server.Port, otherProject, "EVAL op-id return 1;");
+        Assert.StartsWith("ERROR:", result);
+        Assert.Equal(0, dispatches);
+        Assert.True(await transport.IsSocketReadyAsync(server.Port, server.ProjectRoot));
+        Assert.Equal(1, dispatches);
+    }
+
+    [Fact]
+    public void ProjectCommandEnvelope_RejectsMissingOrMalformedIdentity()
+    {
+        string root = Path.GetTempPath();
+        Assert.False(UnityLeanMcp.ProjectCommandEnvelope.TryDecode("PING", root, out _));
+        Assert.False(UnityLeanMcp.ProjectCommandEnvelope.TryDecode("PROJECT bad! EVAL operation return 1;", root, out _));
+        string line = UnityLeanMcp.ProjectCommandEnvelope.Encode(root, "EVAL operation return 1;");
+        Assert.True(UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line, root, out var command));
+        Assert.Equal("EVAL operation return 1;", command);
     }
 
     [Fact]
@@ -167,7 +216,7 @@ public class DecomposedComponentsTests
         try
         {
             var transport = new UnitySocketTransport(NullLogger.Instance);
-            Task<string?> commandTask = transport.SendCommandAsync(port, "WAIT", timeoutSeconds: 30, cancellation.Token);
+            Task<string?> commandTask = transport.SendCommandAsync(port, Path.GetTempPath(), "WAIT", timeoutSeconds: 30, cancellation.Token);
 
             await accepted.Task;
             cancellation.Cancel();
@@ -200,7 +249,7 @@ public class DecomposedComponentsTests
         {
             var transport = new UnitySocketTransport(NullLogger.Instance);
 
-            string? response = await transport.SendCommandAsync(port, "WAIT", timeoutSeconds: 1);
+            string? response = await transport.SendCommandAsync(port, Path.GetTempPath(), "WAIT", timeoutSeconds: 1);
 
             Assert.Null(response);
         }
@@ -574,183 +623,6 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
-    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithErrorDiagnostics_MarksSuccessFalseAndEnrichesMessage()
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
-        try
-        {
-            var resolver = new UnityPathResolver(tempDir);
-            string errorText = "Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist";
-            File.WriteAllText(resolver.CompilationErrorsFile, errorText);
-
-            var pm = new StubProcessManager(resolver);
-            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
-
-            var result = new UnityRefreshResult
-            {
-                OperationId = "op1",
-                Success = true,
-                Message = "AssetDatabase refresh completed successfully."
-            };
-
-            client.EnrichRefreshResultWithDiagnostics(result);
-
-            Assert.False(result.Success);
-            Assert.Equal(errorText, result.Message);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithWarningDiagnosticsOnly_LeavesSuccessTrueAndEnrichesMessage()
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
-        try
-        {
-            var resolver = new UnityPathResolver(tempDir);
-            string warningText = "Assets/Scripts/Foo.cs(10,5): warning CS0219: Variable is assigned but never used";
-            File.WriteAllText(resolver.CompilationErrorsFile, warningText);
-
-            var pm = new StubProcessManager(resolver);
-            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
-
-            var result = new UnityRefreshResult
-            {
-                OperationId = "op2",
-                Success = true,
-                Message = "AssetDatabase refresh completed successfully."
-            };
-
-            client.EnrichRefreshResultWithDiagnostics(result);
-
-            Assert.True(result.Success);
-            Assert.Equal(warningText, result.Message);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithUnstructuredErrorText_MarksSuccessFalseAndEnrichesMessage()
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
-        try
-        {
-            var resolver = new UnityPathResolver(tempDir);
-            string unstructuredError = "Fatal compiler error: Unexpected compilation failure occurred.";
-            File.WriteAllText(resolver.CompilationErrorsFile, unstructuredError);
-
-            var pm = new StubProcessManager(resolver);
-            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
-
-            var result = new UnityRefreshResult
-            {
-                OperationId = "op3",
-                Success = true,
-                Message = "AssetDatabase refresh completed successfully."
-            };
-
-            client.EnrichRefreshResultWithDiagnostics(result);
-
-            Assert.False(result.Success);
-            Assert.Equal(unstructuredError, result.Message);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void UnityClient_EnrichRefreshResultWithDiagnostics_WithWarningsAndErrors_MarksSuccessFalseAndEnrichesMessage()
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
-        try
-        {
-            var resolver = new UnityPathResolver(tempDir);
-            string diagText = "Assets/Scripts/Foo.cs(5,10): warning CS0219: Variable is assigned but never used\r\nAssets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist";
-            File.WriteAllText(resolver.CompilationErrorsFile, diagText);
-
-            var pm = new StubProcessManager(resolver);
-            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
-
-            var result = new UnityRefreshResult
-            {
-                OperationId = "op4",
-                Success = true,
-                Message = "AssetDatabase refresh completed successfully."
-            };
-
-            client.EnrichRefreshResultWithDiagnostics(result);
-
-            Assert.False(result.Success);
-            Assert.Equal(diagText, result.Message);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void UnityClient_EnrichRefreshResultWithDiagnostics_WhenNoCompilationErrorsFile_LeavesResultUnchanged()
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "test_enrich_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
-        try
-        {
-            var resolver = new UnityPathResolver(tempDir);
-            var pm = new StubProcessManager(resolver);
-            var client = new UnityClient(pm, resolver, NullLogger<UnityClient>.Instance);
-
-            var result = new UnityRefreshResult
-            {
-                OperationId = "op5",
-                Success = true,
-                Message = "AssetDatabase refresh completed successfully."
-            };
-
-            client.EnrichRefreshResultWithDiagnostics(result);
-
-            Assert.True(result.Success);
-            Assert.Equal("AssetDatabase refresh completed successfully.", result.Message);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist", false)]
-    [InlineData("Assets/Scripts/Foo.cs(10,5): warning CS0219: Variable is assigned but never used", true)]
-    [InlineData("Unstructured error output", false)]
-    [InlineData("Unstructured informative output", true)]
-    public void UnityClient_EnrichRefreshResultWithDiagnostics_Static_EvaluatesDiagnosticsCorrectly(string errorText, bool expectedSuccess)
-    {
-        var result = new UnityRefreshResult
-        {
-            OperationId = "op6",
-            Success = true,
-            Message = "Initial"
-        };
-
-        UnityClient.EnrichRefreshResultWithDiagnostics(result, errorText);
-
-        Assert.Equal(expectedSuccess, result.Success);
-        Assert.Equal(errorText, result.Message);
-    }
-
-    [Fact]
     public void RoslynCompilerHelper_ExtractUsingDirectivesFallback_WhenUsingFollowedByCode_PreservesTrailingCodeAndColumnIndex()
     {
         string source = "using System; int x = 42;";
@@ -918,11 +790,10 @@ public class DecomposedComponentsTests
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_opts_" + Guid.NewGuid().ToString("N"));
         var resolver = new UnityPathResolver(projectRoot);
         var pm = new StubProcessManager(resolver);
-        var options = new UnityClientOptions(PollIntervalMs: 123, BusyGracePeriod: TimeSpan.FromSeconds(7));
+        var options = new UnityClientOptions(PollIntervalMs: 123);
         IUnityClient client = new UnityClient(pm, NullLogger<UnityClient>.Instance, options: options);
 
         Assert.Equal(123, client.PollIntervalMs);
-        Assert.Equal(TimeSpan.FromSeconds(7), client.BusyGracePeriod);
     }
 
     [Fact]
@@ -1122,7 +993,7 @@ public class DecomposedComponentsTests
         string tempDir = Path.Combine(Path.GetTempPath(), "poller_cancel_test_" + Guid.NewGuid().ToString("N"));
         var pathResolver = new UnityPathResolver(tempDir);
         var mockPm = new StubProcessManager(pathResolver);
-        var mockTransport = new StubSocketTransport("ACK");
+        var mockTransport = new StubSocketTransport("CANCELLED");
         var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
 
         using var cts = new CancellationTokenSource();
@@ -1138,7 +1009,7 @@ public class DecomposedComponentsTests
         string tempDir = Path.Combine(Path.GetTempPath(), "poller_cancel_on_abort_" + Guid.NewGuid().ToString("N"));
         var pathResolver = new UnityPathResolver(tempDir);
         var mockPm = new StubProcessManager(pathResolver);
-        var mockTransport = new StubSocketTransport("BUSY");
+        var mockTransport = new StubSocketTransport("CANCELLED");
         var poller = new OperationPoller(mockPm, pathResolver, mockTransport, NullLogger.Instance);
 
         var spec = new OperationPollingSpec<UnityOperationResult>
@@ -1148,8 +1019,7 @@ public class DecomposedComponentsTests
             ResultFilePath = Path.Combine(tempDir, "nonexistent.json"),
             IsMatch = r => r.OperationId == "op_abort_1",
             PollCommand = "POLL op_abort_1",
-            PollIntervalMs = 10,
-            CheckOperationStoreForInterruption = false
+            PollIntervalMs = 10
         };
 
         using var cts = new CancellationTokenSource();
@@ -1169,12 +1039,12 @@ public class DecomposedComponentsTests
         public CancellationToken LastCancellationToken { get; private set; }
 
         public StubSocketTransport(string? response) => _response = response;
-        public Task<string?> SendCommandAsync(int port, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
+        public Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
         {
             LastCommand = command;
             LastCancellationToken = cancellationToken;
             return Task.FromResult(_response);
         }
-        public Task<bool> IsSocketReadyAsync(int port, int timeoutSeconds = 2, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds = 2, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 }

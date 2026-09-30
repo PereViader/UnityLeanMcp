@@ -5,5 +5,6 @@ public enum UnityOperationKind
     Refresh,
     Recompile,
     Test,
-    Eval
+    Eval,
+    Coverage
 }
