@@ -3,8 +3,7 @@
     "rootNamespace": "UnityLeanMcp",
     "references": [
         "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner",
-        "Unity.Newtonsoft.Json"
+        "UnityEditor.TestRunner"
     ],
     "includePlatforms": [
         "Editor"

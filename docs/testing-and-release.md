@@ -10,7 +10,7 @@ The installer runs `dotnet UnityLeanMcp.Mcp.dll` from the discovered package `MC
 
 Generated VS Code and Claude configurations use repository variables where possible. Cursor, Antigravity, Codex, and external-package fallbacks use machine-specific absolute paths; keep those generated paths out of tracked artifacts. These are installer choices, not universal claims about client capabilities. Codex's generated configuration currently sets `tool_timeout_sec = 1800`; client deadlines are outside the server's unbounded-operation contract.
 
-Configuration editing uses the supported Newtonsoft JSON package to preserve unrelated values and replace only the target server; parse failures leave existing files untouched. Stage configuration files beside their destinations and publish atomically.
+Configuration editing uses an internal, zero-dependency JSON utility to preserve unrelated values and replace only the target server; parse failures leave existing files untouched. Stage configuration files beside their destinations and publish atomically.
 
 `.env.shared` supplies the release version that `build.sh` writes into the generated package's `package.json`.
 
@@ -67,7 +67,7 @@ Mocks must complete the refresh barrier before delaying the eval/test command un
 
 UPM package discovery can return locations outside the project; locating the server DLL and resolving the target project are separate checks. Package lookup can fall back from `PackageInfo.FindForAssembly` to source location and known package directories, with both `MCP~` and `mcp~` supported.
 
-Newtonsoft JSON defaults to interpreting ISO date strings as dates. Disable date parsing when editing configuration so unrelated string values retain their exact content.
+Configuration and snapshot JSON parsing preserves strings as raw text without converting ISO date strings to dates, keeping unrelated configuration values intact without pulling external JSON packages into user player builds.
 
 Client timeout policies differ and can change. Progress notifications help show continued work but cannot guarantee a client keeps a call alive indefinitely. Distinguish the server's no-deadline policy from generated client configuration and caller cancellation; do not document guessed universal client timeout values.
 

@@ -1,8 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json;
 
 namespace UnityLeanMcp
 {
@@ -33,35 +32,35 @@ namespace UnityLeanMcp
                 rootKey = "servers";
 
             string existing = File.Exists(configPath) ? File.ReadAllText(configPath, Encoding.UTF8) : null;
-            var document = string.IsNullOrWhiteSpace(existing) ? new JObject() : ReadDocument(existing);
-            var servers = document[rootKey] as JObject;
-            if (document[rootKey] != null && servers == null)
-                throw new FormatException("The MCP server section must be a JSON object.");
+            var document = string.IsNullOrWhiteSpace(existing)
+                ? new Dictionary<string, object>()
+                : UnityLeanJson.DeserializeObject(existing);
+
+            Dictionary<string, object> servers = null;
+            if (document.TryGetValue(rootKey, out object serversObj))
+            {
+                servers = serversObj as Dictionary<string, object>;
+                if (servers == null)
+                    throw new FormatException("The MCP server section must be a JSON object.");
+            }
+
             if (servers == null)
-                document[rootKey] = servers = new JObject();
+            {
+                servers = new Dictionary<string, object>();
+                document[rootKey] = servers;
+            }
 
             string cwd = mcpDir.Replace('\\', '/').TrimEnd('/') + "/";
             if (McpConfigurationPaths.TryGetWorkspaceRelativeMcpPath(repositoryRoot, cwd, configPath, out string relative))
                 cwd = relative;
-            servers["unity-lean-mcp"] = new JObject
+
+            servers["unity-lean-mcp"] = new Dictionary<string, object>
             {
                 ["command"] = "dotnet",
-                ["args"] = new JArray("UnityLeanMcp.Mcp.dll"),
+                ["args"] = new List<object> { "UnityLeanMcp.Mcp.dll" },
                 ["cwd"] = cwd
             };
-            WriteAtomic(configPath, document.ToString());
-        }
-
-        private static JObject ReadDocument(string content)
-        {
-            using (var reader = new JsonTextReader(new StringReader(content)) { DateParseHandling = DateParseHandling.None })
-            {
-                var document = JObject.Load(reader);
-                while (reader.Read())
-                    if (reader.TokenType != JsonToken.Comment)
-                        throw new FormatException("Unexpected content after JSON document.");
-                return document;
-            }
+            WriteAtomic(configPath, UnityLeanJson.Serialize(document, prettyPrint: true));
         }
 
         private static void WriteAtomic(string path, string content)
