@@ -45,7 +45,7 @@ public class UnityTools
         Result(message.StartsWith("Error:") ? message : $"Error: {message}", isError: true);
 
     [McpServerTool(Name = "unity_refresh")]
-    [Description("Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
+    [Description("Refreshes AssetDatabase and returns compiler and asset import diagnostics. C# compiler errors persist across no-op refreshes, while non-C# diagnostics (shaders, import failures) are captured only during active imports and not re-emitted if assets are unchanged. Normal refresh is fast when unchanged; set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     public async Task<CallToolResult> UnityRefreshAsync(
         [Description("Optional. If true, forces a more expensive full script recompilation by clearing the assembly compiler cache. Defaults to false; use only when recovering from corrupted cache or stale errors.")]
         bool clean = false,

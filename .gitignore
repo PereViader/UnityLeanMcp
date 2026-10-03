@@ -115,6 +115,7 @@ ServerData/
 
 # Non-portable MCP configuration files (contain user/machine-specific absolute paths)
 .agents/plugins/*/mcp_config.json
+.agents/teamwork/
 .cursor/mcp.json
 .codex/
 # MCP server published binaries

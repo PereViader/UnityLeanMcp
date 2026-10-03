@@ -10,41 +10,79 @@ using UnityEngine;
 
 namespace UnityLeanMcp
 {
+    [Serializable]
+    public sealed class ScopedDiagnostics
+    {
+        public string operationId;
+        public List<string> messages = new List<string>();
+    }
+
     public static class UnityLeanMcpCompilationTracker
     {
         private static readonly Dictionary<string, List<string>> s_AssemblyDiagnostics = new Dictionary<string, List<string>>();
         private static readonly object s_DiagnosticsLock = new object();
         private const string ScopedDiagnosticsKey = "UnityLeanMcp_RefreshDiagnostics";
-        [Serializable]
-        private sealed class ScopedDiagnostics
-        {
-            public string operationId;
-            public List<string> messages = new List<string>();
-        }
         private static ScopedDiagnostics s_ScopedDiagnostics = new ScopedDiagnostics();
+        private static int s_MainThreadId;
 
-        private static void CaptureOperationError(string message, string stackTrace, LogType type)
+        private static readonly System.Text.RegularExpressions.Regex s_LeadingLocationRegex = new System.Text.RegularExpressions.Regex(
+            @"^(?<file>(?:[a-zA-Z]:[\\/]|/|(?:Assets|Packages|[A-Za-z0-9_.\-@\+\(\)]+)[\\/])[^:\r\n'""]*?)(?:\((?<line>\d+)(?:,\s*(?<col>\d+))?\)|:(?<line>\d+)(?::(?<col>\d+))?)?:\s*(?<rest>.*)$",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex s_TrailingShaderLocationRegex = new System.Text.RegularExpressions.Regex(
+            @"\bat\s+(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n'""]+?)(?:\((?<line>\d+)(?:,\s*(?<col>\d+))?\)|:(?<line>\d+)(?::(?<col>\d+))?\b)(?![/\\])",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex s_QuotedAssetRegex = new System.Text.RegularExpressions.Regex(
+            @"(?:['""](?<file>(?:Assets|Packages)[/\\].+?\.[a-zA-Z0-9_\-]+)['""]|(?<file>(?:Assets|Packages)[/\\].+?\.[a-zA-Z0-9_\-]+)(?:[:\s,\r\n'""\)\.;!]|$))",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex s_StackTraceLocationRegex = new System.Text.RegularExpressions.Regex(
+            @"(?:(?:\)\s+in|\(at|\bin(?=\s+(?:[a-zA-Z]:[\\/]|/|(?:Assets|Packages)[\\/])))\s+)(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n]+?):(?:line\s+)?(?<line>\d+)\)?",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static readonly System.Text.RegularExpressions.Regex s_BareStackTraceLocationRegex = new System.Text.RegularExpressions.Regex(
+            @"^\s*at\s+(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n]+?):(?:line\s+)?(?<line>\d+)\)?$",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Multiline);
+
+        private static readonly System.Text.RegularExpressions.Regex s_IsErrorRegex = new System.Text.RegularExpressions.Regex(
+            @"^(?!(?:warning|info)\b)(?:(?:[a-zA-Z]:[\\/])?[^:\r\n]+(?:\(\d+(?:,\s*\d+)?\)|:\d+(?::\d+)?)?:\s*)?error(?::|\s|$)",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        internal static void CaptureOperationError(string message, string stackTrace, LogType type)
         {
             if (type != LogType.Error && type != LogType.Exception && type != LogType.Assert) return;
             // Publication diagnostics are infrastructure failures, not errors from asset import.
             if (message != null && message.StartsWith("UnityLeanMcp:", StringComparison.Ordinal)) return;
             var active = UnityCommandGate.ReadSnapshot();
             if (active == null || (active.Kind != OperationKinds.Refresh && active.Kind != OperationKinds.Recompile)) return;
-            string formatted = FormatCompilerDiagnostic(message, "", 0, 0, true);
+            string formatted = FormatOperationDiagnostic(message, stackTrace, true);
             if (string.IsNullOrEmpty(formatted)) return;
             lock (s_DiagnosticsLock)
             {
                 if (s_ScopedDiagnostics.operationId != active.OperationId)
                     s_ScopedDiagnostics = new ScopedDiagnostics { operationId = active.OperationId };
-                if (!s_ScopedDiagnostics.messages.Contains(formatted)) s_ScopedDiagnostics.messages.Add(formatted);
+                if (!s_ScopedDiagnostics.messages.Contains(formatted))
+                {
+                    s_ScopedDiagnostics.messages.Add(formatted);
+                    PersistScopedDiagnostics();
+                }
             }
         }
 
         private static void PersistScopedDiagnostics()
         {
+            if (s_MainThreadId != 0 && Thread.CurrentThread.ManagedThreadId != s_MainThreadId) return;
             lock (s_DiagnosticsLock)
             {
-                SessionState.SetString(ScopedDiagnosticsKey, JsonUtility.ToJson(s_ScopedDiagnostics));
+                try
+                {
+                    SessionState.SetString(ScopedDiagnosticsKey, JsonUtility.ToJson(s_ScopedDiagnostics));
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"UnityLeanMcp: Failed to persist scoped diagnostics: {e}");
+                }
             }
         }
 
@@ -146,6 +184,7 @@ namespace UnityLeanMcp
 
         private static void InitializeMainThread()
         {
+            s_MainThreadId = Thread.CurrentThread.ManagedThreadId;
             UnityLeanMcpPaths.EnsureInitialized();
             UnityLeanMcpOperationStore.EnsureInitialized();
             EnsureLogReflectionCached();
@@ -157,6 +196,8 @@ namespace UnityLeanMcp
             }
             Application.logMessageReceivedThreaded -= CaptureOperationError;
             Application.logMessageReceivedThreaded += CaptureOperationError;
+            AssemblyReloadEvents.beforeAssemblyReload -= PersistScopedDiagnostics;
+            AssemblyReloadEvents.beforeAssemblyReload += PersistScopedDiagnostics;
             UpdateCompilationState();
             var operation = UnityLeanMcpOperationStore.Read();
             bool resumingCompilation = operation != null &&
@@ -271,48 +312,174 @@ namespace UnityLeanMcp
             }
         }
 
-        private static string FormatCompilerDiagnostic(string rawMessage, string file, int line, int column, bool isError)
+        internal static string NormalizeFilePath(string file)
+        {
+            if (string.IsNullOrEmpty(file)) return "";
+            string normalized = file.Replace('\\', '/');
+            try
+            {
+                string projectRoot = UnityLeanMcpPaths.ProjectRoot;
+                if (!string.IsNullOrEmpty(projectRoot))
+                {
+                    projectRoot = projectRoot.Replace('\\', '/').TrimEnd('/');
+                    if (normalized.StartsWith(projectRoot + "/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        normalized = normalized.Substring(projectRoot.Length + 1);
+                    }
+                }
+            }
+            catch { }
+
+            while (normalized.StartsWith("./", StringComparison.Ordinal))
+            {
+                normalized = normalized.Substring(2);
+            }
+
+            return normalized;
+        }
+
+        internal static string FormatCompilerDiagnostic(string rawMessage, string file, int line, int column, bool isError)
         {
             string msg = (rawMessage ?? "").Trim();
             if (string.IsNullOrEmpty(msg)) return null;
 
-            if (System.Text.RegularExpressions.Regex.IsMatch(msg, @"^.+?\([0-9]+,[0-9]+\):\s*(error|warning)\s+[a-zA-Z0-9]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            int newlineIdx = msg.IndexOfAny(new[] { '\r', '\n' });
+            if (newlineIdx >= 0)
             {
-                int newlineIdx = msg.IndexOfAny(new[] { '\r', '\n' });
-                if (newlineIdx >= 0)
-                {
-                    msg = msg.Substring(0, newlineIdx).Trim();
-                }
-                return msg;
+                msg = msg.Substring(0, newlineIdx).Trim();
+            }
+
+            var leadingMatch = s_LeadingLocationRegex.Match(msg);
+            if (leadingMatch.Success)
+            {
+                file = leadingMatch.Groups["file"].Value;
+                if (leadingMatch.Groups["line"].Success) line = int.Parse(leadingMatch.Groups["line"].Value);
+                if (leadingMatch.Groups["col"].Success) column = int.Parse(leadingMatch.Groups["col"].Value);
+                msg = leadingMatch.Groups["rest"].Value;
             }
 
             string typeStr = isError ? "error" : "warning";
-            if (msg.StartsWith("error ", StringComparison.OrdinalIgnoreCase))
+            if (msg.StartsWith("error:", StringComparison.OrdinalIgnoreCase))
             {
                 msg = msg.Substring(6).TrimStart();
+            }
+            else if (msg.StartsWith("error ", StringComparison.OrdinalIgnoreCase))
+            {
+                msg = msg.Substring(6).TrimStart();
+            }
+            else if (msg.StartsWith("warning:", StringComparison.OrdinalIgnoreCase))
+            {
+                msg = msg.Substring(8).TrimStart();
             }
             else if (msg.StartsWith("warning ", StringComparison.OrdinalIgnoreCase))
             {
                 msg = msg.Substring(8).TrimStart();
             }
 
+            string normalizedFile = NormalizeFilePath(file);
+
+            if (!string.IsNullOrEmpty(normalizedFile) && line > 0 && column > 0)
+            {
+                return $"{normalizedFile}({line},{column}): {typeStr} {msg}";
+            }
+
+            if (!string.IsNullOrEmpty(normalizedFile) && line > 0)
+            {
+                return $"{normalizedFile}({line}): {typeStr} {msg}";
+            }
+
+            if (!string.IsNullOrEmpty(normalizedFile))
+            {
+                return $"{normalizedFile}: {typeStr} {msg}";
+            }
+
+            return $"{typeStr}: {msg}";
+        }
+
+        internal static string FormatOperationDiagnostic(string rawMessage, string stackTrace, bool isError)
+        {
+            if (string.IsNullOrWhiteSpace(rawMessage)) return null;
+            string msg = rawMessage.Trim();
             int nlIdx = msg.IndexOfAny(new[] { '\r', '\n' });
             if (nlIdx >= 0)
             {
                 msg = msg.Substring(0, nlIdx).Trim();
             }
+            if (string.IsNullOrEmpty(msg)) return null;
 
-            if (!string.IsNullOrEmpty(file) && line > 0)
+            string file = "";
+            int line = 0;
+            int column = 0;
+
+            var leadingMatch = s_LeadingLocationRegex.Match(msg);
+            if (leadingMatch.Success)
             {
-                return $"{file}({line},{column}): {typeStr} {msg}";
+                file = leadingMatch.Groups["file"].Value;
+                if (leadingMatch.Groups["line"].Success) line = int.Parse(leadingMatch.Groups["line"].Value);
+                if (leadingMatch.Groups["col"].Success) column = int.Parse(leadingMatch.Groups["col"].Value);
+                msg = leadingMatch.Groups["rest"].Value;
             }
 
-            if (!string.IsNullOrEmpty(file))
+            if (string.IsNullOrEmpty(file) || line == 0)
             {
-                return $"{file}: {typeStr} {msg}";
+                var shaderMatch = s_TrailingShaderLocationRegex.Match(rawMessage);
+                if (shaderMatch.Success)
+                {
+                    if (string.IsNullOrEmpty(file))
+                    {
+                        file = shaderMatch.Groups["file"].Value;
+                    }
+                    if (shaderMatch.Groups["line"].Success) line = int.Parse(shaderMatch.Groups["line"].Value);
+                    if (shaderMatch.Groups["col"].Success) column = int.Parse(shaderMatch.Groups["col"].Value);
+                }
             }
 
-            return $"{typeStr} {msg}";
+            if (string.IsNullOrEmpty(file))
+            {
+                var quotedMatch = s_QuotedAssetRegex.Match(rawMessage);
+                if (quotedMatch.Success)
+                {
+                    file = quotedMatch.Groups["file"].Value;
+                }
+            }
+
+            if (string.IsNullOrEmpty(file) && !string.IsNullOrWhiteSpace(stackTrace))
+            {
+                foreach (System.Text.RegularExpressions.Match match in s_StackTraceLocationRegex.Matches(stackTrace))
+                {
+                    if (match.Success)
+                    {
+                        string candidateFile = match.Groups["file"].Value.Trim();
+                        if (candidateFile.StartsWith("<", StringComparison.Ordinal)) continue;
+                        if (match.Groups["line"].Success && int.TryParse(match.Groups["line"].Value, out int parsedLine) && parsedLine > 0)
+                        {
+                            file = candidateFile;
+                            line = parsedLine;
+                            break;
+                        }
+                    }
+                }
+
+                if (string.IsNullOrEmpty(file))
+                {
+                    foreach (System.Text.RegularExpressions.Match match in s_BareStackTraceLocationRegex.Matches(stackTrace))
+                    {
+                        if (match.Success)
+                        {
+                            string candidateFile = match.Groups["file"].Value.Trim();
+                            if (candidateFile.StartsWith("<", StringComparison.Ordinal)) continue;
+                            if (match.Groups["line"].Success && int.TryParse(match.Groups["line"].Value, out int parsedLine) && parsedLine > 0)
+                            {
+                                file = candidateFile;
+                                line = parsedLine;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return FormatCompilerDiagnostic(msg, file, line, column, isError);
         }
 
         public static void UpdateCompilationState()
@@ -392,7 +559,7 @@ namespace UnityLeanMcp
             }
 
             var diagnostics = WriteActiveErrorsToFile();
-            bool hasErrors = EditorUtility.scriptCompilationFailed || diagnostics.Any(d => d.Contains(": error") || d.StartsWith("error ", StringComparison.Ordinal));
+            bool hasErrors = EditorUtility.scriptCompilationFailed || diagnostics.Any(d => s_IsErrorRegex.IsMatch(d));
 
             var result = new UnityRefreshResult
             {
@@ -464,7 +631,14 @@ namespace UnityLeanMcp
                 // retain that evidence until the assembly callback replaces it.
                 // Only operation-scoped asset/runtime errors restart here.
                 s_ScopedDiagnostics = new ScopedDiagnostics { operationId = UnityCommandGate.ReadSnapshot()?.OperationId };
-                SessionState.EraseString(ScopedDiagnosticsKey);
+                try
+                {
+                    if (s_MainThreadId == 0 || Thread.CurrentThread.ManagedThreadId == s_MainThreadId)
+                    {
+                        SessionState.EraseString(ScopedDiagnosticsKey);
+                    }
+                }
+                catch { }
             }
         }
 

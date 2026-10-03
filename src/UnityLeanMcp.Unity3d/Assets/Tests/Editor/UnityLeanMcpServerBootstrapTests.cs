@@ -234,6 +234,230 @@ namespace UnityLeanMcpTests
             }
         }
 
+        [Test]
+        public void FormatOperationDiagnostic_ShaderErrors_FormattedWithLocation()
+        {
+            // Trailing shader location
+            string msg1 = "Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45)";
+            string formatted1 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg1, "", true);
+            Assert.That(formatted1, Is.EqualTo("Assets/Shaders/Water.shader(45): error Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45)"));
+
+            // Leading shader location
+            string msg2 = "Assets/Shaders/Water.shader(45): error undeclared identifier 'foo'";
+            string formatted2 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg2, "", true);
+            Assert.That(formatted2, Is.EqualTo("Assets/Shaders/Water.shader(45): error undeclared identifier 'foo'"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_ShaderErrors_WithColumnsAndColonDelimiters()
+        {
+            // Trailing shader location with column in parenthesis
+            string msg1 = "Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45,12)";
+            string formatted1 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg1, "", true);
+            Assert.That(formatted1, Is.EqualTo("Assets/Shaders/Water.shader(45,12): error Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45,12)"));
+
+            // Trailing shader location with colon delimiter and column
+            string msg2 = "Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader:45:12";
+            string formatted2 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg2, "", true);
+            Assert.That(formatted2, Is.EqualTo("Assets/Shaders/Water.shader(45,12): error Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader:45:12"));
+
+            // Trailing shader location colon-delimited without column
+            string msg3 = "Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader:45";
+            string formatted3 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg3, "", true);
+            Assert.That(formatted3, Is.EqualTo("Assets/Shaders/Water.shader(45): error Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader:45"));
+        }
+
+        [Test]
+        public void IsErrorRegex_MatchesWindowsPathsAndStandaloneErrors()
+        {
+            var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var isErrorRegexField = typeof(UnityLeanMcpCompilationTracker).GetField("s_IsErrorRegex", flags);
+            var regex = (System.Text.RegularExpressions.Regex)isErrorRegexField.GetValue(null);
+
+            // Windows absolute paths
+            Assert.That(regex.IsMatch(@"C:\Project\Assets\Scripts\Player.cs(10,5): error CS0103: The name 'foo' does not exist"), Is.True);
+            Assert.That(regex.IsMatch(@"C:/Project/Assets/Shaders/Water.shader:45:12: error undeclared identifier 'foo'"), Is.True);
+            Assert.That(regex.IsMatch(@"C:\Project\Assets\Prefabs\Player.prefab: error Missing script"), Is.True);
+
+            // Relative paths and Unix paths
+            Assert.That(regex.IsMatch("Assets/Shaders/Water.shader(45,12): error undeclared identifier 'foo'"), Is.True);
+            Assert.That(regex.IsMatch("/Users/dev/Project/Assets/Player.cs:10: error CS0103: foo"), Is.True);
+
+            // Standalone errors
+            Assert.That(regex.IsMatch("error: The referenced script on this Behaviour is missing!"), Is.True);
+            Assert.That(regex.IsMatch("error CS0103: The name 'foo' does not exist"), Is.True);
+
+            // Non-errors (warnings, even if mentioning error in body)
+            Assert.That(regex.IsMatch(@"C:\Project\Assets\Scripts\Player.cs(10,5): warning CS0168: The variable 'unused' is declared but never used"), Is.False);
+            Assert.That(regex.IsMatch("Assets/Scripts/Player.cs(10,5): warning CS1234: Syntax error recovery used"), Is.False);
+            Assert.That(regex.IsMatch("warning: error handling was bypassed"), Is.False);
+            Assert.That(regex.IsMatch("warning CS1234: error in configuration"), Is.False);
+            Assert.That(regex.IsMatch("Assets/Scripts/Player.cs: warning: error in configuration"), Is.False);
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_MissingMonoBehaviourScript_FormattedCorrectly()
+        {
+            // Standalone without file
+            string msg1 = "The referenced script on this Behaviour (Game Object 'Player') is missing!";
+            string formatted1 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg1, "", true);
+            Assert.That(formatted1, Is.EqualTo("error: The referenced script on this Behaviour (Game Object 'Player') is missing!"));
+
+            // With prefab path in quotes
+            string msg2 = "The referenced script on this Behaviour (Game Object 'Player') in prefab 'Assets/Prefabs/Player.prefab' is missing!";
+            string formatted2 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg2, "", true);
+            Assert.That(formatted2, Is.EqualTo("Assets/Prefabs/Player.prefab: error The referenced script on this Behaviour (Game Object 'Player') in prefab 'Assets/Prefabs/Player.prefab' is missing!"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_AssetImportFailure_FormattedWithAssetPath()
+        {
+            string msg = "Asset import failed: \"Assets/Textures/bad.png\"";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, "", true);
+            Assert.That(formatted, Is.EqualTo("Assets/Textures/bad.png: error Asset import failed: \"Assets/Textures/bad.png\""));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_AssetPostprocessorException_ExtractsSourceFileAndLine()
+        {
+            string msg = "System.NullReferenceException: Object reference not set to an instance of an object";
+            string trace = "  at MyAssetPostprocessor.OnPostprocessAllAssets (System.String[] importedAssets) [0x00001] in Assets/Editor/MyAssetPostprocessor.cs:15\n  at UnityEditor.AssetPostprocessingInternal.PostprocessAllAssets ()";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace, true);
+            Assert.That(formatted, Is.EqualTo("Assets/Editor/MyAssetPostprocessor.cs(15): error System.NullReferenceException: Object reference not set to an instance of an object"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_ShaderError_WithConflictingLeadingAndTrailingMarkers_ExtractsLineAndColumn()
+        {
+            string msg = "Assets/Shaders/Water.shader: Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45,12)";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, "", true);
+            Assert.That(formatted, Is.EqualTo("Assets/Shaders/Water.shader(45,12): error Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45,12)"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_PathWithParenthesesAndSpaces_ExtractsLocationCorrectly()
+        {
+            string msg = "Assets/Plugins (x86)/Plugin.cs(10, 5): error CS0103: The name 'foo' does not exist";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, "", true);
+            Assert.That(formatted, Is.EqualTo("Assets/Plugins (x86)/Plugin.cs(10,5): error CS0103: The name 'foo' does not exist"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_UnquotedAssetImportFailure_FormattedWithAssetPath()
+        {
+            string msg = "Asset import failed: Assets/Textures/bad.png";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, "", true);
+            Assert.That(formatted, Is.EqualTo("Assets/Textures/bad.png: error Asset import failed: Assets/Textures/bad.png"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_SentenceEndingWithPunctuation_ExtractsAssetPath()
+        {
+            string msg = "Asset import failed: Assets/Textures/bad.png. Please check header.";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, "", true);
+            Assert.That(formatted, Is.EqualTo("Assets/Textures/bad.png: error Asset import failed: Assets/Textures/bad.png. Please check header."));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_EnglishSentenceMentioningAsset_ExtractsCleanAssetPath()
+        {
+            string msg = "Unhandled exception while importing Assets/Prefabs/Player.prefab: NullReferenceException";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, "", true);
+            Assert.That(formatted, Is.EqualTo("Assets/Prefabs/Player.prefab: error Unhandled exception while importing Assets/Prefabs/Player.prefab: NullReferenceException"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_StackTraceWithParenthesesInPath_ExtractsSourceFileAndLine()
+        {
+            string msg = "System.Exception: failed";
+            string trace = "  at Tool.Run () in C:\\Build (x64)\\Assets\\Editor\\Tool.cs:line 30";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace, true);
+            Assert.That(formatted, Is.EqualTo("C:/Build (x64)/Assets/Editor/Tool.cs(30): error System.Exception: failed"));
+        }
+
+        [Test]
+        public void FormatOperationDiagnostic_StackTraceWithRelativePathContainingSpacesAndParentheses()
+        {
+            string msg = "System.Exception: failed";
+            string trace = "  at Tool.Run () in Plugins (x86)/Tool.cs:line 30";
+            string formatted = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace, true);
+            Assert.That(formatted, Is.EqualTo("Plugins (x86)/Tool.cs(30): error System.Exception: failed"));
+
+            string trace2 = "  at Tool.Run () in My Folder/Tool.cs:line 42";
+            string formatted2 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace2, true);
+            Assert.That(formatted2, Is.EqualTo("My Folder/Tool.cs(42): error System.Exception: failed"));
+
+            string trace3 = "  at Tool.Run (in int value) in Plugins (x86)/Tool.cs:line 30";
+            string formatted3 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace3, true);
+            Assert.That(formatted3, Is.EqualTo("Plugins (x86)/Tool.cs(30): error System.Exception: failed"));
+
+            string trace4 = "  at Plugins (x86)/Tool.cs:line 30";
+            string formatted4 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace4, true);
+            Assert.That(formatted4, Is.EqualTo("Plugins (x86)/Tool.cs(30): error System.Exception: failed"));
+
+            string trace5 = "  at My Folder/Tool.cs:42";
+            string formatted5 = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(msg, trace5, true);
+            Assert.That(formatted5, Is.EqualTo("My Folder/Tool.cs(42): error System.Exception: failed"));
+        }
+
+        [Test]
+        public void ScopedDiagnostics_PersistsAcrossSimulatedDomainReload()
+        {
+            var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
+            var scoped = typeof(UnityLeanMcpCompilationTracker).GetField("s_ScopedDiagnostics", flags);
+            var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
+            var init = typeof(UnityLeanMcpCompilationTracker).GetMethod("InitializeMainThread", flags);
+            object originalSnapshot = snapshot.GetValue(null);
+            object originalScoped = scoped.GetValue(null);
+            string originalActiveOp = UnityEditor.SessionState.GetString("UnityLeanMcp_ActiveOp", "");
+            string originalSession = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
+            string opId = Guid.NewGuid().ToString("N");
+
+            try
+            {
+                var activeOp = new ActiveOperationSnapshot("refresh", opId, OperationStatus.Refreshing);
+                UnityEditor.SessionState.SetString("UnityLeanMcp_ActiveOp", UnityEngine.JsonUtility.ToJson(activeOp));
+                snapshot.SetValue(null, activeOp);
+                UnityLeanMcpCompilationTracker.CaptureOperationError(
+                    "Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(45)",
+                    "",
+                    UnityEngine.LogType.Error);
+
+                // Verify captured in memory
+                var capturedBefore = (System.Collections.Generic.List<string>)read.Invoke(null, null);
+                Assert.That(capturedBefore.Count, Is.EqualTo(1));
+                Assert.That(capturedBefore[0], Does.Contain("Assets/Shaders/Water.shader(45)"));
+
+                // Verify persisted to SessionState
+                string persistedJson = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
+                Assert.That(persistedJson, Does.Contain(opId));
+                Assert.That(persistedJson, Does.Contain("Assets/Shaders/Water.shader(45)"));
+
+                // Simulate domain reload: clear in-memory static state and run InitializeMainThread
+                scoped.SetValue(null, Activator.CreateInstance(scoped.FieldType));
+                var clearedList = (System.Collections.Generic.List<string>)read.Invoke(null, null);
+                Assert.That(clearedList.Count, Is.EqualTo(0));
+
+                init.Invoke(null, null);
+
+                // Verify restored from SessionState
+                var restoredList = (System.Collections.Generic.List<string>)read.Invoke(null, null);
+                Assert.That(restoredList.Count, Is.EqualTo(1));
+                Assert.That(restoredList[0], Does.Contain("Assets/Shaders/Water.shader(45)"));
+            }
+            finally
+            {
+                snapshot.SetValue(null, originalSnapshot);
+                scoped.SetValue(null, originalScoped);
+                UnityEditor.SessionState.SetString("UnityLeanMcp_RefreshDiagnostics", originalSession);
+                if (string.IsNullOrEmpty(originalActiveOp))
+                    UnityEditor.SessionState.EraseString("UnityLeanMcp_ActiveOp");
+                else
+                    UnityEditor.SessionState.SetString("UnityLeanMcp_ActiveOp", originalActiveOp);
+            }
+        }
+
         private sealed class EditModeProbeHandler : ICommandHandler
         {
             public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.EditModeOnly;

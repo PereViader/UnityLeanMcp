@@ -28,11 +28,19 @@ public class DiagnosticFormatter : IDiagnosticFormatter
     public static IDiagnosticFormatter Default { get; } = new DiagnosticFormatter();
 
     private static readonly Regex s_StackTraceRegex = new(
-        @"(?:(?:in|\bat\b|\()\s*)?(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+]+[\\/])[^:\r\n()]+):(?:line\s+)?(?<line>\d+)\)?",
+        @"(?:(?:\)\s+in|\(at|\bin(?=\s+(?:[a-zA-Z]:[\\/]|/|(?:Assets|Packages)[\\/])))\s+)(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n]+?):(?:line\s+)?(?<line>\d+)\)?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex s_BareAtRegex = new(
+        @"^\s*at\s+(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n]+?):(?:line\s+)?(?<line>\d+)\)?$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex s_CompilerDiagnosticRegex = new(
-        @"^(?<file>.+?)(?:\((?<line>\d+)(?:,(?<col>\d+))?\))?:\s*(?<severity>error|warning)\s*(?:(?<code>[A-Z0-9]+):\s*)?(?<msg>.+)$",
+        @"^(?<file>.+?)(?:\((?<line>\d+)(?:,\s*(?<col>\d+))?\)|:(?<line>\d+)(?::(?<col>\d+))?)?:\s*(?<severity>error|warning):?\s*(?:(?<code>[A-Z0-9]+):\s*)?(?<msg>.+)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex s_StandaloneDiagnosticRegex = new(
+        @"^(?<severity>error|warning)(?::|\s+(?<code>[A-Z0-9]+):|\s+)(?<msg>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static bool IsPathRootedCrossPlatform(string? path)
@@ -231,6 +239,10 @@ public class DiagnosticFormatter : IDiagnosticFormatter
                 continue;
 
             var match = s_StackTraceRegex.Match(line);
+            if (!match.Success)
+            {
+                match = s_BareAtRegex.Match(line);
+            }
             if (match.Success)
             {
                 string rawFile = match.Groups["file"].Value.Trim();
@@ -328,12 +340,17 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
             foreach (var entry in entries)
             {
-                var match = s_CompilerDiagnosticRegex.Match(entry.Trim());
+                string item = entry.Trim();
+                var match = s_CompilerDiagnosticRegex.Match(item);
                 if (match.Success)
                 {
                     int diagLine = match.Groups["line"].Success ? int.Parse(match.Groups["line"].Value) : 0;
                     int column = match.Groups["col"].Success ? int.Parse(match.Groups["col"].Value) : 0;
                     string code = match.Groups["code"].Success ? match.Groups["code"].Value : "";
+
+                    string rawDiagMsg = match.Groups["msg"].Value.Trim();
+                    if (rawDiagMsg.StartsWith(':'))
+                        rawDiagMsg = rawDiagMsg.TrimStart(':', ' ');
 
                     diagnostics.Add(new StructuredCompilerDiagnostic
                     {
@@ -342,9 +359,31 @@ public class DiagnosticFormatter : IDiagnosticFormatter
                         Column = column,
                         Severity = match.Groups["severity"].Value.ToLowerInvariant(),
                         Code = code,
-                        Message = match.Groups["msg"].Value.Trim(),
+                        Message = rawDiagMsg,
                         Assembly = null
                     });
+                }
+                else
+                {
+                    var standaloneMatch = s_StandaloneDiagnosticRegex.Match(item);
+                    if (standaloneMatch.Success)
+                    {
+                        string code = standaloneMatch.Groups["code"].Success ? standaloneMatch.Groups["code"].Value : "";
+                        string rawDiagMsg = standaloneMatch.Groups["msg"].Value.Trim();
+                        if (rawDiagMsg.StartsWith(':'))
+                            rawDiagMsg = rawDiagMsg.TrimStart(':', ' ');
+
+                        diagnostics.Add(new StructuredCompilerDiagnostic
+                        {
+                            File = "",
+                            Line = 0,
+                            Column = 0,
+                            Severity = standaloneMatch.Groups["severity"].Value.ToLowerInvariant(),
+                            Code = code,
+                            Message = rawDiagMsg,
+                            Assembly = null
+                        });
+                    }
                 }
             }
         }

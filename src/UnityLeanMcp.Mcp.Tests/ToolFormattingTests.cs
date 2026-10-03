@@ -2098,6 +2098,159 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
+    public void ParseCompilerDiagnostics_ColonDelimitedLocations_ParsesSuccessfully()
+    {
+        string text = "Assets/Shaders/Water.shader:45: error undeclared identifier 'foo'\n" +
+                      "Assets/Shaders/Surface.shader:12:8: warning division by zero";
+
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Equal(2, diagnostics.Count);
+
+        Assert.Equal("Assets/Shaders/Water.shader", diagnostics[0].File);
+        Assert.Equal(45, diagnostics[0].Line);
+        Assert.Equal(0, diagnostics[0].Column);
+        Assert.Equal("error", diagnostics[0].Severity);
+        Assert.Equal("undeclared identifier 'foo'", diagnostics[0].Message);
+
+        Assert.Equal("Assets/Shaders/Surface.shader", diagnostics[1].File);
+        Assert.Equal(12, diagnostics[1].Line);
+        Assert.Equal(8, diagnostics[1].Column);
+        Assert.Equal("warning", diagnostics[1].Severity);
+        Assert.Equal("division by zero", diagnostics[1].Message);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_ColonDelimitedLocation_GeneratesClickableFileUri()
+    {
+        string text = "Assets/Shaders/Water.shader:45: error undeclared identifier 'foo'";
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Refresh failed.",
+            isSuccess: false);
+
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'foo'", formatted);
+        Assert.Contains("Refresh failed.", formatted);
+    }
+
+    [Fact]
+    public void ParseCompilerDiagnostics_StandaloneDiagnosticWithoutFile_ParsesCorrectly()
+    {
+        string text = "error: The referenced script on this Behaviour (Game Object 'Player') is missing!";
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Single(diagnostics);
+        Assert.Equal("", diagnostics[0].File);
+        Assert.Equal(0, diagnostics[0].Line);
+        Assert.Equal("error", diagnostics[0].Severity);
+        Assert.Equal("The referenced script on this Behaviour (Game Object 'Player') is missing!", diagnostics[0].Message);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_StandaloneError_FormatsWithUnknownLocationAndNoDoubleColon()
+    {
+        string text = "error: The referenced script on this Behaviour is missing!";
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Refresh failed.",
+            isSuccess: false);
+
+        Assert.Contains("Unknown: error: The referenced script on this Behaviour is missing!", formatted);
+        Assert.DoesNotContain("error::", formatted);
+        Assert.Contains("Refresh failed.", formatted);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_MixedDiagnostics_AllParsedWithoutDroppingAny()
+    {
+        string text = "Assets/Scripts/Player.cs(12,34): error CS0103: The name 'foo' does not exist in the current context\n" +
+                      "Assets/Shaders/Water.shader(45): error undeclared identifier 'bar'\n" +
+                      "Assets/Prefabs/Player.prefab: error The referenced script on this Behaviour is missing!\n" +
+                      "Assets/Textures/bad.png: error Asset import failed: \"Assets/Textures/bad.png\"\n" +
+                      "Assets/Editor/MyAssetPostprocessor.cs(15): error System.NullReferenceException: Object reference not set to an instance of an object\n" +
+                      "error: Standalone error without file path\n" +
+                      "Assets/Scripts/Other.cs(5,1): warning CS0168: The variable 'unused' is declared but never used";
+
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+        Assert.Equal(7, diagnostics.Count);
+
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Refresh failed.",
+            isSuccess: false);
+
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Scripts/Player.cs#L12: error CS0103: The name 'foo' does not exist", formatted);
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'bar'", formatted);
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Prefabs/Player.prefab: error: The referenced script on this Behaviour is missing!", formatted);
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Textures/bad.png: error: Asset import failed: \"Assets/Textures/bad.png\"", formatted);
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Editor/MyAssetPostprocessor.cs#L15: error: System.NullReferenceException: Object reference not set to an instance of an object", formatted);
+        Assert.Contains("Unknown: error: Standalone error without file path", formatted);
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Scripts/Other.cs#L5: warning CS0168: The variable 'unused' is declared but never used", formatted);
+        Assert.Contains("Refresh failed.", formatted);
+        Assert.DoesNotContain("::", formatted);
+    }
+
+    [Fact]
+    public void ParseCompilerDiagnostics_WindowsAbsolutePathColonDelimited_ParsesSuccessfully()
+    {
+        string text = @"C:\Code\MyProject\Assets\Shaders\Water.shader:45:12: error undeclared identifier 'foo'" + "\n" +
+                      "C:/Code/MyProject/Assets/Shaders/Surface.shader:12:8: warning division by zero\n" +
+                      @"C:\Code\MyProject\Assets\Prefabs\Player.prefab: error Missing script";
+
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Equal(3, diagnostics.Count);
+
+        Assert.Equal(@"C:\Code\MyProject\Assets\Shaders\Water.shader", diagnostics[0].File);
+        Assert.Equal(45, diagnostics[0].Line);
+        Assert.Equal(12, diagnostics[0].Column);
+        Assert.Equal("error", diagnostics[0].Severity);
+        Assert.Equal("undeclared identifier 'foo'", diagnostics[0].Message);
+
+        Assert.Equal("C:/Code/MyProject/Assets/Shaders/Surface.shader", diagnostics[1].File);
+        Assert.Equal(12, diagnostics[1].Line);
+        Assert.Equal(8, diagnostics[1].Column);
+        Assert.Equal("warning", diagnostics[1].Severity);
+        Assert.Equal("division by zero", diagnostics[1].Message);
+
+        Assert.Equal(@"C:\Code\MyProject\Assets\Prefabs\Player.prefab", diagnostics[2].File);
+        Assert.Equal(0, diagnostics[2].Line);
+        Assert.Equal("error", diagnostics[2].Severity);
+        Assert.Equal("Missing script", diagnostics[2].Message);
+    }
+
+    [Fact]
+    public void ParseCompilerDiagnostics_SpaceAfterCommaInLocation_ParsesLineAndColumn()
+    {
+        string text = "Assets/Scripts/Player.cs(10, 5): error CS0103: The name 'foo' does not exist";
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Single(diagnostics);
+        Assert.Equal("Assets/Scripts/Player.cs", diagnostics[0].File);
+        Assert.Equal(10, diagnostics[0].Line);
+        Assert.Equal(5, diagnostics[0].Column);
+        Assert.Equal("error", diagnostics[0].Severity);
+        Assert.Equal("CS0103", diagnostics[0].Code);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_WindowsAbsolutePathColonDelimited_GeneratesClickableFileUri()
+    {
+        string text = @"C:\Code\MyProject\Assets\Shaders\Water.shader:45:12: error undeclared identifier 'foo'";
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Refresh failed.",
+            isSuccess: false);
+
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'foo'", formatted);
+        Assert.Contains("Refresh failed.", formatted);
+    }
+
+    [Fact]
     public void ExtractSourceLocation_StackTraceWithPackageVersionAndHash_ExtractsCorrectLocation()
     {
         string stackTrace = "  at PackageNamespace.Class.Method () [0x00001] in Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs:42";
@@ -2106,6 +2259,100 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Equal("Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs", file);
         Assert.Equal(42, line);
         Assert.Contains("file:///C:/Code/MyProject/Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs#L42", uri);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_StackTraceWithParenthesesAndSpaces_ExtractsCorrectLocation()
+    {
+        string stackTrace = @"  at MyTest.Run () in C:\Build (x64)\Assets\Tests\MyTest.cs:line 25";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Build (x64)");
+
+        Assert.Equal(@"C:\Build (x64)\Assets\Tests\MyTest.cs", file);
+        Assert.Equal(25, line);
+        Assert.Equal("file:///C:/Build%20(x64)/Assets/Tests/MyTest.cs#L25", uri);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_RelativePathWithParenthesesAndSpaces_ExtractsCorrectLocation()
+    {
+        string stackTrace = @"  at MyTest.Run () in Plugins (x86)/Tests/MyTest.cs:line 25";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
+
+        Assert.Equal("Plugins (x86)/Tests/MyTest.cs", file);
+        Assert.Equal(25, line);
+        Assert.Equal("file:///C:/Project/Plugins%20(x86)/Tests/MyTest.cs#L25", uri);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_RelativePathWithSpaces_ExtractsCorrectLocation()
+    {
+        string stackTrace = @"  at MyTest.Run () in My Folder/Tests/MyTest.cs:line 25";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
+
+        Assert.Equal("My Folder/Tests/MyTest.cs", file);
+        Assert.Equal(25, line);
+        Assert.Equal("file:///C:/Project/My%20Folder/Tests/MyTest.cs#L25", uri);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_UnityFormatWithParenthesesAndSpaces_ExtractsCorrectLocation()
+    {
+        string stackTrace = @"MySuite.Test () (at Plugins (x86)/Test.cs:23)";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
+
+        Assert.Equal("Plugins (x86)/Test.cs", file);
+        Assert.Equal(23, line);
+        Assert.Equal("file:///C:/Project/Plugins%20(x86)/Test.cs#L23", uri);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_StrippedTraceBareAtWithSpaces_ExtractsCorrectLocation()
+    {
+        string stackTrace = @"  at My Folder/Test.cs:42";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
+
+        Assert.Equal("My Folder/Test.cs", file);
+        Assert.Equal(42, line);
+        Assert.Equal("file:///C:/Project/My%20Folder/Test.cs#L42", uri);
+    }
+
+    [Fact]
+    public void ExtractSourceLocation_MethodWithInParametersAndParentheses_ExtractsCorrectLocation()
+    {
+        string stackTrace = @"  at MyTest.Run (in int value, in string other) in Plugins (x86)/Tests/MyTest.cs:line 25";
+        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
+
+        Assert.Equal("Plugins (x86)/Tests/MyTest.cs", file);
+        Assert.Equal(25, line);
+        Assert.Equal("file:///C:/Project/Plugins%20(x86)/Tests/MyTest.cs#L25", uri);
+    }
+
+    [Fact]
+    public void ParseCompilerDiagnostics_PathWithParenthesesAndSpaces_ParsesSuccessfully()
+    {
+        string text = "Assets/Plugins (x86)/Plugin.cs(10, 5): error CS0103: The name 'foo' does not exist";
+        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Single(diagnostics);
+        Assert.Equal("Assets/Plugins (x86)/Plugin.cs", diagnostics[0].File);
+        Assert.Equal(10, diagnostics[0].Line);
+        Assert.Equal(5, diagnostics[0].Column);
+        Assert.Equal("error", diagnostics[0].Severity);
+        Assert.Equal("CS0103", diagnostics[0].Code);
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_UnquotedAssetImportFailure_GeneratesClickableFileUri()
+    {
+        string text = "Assets/Textures/bad.png: error Asset import failed: Assets/Textures/bad.png";
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Refresh failed.",
+            isSuccess: false);
+
+        Assert.Contains("file:///C:/Code/MyProject/Assets/Textures/bad.png: error: Asset import failed: Assets/Textures/bad.png", formatted);
+        Assert.Contains("Refresh failed.", formatted);
     }
 
     [Fact]
@@ -2810,7 +3057,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     // ==========================================
 
     [Theory]
-    [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler diagnostics. A normal refresh is fast when unchanged. Set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
+    [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler and asset import diagnostics. C# compiler errors persist across no-op refreshes, while non-C# diagnostics (shaders, import failures) are captured only during active imports and not re-emitted if assets are unchanged. Normal refresh is fast when unchanged; set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     [InlineData("unity_eval", "Evaluates C# top-level script source code in-memory against the active Unity Editor. Evaluation can mutate Unity state, so treat every call as potentially state-changing even when it is intended to query data. Write code directly as top-level statements without class or method wrappers. Top-level 'await' is supported for asynchronous code. Use 'return <value>;' to return a result (e.g., 'return new { player.health, player.speed };' to inspect multiple properties); void statements and 'return;' complete without returning a value. No namespaces are pre-imported by default; include 'using UnityEngine;' to access Unity types (e.g., GameObject, Transform).")]
     [InlineData("unity_test", "Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
     [InlineData("unity_coverage", "Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
