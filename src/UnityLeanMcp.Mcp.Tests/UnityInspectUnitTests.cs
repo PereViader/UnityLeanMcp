@@ -53,7 +53,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var scene = new Scene { name = "EmptyScene", isLoaded = true, RootObjects = new List<GameObject>() };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy();
+            string result = Inspect.Hierarchy();
 
             Assert.Contains("Scene \"EmptyScene\" (0 root GameObjects - empty scene)", result);
         }
@@ -61,7 +61,7 @@ namespace UnityLeanMcp.Mcp.Tests
         [Fact]
         public void Hierarchy_NoScenesLoaded_ReturnsCleanNotification()
         {
-            string result = UnityInspect.Hierarchy();
+            string result = Inspect.Hierarchy();
 
             Assert.Equal("(No scenes currently loaded)", result);
         }
@@ -90,7 +90,7 @@ namespace UnityLeanMcp.Mcp.Tests
             };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy();
+            string result = Inspect.Hierarchy();
 
             Assert.Contains("RootPlayer [active] [Transform, Collider]", result);
             Assert.Contains("  Weapon [inactive] [Transform]", result);
@@ -119,7 +119,7 @@ namespace UnityLeanMcp.Mcp.Tests
             SceneManager.Scenes.Add(scene);
 
             // Setting maxDepth = 5 should stop traversal and emit truncation marker
-            string result = UnityInspect.Hierarchy(maxDepth: 5, maxItems: 1000);
+            string result = Inspect.Hierarchy(maxDepth: 5, maxItems: 1000);
 
             Assert.Contains("Level0", result);
             Assert.Contains("Level5", result);
@@ -142,7 +142,7 @@ namespace UnityLeanMcp.Mcp.Tests
             };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy();
+            string result = Inspect.Hierarchy();
 
             Assert.Contains("CorruptedObject [active] [Transform, Missing Script, Collider]", result);
         }
@@ -166,7 +166,7 @@ namespace UnityLeanMcp.Mcp.Tests
             SceneManager.Scenes.Add(scene);
 
             // Limit to 3 items
-            string result = UnityInspect.Hierarchy(maxDepth: 32, maxItems: 3);
+            string result = Inspect.Hierarchy(maxDepth: 32, maxItems: 3);
 
             Assert.Contains("Root [active]", result);
             Assert.Contains("Child_1 [active]", result);
@@ -183,11 +183,11 @@ namespace UnityLeanMcp.Mcp.Tests
             SceneManager.Scenes.Add(scene1);
             SceneManager.Scenes.Add(scene2);
 
-            string resA = UnityInspect.Hierarchy("SceneA");
+            string resA = Inspect.Hierarchy("SceneA");
             Assert.Contains("ObjA", resA);
             Assert.DoesNotContain("ObjB", resA);
 
-            string resMissing = UnityInspect.Hierarchy("SceneNonExistent");
+            string resMissing = Inspect.Hierarchy("SceneNonExistent");
             Assert.Contains("Scene \"SceneNonExistent\" is not currently loaded", resMissing);
         }
 
@@ -198,7 +198,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var child = new GameObject("SpecialChild");
             root.transform.AddChild(child.transform);
 
-            string result = UnityInspect.Hierarchy(root);
+            string result = Inspect.Hierarchy(root);
 
             Assert.Contains("SpecialRoot [active]", result);
             Assert.Contains("  SpecialChild [active]", result);
@@ -211,7 +211,7 @@ namespace UnityLeanMcp.Mcp.Tests
         [Fact]
         public void Inspect_Object_Null_ReturnsNullString()
         {
-            string result = UnityInspect.Object(null);
+            string result = Inspect.Object(null);
             Assert.Equal("null", result);
         }
 
@@ -225,7 +225,7 @@ namespace UnityLeanMcp.Mcp.Tests
             go.layer = 2;
             go.AddComponent<Collider>();
 
-            string result = UnityInspect.GameObject(go);
+            string result = Inspect.GameObject(go);
 
             Assert.Contains("GameObject: \"Hero\"", result);
             Assert.Contains("Active: true (in hierarchy: true)", result);
@@ -242,7 +242,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var go = new GameObject("ObjectWithMissingScript");
             go.AddRawComponent(null);
 
-            string result = UnityInspect.GameObject(go);
+            string result = Inspect.GameObject(go);
 
             Assert.Contains("GameObject: \"ObjectWithMissingScript\"", result);
             Assert.Contains("Missing Component / Unassigned Script", result);
@@ -255,7 +255,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var collider = go.AddComponent<Collider>();
             collider.enabled = true;
 
-            string result = UnityInspect.Component(collider);
+            string result = Inspect.Component(collider);
 
             Assert.Contains("Component: Collider", result);
             Assert.Contains("GameObject: \"TestGo\"", result);
@@ -290,7 +290,7 @@ namespace UnityLeanMcp.Mcp.Tests
             };
 
             // Inspect object
-            string result = UnityInspect.Object(comp);
+            string result = Inspect.Object(comp);
 
             Assert.Contains("Component: Collider", result);
             Assert.Contains("Health (m_Health): 100", result);
@@ -305,7 +305,7 @@ namespace UnityLeanMcp.Mcp.Tests
             nodeA.Next = nodeB;
             nodeB.Next = nodeA;
 
-            string result = UnityInspect.Object(nodeA, maxDepth: 5);
+            string result = Inspect.Object(nodeA, maxDepth: 5);
 
             Assert.Contains("NodeA", result);
             Assert.Contains("NodeB", result);
@@ -322,7 +322,7 @@ namespace UnityLeanMcp.Mcp.Tests
         public void Inspect_Object_ItemLimitExceeded_AppendsItemMarker()
         {
             var multiProp = new MultiPropertyClass();
-            string result = UnityInspect.Object(multiProp, maxItems: 3);
+            string result = Inspect.Object(multiProp, maxItems: 3);
 
             Assert.Contains("... (truncated: maximum item count reached)", result);
         }
@@ -358,7 +358,7 @@ namespace UnityLeanMcp.Mcp.Tests
             };
             AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(GameObject);
 
-            string result = UnityInspect.FindAssets(filter: "Player", type: "Prefab");
+            string result = Inspect.FindAssets(filter: "Player", type: "Prefab");
 
             Assert.Contains("Assets found (1):", result);
             Assert.Contains("Assets/Prefabs/Player.prefab [GameObject]", result);
@@ -380,7 +380,7 @@ namespace UnityLeanMcp.Mcp.Tests
             AssetDatabase.GUIDToAssetPathFunc = guid => "Assets/Prefabs/Enemy.prefab";
             AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(GameObject);
 
-            string result = UnityInspect.FindPrefabs("Enemy");
+            string result = Inspect.FindPrefabs("Enemy");
 
             Assert.Contains("Assets/Prefabs/Enemy.prefab [GameObject]", result);
         }
@@ -390,7 +390,7 @@ namespace UnityLeanMcp.Mcp.Tests
         {
             AssetDatabase.FindAssetsFunc = filter => Array.Empty<string>();
 
-            string result = UnityInspect.FindAssets("NonExistentFilter");
+            string result = Inspect.FindAssets("NonExistentFilter");
 
             Assert.Contains("(No assets found matching query: 'NonExistentFilter')", result);
         }
@@ -402,7 +402,7 @@ namespace UnityLeanMcp.Mcp.Tests
             AssetDatabase.GUIDToAssetPathFunc = guid => $"Assets/Item_{guid}.asset";
             AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(UnityEngine.Object);
 
-            string result = UnityInspect.FindAssets(maxItems: 2);
+            string result = Inspect.FindAssets(maxItems: 2);
 
             Assert.Contains("Assets/Item_g1.asset", result);
             Assert.Contains("Assets/Item_g2.asset", result);
@@ -413,7 +413,7 @@ namespace UnityLeanMcp.Mcp.Tests
         [Fact]
         public void FindAsset_ByPath_ReturnsDetailedMetadata()
         {
-            string result = UnityInspect.FindAsset("Assets/Prefabs/Test.prefab");
+            string result = Inspect.FindAsset("Assets/Prefabs/Test.prefab");
 
             Assert.Contains("Asset: \"Test\"", result);
             Assert.Contains("Path: \"Assets/Prefabs/Test.prefab\"", result);
@@ -431,7 +431,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = null;
             Selection.objects = Array.Empty<UnityEngine.Object>();
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
 
             Assert.Equal("(No active selection in Editor)", result);
         }
@@ -448,7 +448,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = go;
             Selection.objects = new UnityEngine.Object[] { go };
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
 
             Assert.Contains("Active Selection (GameObject): \"SelectedHero\"", result);
             Assert.Contains("Tag: \"Player\"", result);
@@ -467,7 +467,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = go1;
             Selection.objects = new UnityEngine.Object[] { go1, go2, go3 };
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
 
             Assert.Contains("Total Selected Objects (3):", result);
             Assert.Contains("- \"Item1\"", result);
@@ -485,7 +485,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = asset;
             Selection.objects = new UnityEngine.Object[] { asset };
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
 
             Assert.Contains("Active Selection (Asset): \"SkyMaterial\" (Object)", result);
             Assert.Contains("Asset Path: \"Assets/Sky.mat\"", result);
@@ -497,7 +497,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Camera.main = null;
             Camera.AllCamerasList.Clear();
 
-            string result = UnityInspect.MainCamera();
+            string result = Inspect.MainCamera();
 
             Assert.Equal("(No active Camera found in scene)", result);
         }
@@ -520,7 +520,7 @@ namespace UnityLeanMcp.Mcp.Tests
 
             Camera.main = cam;
 
-            string result = UnityInspect.MainCamera();
+            string result = Inspect.MainCamera();
 
             Assert.Contains("Main Camera: \"Main Camera\" (GameObject: \"MainCameraObject\", active: true)", result);
             Assert.Contains("Position: (0.00, 10.00, -20.00)", result);
@@ -542,7 +542,7 @@ namespace UnityLeanMcp.Mcp.Tests
 
             Camera.main = cam;
 
-            string result = UnityInspect.MainCamera();
+            string result = Inspect.MainCamera();
 
             Assert.Contains("Main Camera: \"2D Camera\"", result);
             Assert.Contains("Projection: Orthographic (Size: 7.50)", result);
@@ -553,21 +553,21 @@ namespace UnityLeanMcp.Mcp.Tests
         #region Inspect Alias & Output Limit Tests
 
         [Fact]
-        public void Inspect_AliasClass_ForwardsToUnityInspect()
+        public void Inspect_Methods_AreDeterministic()
         {
             var scene = new Scene { name = "AliasScene", isLoaded = true, RootObjects = new List<GameObject>() };
             SceneManager.Scenes.Add(scene);
 
             string r1 = Inspect.Hierarchy();
-            string r2 = UnityInspect.Hierarchy();
+            string r2 = Inspect.Hierarchy();
             Assert.Equal(r1, r2);
 
             string s1 = Inspect.Selection();
-            string s2 = UnityInspect.Selection();
+            string s2 = Inspect.Selection();
             Assert.Equal(s1, s2);
 
             string c1 = Inspect.MainCamera();
-            string c2 = UnityInspect.MainCamera();
+            string c2 = Inspect.MainCamera();
             Assert.Equal(c1, c2);
         }
 
@@ -575,7 +575,7 @@ namespace UnityLeanMcp.Mcp.Tests
         public void LimitOutput_TruncatesWhenExceedingCharacterCap()
         {
             string hugeText = new string('A', 1000);
-            string capped = UnityInspect.LimitOutput(hugeText, maxCharacters: 100, maxBytes: 100);
+            string capped = Inspect.LimitOutput(hugeText, maxCharacters: 100, maxBytes: 100);
 
             Assert.True(capped.Length <= 100);
             Assert.Contains("... (truncated: maximum output size reached)", capped);
@@ -585,7 +585,7 @@ namespace UnityLeanMcp.Mcp.Tests
         public void LimitOutput_PreservesTextWithinBudget()
         {
             string normalText = "Hello World";
-            string result = UnityInspect.LimitOutput(normalText, maxCharacters: 100, maxBytes: 100);
+            string result = Inspect.LimitOutput(normalText, maxCharacters: 100, maxBytes: 100);
 
             Assert.Equal("Hello World", result);
         }
@@ -596,12 +596,12 @@ namespace UnityLeanMcp.Mcp.Tests
             string text = new string('X', 500);
 
             // Cap at 10 chars
-            string capped10 = UnityInspect.LimitOutput(text, maxCharacters: 10, maxBytes: 10);
+            string capped10 = Inspect.LimitOutput(text, maxCharacters: 10, maxBytes: 10);
             Assert.True(capped10.Length <= 10, $"Expected length <= 10 but was {capped10.Length}");
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(capped10) <= 10);
 
             // Cap at 5 chars
-            string capped5 = UnityInspect.LimitOutput(text, maxCharacters: 5, maxBytes: 5);
+            string capped5 = Inspect.LimitOutput(text, maxCharacters: 5, maxBytes: 5);
             Assert.True(capped5.Length <= 5, $"Expected length <= 5 but was {capped5.Length}");
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(capped5) <= 5);
         }
@@ -617,7 +617,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var child = new GameObject("Child");
             root.transform.AddChild(child.transform);
 
-            string result = UnityInspect.Hierarchy(root.transform);
+            string result = Inspect.Hierarchy(root.transform);
             Assert.Contains("Root [active]", result);
             Assert.Contains("  Child [active]", result);
 
@@ -631,10 +631,10 @@ namespace UnityLeanMcp.Mcp.Tests
             var scene = new Scene { name = "UnloadedScene", isLoaded = false, RootObjects = new List<GameObject>() };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy();
+            string result = Inspect.Hierarchy();
             Assert.Contains("Scene \"UnloadedScene\" (not loaded)", result);
 
-            string singleResult = UnityInspect.Hierarchy("UnloadedScene");
+            string singleResult = Inspect.Hierarchy("UnloadedScene");
             Assert.Contains("Scene \"UnloadedScene\" (not loaded)", singleResult);
         }
 
@@ -652,7 +652,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var scene = new Scene { name = "TestScene", isLoaded = true, RootObjects = new List<GameObject> { root } };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy(maxDepth: 32, maxItems: 2);
+            string result = Inspect.Hierarchy(maxDepth: 32, maxItems: 2);
             int firstIdx = result.IndexOf("... (truncated: maximum item count reached)");
             int lastIdx = result.LastIndexOf("... (truncated: maximum item count reached)");
             Assert.True(firstIdx >= 0);
@@ -677,7 +677,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var customComp = new CustomTestComponent { gameObject = go };
             go.AddRawComponent(customComp);
 
-            string result = UnityInspect.Component(customComp);
+            string result = Inspect.Component(customComp);
 
             Assert.Contains("PublicField: 42", result);
             Assert.Contains("DebugStatus: \"Active\"", result);
@@ -698,7 +698,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var child = new GameObject("Child");
             go.transform.AddChild(child.transform);
 
-            string result = UnityInspect.Component(go.transform);
+            string result = Inspect.Component(go.transform);
 
             Assert.Contains("Component: Transform", result);
             Assert.Contains("localPos=(1.00, 2.00, 3.00)", result);
@@ -711,14 +711,14 @@ namespace UnityLeanMcp.Mcp.Tests
         public void Inspect_Collections_FormatsArrayAndDictionaryItems()
         {
             var list = new List<string> { "Apple", "Banana", "Cherry" };
-            string listResult = UnityInspect.Object(list);
+            string listResult = Inspect.Object(list);
             Assert.Contains("List`1 (3 items):", listResult);
             Assert.Contains("[0]: \"Apple\"", listResult);
             Assert.Contains("[1]: \"Banana\"", listResult);
             Assert.Contains("[2]: \"Cherry\"", listResult);
 
             var dict = new Dictionary<string, int> { ["Coins"] = 100, ["Gems"] = 5 };
-            string dictResult = UnityInspect.Object(dict);
+            string dictResult = Inspect.Object(dict);
             Assert.Contains("Dictionary`2 (2 entries):", dictResult);
             Assert.Contains("[Coins]: 100", dictResult);
             Assert.Contains("[Gems]: 5", dictResult);
@@ -742,7 +742,7 @@ namespace UnityLeanMcp.Mcp.Tests
                 }
             };
 
-            string result = UnityInspect.Component(comp);
+            string result = Inspect.Component(comp);
             Assert.Contains("Points (m_Points): [12 items]", result);
         }
 
@@ -758,7 +758,7 @@ namespace UnityLeanMcp.Mcp.Tests
 
             UnityEngine.Object.FindObjectsOfTypeFunc = type => type == typeof(Camera) ? new object[] { cam } : Array.Empty<object>();
 
-            string result = UnityInspect.MainCamera();
+            string result = Inspect.MainCamera();
             Assert.Contains("Main Camera: \"HiddenCamera\"", result);
 
             UnityEngine.Object.FindObjectsOfTypeFunc = null;
@@ -771,7 +771,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = null;
             Selection.objects = new UnityEngine.Object[] { null! };
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
             Assert.Equal("(No active selection in Editor)", result);
         }
 
@@ -781,7 +781,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var go = new GameObject("DeadEnemy");
             UnityEngine.Object.DestroyImmediate(go);
 
-            string result = UnityInspect.Hierarchy(go);
+            string result = Inspect.Hierarchy(go);
             Assert.Equal("(GameObject is destroyed)", result);
         }
 
@@ -789,14 +789,14 @@ namespace UnityLeanMcp.Mcp.Tests
         public void Hierarchy_NullAndDestroyedTransform_ReturnsCleanNotification()
         {
             Transform nullTr = null!;
-            string resNull = UnityInspect.Hierarchy(nullTr);
+            string resNull = Inspect.Hierarchy(nullTr);
             Assert.Equal("(Transform is null)", resNull);
 
             var go = new GameObject("DeadTarget");
             var tr = go.transform;
             UnityEngine.Object.DestroyImmediate(go);
 
-            string resDestroyed = UnityInspect.Hierarchy(tr);
+            string resDestroyed = Inspect.Hierarchy(tr);
             Assert.Equal("(Transform is destroyed)", resDestroyed);
         }
 
@@ -817,7 +817,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var scene = new Scene { name = "TestScene", isLoaded = true, RootObjects = new List<GameObject> { root } };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy(maxDepth: 1);
+            string result = Inspect.Hierarchy(maxDepth: 1);
             Assert.Contains("Root [active]", result);
             Assert.Contains("ChildMax [active]", result);
             Assert.DoesNotContain("Beyond_", result);
@@ -833,14 +833,14 @@ namespace UnityLeanMcp.Mcp.Tests
         public void Inspect_Object_DirectLeafTypes_FormatsDirectlyWithoutReflection()
         {
             var vec = new Vector3(1.5f, 2.5f, 3.5f);
-            string vecResult = UnityInspect.Object(vec);
+            string vecResult = Inspect.Object(vec);
             Assert.Equal("(1.50, 2.50, 3.50)", vecResult.Trim());
 
-            string typeResult = UnityInspect.Object(typeof(Camera));
+            string typeResult = Inspect.Object(typeof(Camera));
             Assert.Equal("Type: UnityEngine.Camera", typeResult.Trim());
 
             Action myAction = () => { };
-            string delResult = UnityInspect.Object(myAction);
+            string delResult = Inspect.Object(myAction);
             Assert.Contains("Delegate:", delResult);
         }
 
@@ -857,7 +857,7 @@ namespace UnityLeanMcp.Mcp.Tests
         public void Inspect_GenericObject_WithLeafFields_FormatsInlineWithoutContextBloat()
         {
             var data = new CustomDataWithLeaves();
-            string result = UnityInspect.Object(data, maxDepth: 2);
+            string result = Inspect.Object(data, maxDepth: 2);
 
             Assert.Contains("Position: (10.00, 20.00, 30.00)", result);
             Assert.Contains("Tint: RGBA(1.000, 0.000, 0.000, 1.000)", result);
@@ -892,7 +892,7 @@ namespace UnityLeanMcp.Mcp.Tests
                 }
             };
 
-            string result = UnityInspect.Component(comp);
+            string result = Inspect.Component(comp);
 
             // Health should be listed via SerializedProperty
             Assert.Contains("Health (m_Health): 100", result);
@@ -909,7 +909,7 @@ namespace UnityLeanMcp.Mcp.Tests
         {
             AssetDatabase.FindAssetsFunc = _ => throw new InvalidOperationException("Asset database is busy");
 
-            string result = UnityInspect.FindAsset("MissingAsset");
+            string result = Inspect.FindAsset("MissingAsset");
             Assert.Contains("Asset search failed: Asset database is busy", result);
         }
 
@@ -921,7 +921,7 @@ namespace UnityLeanMcp.Mcp.Tests
             cam.name = "ThrowingCamera";
             Camera.main = cam;
 
-            string result = UnityInspect.MainCamera();
+            string result = Inspect.MainCamera();
             Assert.Contains("Main Camera: \"ThrowingCamera\"", result);
         }
 
@@ -937,7 +937,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = null;
             Selection.objects = new UnityEngine.Object[] { go1, go2 };
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
             Assert.Equal("(No active selection in Editor)", result);
         }
 
@@ -952,7 +952,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.activeObject = validGo;
             Selection.objects = new UnityEngine.Object[] { validGo, deadGo };
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
             Assert.Contains("Active Selection (GameObject): \"LiveHero\"", result);
             Assert.DoesNotContain("Total Selected Objects", result);
         }
@@ -969,13 +969,13 @@ namespace UnityLeanMcp.Mcp.Tests
             };
             SceneManager.Scenes.Add(scene);
 
-            string resPath = UnityInspect.Hierarchy("Assets/Scenes/SampleScene.unity");
+            string resPath = Inspect.Hierarchy("Assets/Scenes/SampleScene.unity");
             Assert.Contains("RootPlayer", resPath);
 
-            string resExt = UnityInspect.Hierarchy("SampleScene.unity");
+            string resExt = Inspect.Hierarchy("SampleScene.unity");
             Assert.Contains("RootPlayer", resExt);
 
-            string resName = UnityInspect.Hierarchy("SampleScene");
+            string resName = Inspect.Hierarchy("SampleScene");
             Assert.Contains("RootPlayer", resName);
         }
 
@@ -993,7 +993,7 @@ namespace UnityLeanMcp.Mcp.Tests
             };
             SceneManager.Scenes.Add(scene);
 
-            string result = UnityInspect.Hierarchy();
+            string result = Inspect.Hierarchy();
             Assert.Equal("(No GameObjects found in loaded scenes)", result);
         }
 
@@ -1003,7 +1003,7 @@ namespace UnityLeanMcp.Mcp.Tests
             AssetDatabase.FindAssetsFunc = _ => new[] { "stale_guid", "valid_guid" };
             AssetDatabase.GUIDToAssetPathFunc = g => g == "valid_guid" ? "Assets/Valid.prefab" : "";
 
-            string result = UnityInspect.FindAsset("TestAsset");
+            string result = Inspect.FindAsset("TestAsset");
             Assert.Contains("Assets/Valid.prefab", result);
         }
 
@@ -1013,7 +1013,7 @@ namespace UnityLeanMcp.Mcp.Tests
             AssetDatabase.FindAssetsFunc = _ => new[] { "stale_1", "stale_2" };
             AssetDatabase.GUIDToAssetPathFunc = _ => "";
 
-            string result = UnityInspect.FindAssets("TestQuery");
+            string result = Inspect.FindAssets("TestQuery");
             Assert.Contains("(No assets found matching query: 'TestQuery')", result);
         }
 
@@ -1023,7 +1023,7 @@ namespace UnityLeanMcp.Mcp.Tests
             var tr = new Transform();
             tr.gameObject = null!;
 
-            string result = UnityInspect.Hierarchy(tr);
+            string result = Inspect.Hierarchy(tr);
             Assert.Equal("(Transform has no GameObject)", result);
         }
 
@@ -1035,7 +1035,7 @@ namespace UnityLeanMcp.Mcp.Tests
             nodeA.transform.AddChild(nodeB.transform);
             nodeB.transform.AddChild(nodeA.transform);
 
-            string result = UnityInspect.Hierarchy(nodeA);
+            string result = Inspect.Hierarchy(nodeA);
             Assert.Contains("NodeA", result);
             Assert.Contains("NodeB", result);
             Assert.Contains("... (truncated: cycle detected)", result);
@@ -1044,10 +1044,8 @@ namespace UnityLeanMcp.Mcp.Tests
         [Fact]
         public void Help_ReturnsAllDocumentedInspectMethods()
         {
-            string unityInspectHelp = UnityInspect.Help();
             string inspectHelp = Inspect.Help();
 
-            Assert.Equal(unityInspectHelp, inspectHelp);
             Assert.Contains("Hierarchy", inspectHelp);
             Assert.Contains("GameObject", inspectHelp);
             Assert.Contains("Component", inspectHelp);

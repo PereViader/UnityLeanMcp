@@ -6,7 +6,7 @@ Read when changing snippet compilation/execution, Test Runner integration, cover
 
 ### Evaluation
 
-Eval accepts C# statements, top-level `await`, and explicit `return`. Snippets provide their own `using` directives; anonymous-object returns support compact property inspection. Hoist directives while preserving source line/column positions and comments. Snippet compilation automatically injects `using UnityLeanMcp;` so built-in token-bounded introspection helpers (`UnityInspect` / `Inspect`) can be called directly without namespace qualification to summarize hierarchies, GameObjects, components, project assets, active selection, and camera settings.
+Eval accepts C# statements, top-level `await`, and explicit `return`. Snippets provide their own `using` directives; anonymous-object returns support compact property inspection. Hoist directives while preserving source line/column positions and comments. Snippet compilation automatically injects `using UnityLeanMcp;` so built-in token-bounded introspection helpers (`Inspect`) can be called directly without namespace qualification to summarize hierarchies, GameObjects, components, project assets, active selection, and camera settings.
 
 Roslyn initialization is transactional and retryable. Build metadata references afresh per evaluation from loaded assemblies, Editor compilation assemblies, and user precompiled DLLs. Runtime assembly resolution handles project/plugin assemblies not already loaded. Generated assemblies remain in the managed domain until reload; there is no per-evaluation unload promise.
 

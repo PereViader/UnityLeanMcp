@@ -40,7 +40,7 @@ namespace UnityLeanMcpTests
             var child = CreateTestGameObject("TestChild_Weapon");
             child.transform.SetParent(root.transform);
 
-            string hierarchy = UnityInspect.Hierarchy(root);
+            string hierarchy = Inspect.Hierarchy(root);
 
             StringAssert.Contains("TestRoot_Player [active] [Transform]", hierarchy);
             StringAssert.Contains("  TestChild_Weapon [active] [Transform]", hierarchy);
@@ -58,7 +58,7 @@ namespace UnityLeanMcpTests
                 current = next;
             }
 
-            string hierarchy = UnityInspect.Hierarchy(root, maxDepth: 3);
+            string hierarchy = Inspect.Hierarchy(root, maxDepth: 3);
 
             StringAssert.Contains("Deep_0", hierarchy);
             StringAssert.Contains("Deep_3", hierarchy);
@@ -76,7 +76,7 @@ namespace UnityLeanMcpTests
                 child.transform.SetParent(root.transform);
             }
 
-            string hierarchy = UnityInspect.Hierarchy(root, maxDepth: 32, maxItems: 4);
+            string hierarchy = Inspect.Hierarchy(root, maxDepth: 32, maxItems: 4);
 
             StringAssert.Contains("MultiRoot", hierarchy);
             StringAssert.Contains("... (truncated: maximum item count reached)", hierarchy);
@@ -89,7 +89,7 @@ namespace UnityLeanMcpTests
             go.tag = "Untagged";
             go.AddComponent<BoxCollider>();
 
-            string result = UnityInspect.GameObject(go);
+            string result = Inspect.GameObject(go);
 
             StringAssert.Contains("GameObject: \"HeroObject\"", result);
             StringAssert.Contains("Active: true", result);
@@ -100,7 +100,7 @@ namespace UnityLeanMcpTests
         [Test]
         public void Object_NullTarget_ReturnsNull()
         {
-            string result = UnityInspect.Object(null);
+            string result = Inspect.Object(null);
             Assert.AreEqual("null", result);
         }
 
@@ -110,7 +110,7 @@ namespace UnityLeanMcpTests
             var go = CreateTestGameObject("TestCompOwner");
             var collider = go.AddComponent<BoxCollider>();
 
-            string result = UnityInspect.Component(collider);
+            string result = Inspect.Component(collider);
 
             StringAssert.Contains("Component: BoxCollider", result);
             StringAssert.Contains("GameObject: \"TestCompOwner\"", result);
@@ -120,7 +120,7 @@ namespace UnityLeanMcpTests
         [Test]
         public void FindAssets_ByNameOrType_ReturnsNormalizedPaths()
         {
-            string result = UnityInspect.FindAssets(type: "Script", maxItems: 5);
+            string result = Inspect.FindAssets(type: "Script", maxItems: 5);
 
             Assert.IsNotNull(result);
             // Must contain normalized forward-slash paths
@@ -133,7 +133,7 @@ namespace UnityLeanMcpTests
             Selection.activeObject = null;
             Selection.objects = new UnityEngine.Object[0];
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
 
             Assert.AreEqual("(No active selection in Editor)", result);
         }
@@ -144,7 +144,7 @@ namespace UnityLeanMcpTests
             var go = CreateTestGameObject("SelectedObject");
             Selection.activeGameObject = go;
 
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
 
             StringAssert.Contains("Active Selection (GameObject): \"SelectedObject\"", result);
             StringAssert.Contains("Components", result);
@@ -157,7 +157,7 @@ namespace UnityLeanMcpTests
             var cam = camGo.AddComponent<Camera>();
             cam.tag = "MainCamera";
 
-            string result = UnityInspect.MainCamera();
+            string result = Inspect.MainCamera();
 
             Assert.IsNotNull(result);
             StringAssert.Contains("Main Camera", result);
@@ -166,12 +166,12 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
-        public void InspectAlias_ForwardsCorrectly()
+        public void Inspect_GameObject_ReturnsConsistentOutput()
         {
             var go = CreateTestGameObject("AliasGo");
 
             string r1 = Inspect.GameObject(go);
-            string r2 = UnityInspect.GameObject(go);
+            string r2 = Inspect.GameObject(go);
 
             Assert.AreEqual(r1, r2);
         }
@@ -183,7 +183,7 @@ namespace UnityLeanMcpTests
             var child = CreateTestGameObject("TransformChild");
             child.transform.SetParent(root.transform);
 
-            string result = UnityInspect.Hierarchy(root.transform);
+            string result = Inspect.Hierarchy(root.transform);
             StringAssert.Contains("TransformRoot [active]", result);
             StringAssert.Contains("  TransformChild [active]", result);
         }
@@ -192,7 +192,7 @@ namespace UnityLeanMcpTests
         public void Object_Collections_FormatsItems()
         {
             var list = new List<string> { "First", "Second" };
-            string result = UnityInspect.Object(list);
+            string result = Inspect.Object(list);
             StringAssert.Contains("List`1 (2 items):", result);
             StringAssert.Contains("[0]: \"First\"", result);
             StringAssert.Contains("[1]: \"Second\"", result);
@@ -202,13 +202,13 @@ namespace UnityLeanMcpTests
         public void Hierarchy_NullAndDestroyedTransform_ReturnsNotification()
         {
             Transform nullTr = null;
-            string nullResult = UnityInspect.Hierarchy(nullTr);
+            string nullResult = Inspect.Hierarchy(nullTr);
             Assert.AreEqual("(Transform is null)", nullResult);
 
             var go = CreateTestGameObject("ToDestroy");
             var tr = go.transform;
             UnityEngine.Object.DestroyImmediate(go);
-            string destroyedResult = UnityInspect.Hierarchy(tr);
+            string destroyedResult = Inspect.Hierarchy(tr);
             Assert.AreEqual("(Transform is destroyed)", destroyedResult);
         }
 
@@ -216,7 +216,7 @@ namespace UnityLeanMcpTests
         public void Object_LeafStruct_FormatsDirectly()
         {
             var vec = new Vector3(1.23f, 4.56f, 7.89f);
-            string result = UnityInspect.Object(vec);
+            string result = Inspect.Object(vec);
             StringAssert.Contains("1.23", result);
             StringAssert.Contains("4.56", result);
             StringAssert.Contains("7.89", result);
@@ -231,7 +231,7 @@ namespace UnityLeanMcpTests
             UnityEngine.Object.DestroyImmediate(go2);
 
             Selection.objects = new UnityEngine.Object[] { go1, go2 };
-            string result = UnityInspect.Selection();
+            string result = Inspect.Selection();
             Assert.AreEqual("(No active selection in Editor)", result);
         }
 
@@ -241,7 +241,7 @@ namespace UnityLeanMcpTests
             var activeScene = SceneManager.GetActiveScene();
             if (!string.IsNullOrEmpty(activeScene.path))
             {
-                string result = UnityInspect.Hierarchy(activeScene.path);
+                string result = Inspect.Hierarchy(activeScene.path);
                 Assert.IsFalse(result.Contains("is not currently loaded"));
             }
         }

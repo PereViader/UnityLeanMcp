@@ -20,7 +20,7 @@ namespace UnityLeanMcp
     /// Callable directly within unity_eval to inspect scene hierarchy, GameObject components,
     /// project assets, and active selection without context bloat or reflection boilerplate.
     /// </summary>
-    public static class UnityInspect
+    public static class Inspect
     {
         public const int DefaultMaxDepth = 32;
         public const int DefaultMaxItems = 100;
@@ -1745,30 +1745,5 @@ namespace UnityLeanMcp
         }
 
         #endregion
-    }
-
-    /// <summary>
-    /// Convenient alias for UnityInspect, allowing agents to invoke e.g. Inspect.Hierarchy() or Inspect.Selection().
-    /// </summary>
-    public static class Inspect
-    {
-        public static string Hierarchy() => UnityInspect.Hierarchy();
-        public static string Hierarchy(GameObject root, int maxDepth = UnityInspect.DefaultMaxDepth, int maxItems = UnityInspect.DefaultMaxItems) => UnityInspect.Hierarchy(root, maxDepth, maxItems);
-        public static string Hierarchy(Transform root, int maxDepth = UnityInspect.DefaultMaxDepth, int maxItems = UnityInspect.DefaultMaxItems) => UnityInspect.Hierarchy(root, maxDepth, maxItems);
-        public static string Hierarchy(string sceneName, int maxDepth = UnityInspect.DefaultMaxDepth, int maxItems = UnityInspect.DefaultMaxItems) => UnityInspect.Hierarchy(sceneName, maxDepth, maxItems);
-        public static string Hierarchy(int maxDepth, int maxItems = UnityInspect.DefaultMaxItems) => UnityInspect.Hierarchy(maxDepth, maxItems);
-
-        public static string Object(object target, int maxDepth = 2, int maxItems = 50) => UnityInspect.Object(target, maxDepth, maxItems);
-        public static string GameObject(GameObject gameObject, int maxItems = 50) => UnityInspect.GameObject(gameObject, maxItems);
-        public static string Component(Component component, int maxItems = 50) => UnityInspect.Component(component, maxItems);
-
-        public static string FindAssets(string filter = null, string type = null, string label = null, int maxItems = 50) => UnityInspect.FindAssets(filter, type, label, maxItems);
-        public static string FindPrefabs(string filter = null, int maxItems = 50) => UnityInspect.FindPrefabs(filter, maxItems);
-        public static string FindAsset(string nameOrPath) => UnityInspect.FindAsset(nameOrPath);
-
-        public static string Selection() => UnityInspect.Selection();
-        public static string Selection(int maxItems = 50) => UnityInspect.Selection(maxItems);
-        public static string MainCamera() => UnityInspect.MainCamera();
-        public static string Help() => UnityInspect.Help();
     }
 }
