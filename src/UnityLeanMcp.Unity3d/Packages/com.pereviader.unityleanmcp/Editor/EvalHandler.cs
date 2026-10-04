@@ -180,6 +180,7 @@ namespace UnityLeanMcp
                 }
             }
 
+            sb.AppendLine("using UnityLeanMcp;");
             sb.AppendLine();
             sb.AppendLine("public static class __UnityLeanMcpEvalRunner");
             sb.AppendLine("{");

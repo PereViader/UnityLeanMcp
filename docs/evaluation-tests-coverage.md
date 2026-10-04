@@ -6,7 +6,7 @@ Read when changing snippet compilation/execution, Test Runner integration, cover
 
 ### Evaluation
 
-Eval accepts C# statements, top-level `await`, and explicit `return`. Snippets provide their own `using` directives; anonymous-object returns support compact property inspection. Hoist directives while preserving source line/column positions and comments.
+Eval accepts C# statements, top-level `await`, and explicit `return`. Snippets provide their own `using` directives; anonymous-object returns support compact property inspection. Hoist directives while preserving source line/column positions and comments. Snippet compilation automatically injects `using UnityLeanMcp;` so built-in token-bounded introspection helpers (`UnityInspect` / `Inspect`) can be called directly without namespace qualification to summarize hierarchies, GameObjects, components, project assets, active selection, and camera settings.
 
 Roslyn initialization is transactional and retryable. Build metadata references afresh per evaluation from loaded assemblies, Editor compilation assemblies, and user precompiled DLLs. Runtime assembly resolution handles project/plugin assemblies not already loaded. Generated assemblies remain in the managed domain until reload; there is no per-evaluation unload promise.
 
@@ -52,6 +52,7 @@ Classify value returns in the snippet body through syntax, not a search for `ret
 ### Formatter boundaries
 
 Specific type matchers must precede base types (`Transform` before `Component`). Preserve custom registrations during default initialization. Use a shared recursion context and reference identity for the active path: a repeated reference in another branch is not a cycle.
+Introspection in EditMode must avoid calling mutating component property getters (`Renderer.material`, `Renderer.materials`, `MeshFilter.mesh`, `Collider.material`), which instantiate copies, leak assets, and dirty scene state; inspect safe shared accessors (`sharedMaterial`, `sharedMesh`) and skip `[Obsolete]` members instead.
 
 Depth, item, and output caps do not stop a blocking getter or `MoveNext`. UTF-16 length also does not bound UTF-8 bytes; truncation must respect both and avoid splitting surrogate pairs. Allocate a reusable `stackalloc` buffer outside loops, since repeated stack allocations remain until the method returns.
 
