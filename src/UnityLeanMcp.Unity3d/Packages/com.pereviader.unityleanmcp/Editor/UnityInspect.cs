@@ -1220,6 +1220,7 @@ namespace UnityLeanMcp
                 case "physicmaterial":
                 case "trailmaterial":
                 case "trailmaterials":
+                case "profile":
                     return true;
                 default:
                     return false;

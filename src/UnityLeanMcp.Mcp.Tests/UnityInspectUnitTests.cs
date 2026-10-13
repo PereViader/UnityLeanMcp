@@ -666,6 +666,7 @@ namespace UnityLeanMcp.Mcp.Tests
             public string SafeProperty => "SafeValue";
             public string material => throw new InvalidOperationException("Material getter should not be called in EditMode!");
             public string mesh => throw new InvalidOperationException("Mesh getter should not be called in EditMode!");
+            public string profile => throw new InvalidOperationException("Profile getter should not be called in EditMode!");
             [Obsolete] public string DeprecatedProp => throw new InvalidOperationException("Deprecated property should not be called!");
             [Obsolete] public int DeprecatedField = 999;
         }
@@ -684,6 +685,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("SafeProperty: \"SafeValue\"", result);
             Assert.DoesNotContain("Material getter", result);
             Assert.DoesNotContain("Mesh getter", result);
+            Assert.DoesNotContain("Profile getter", result);
             Assert.DoesNotContain("DeprecatedProp", result);
             Assert.DoesNotContain("DeprecatedField", result);
         }
