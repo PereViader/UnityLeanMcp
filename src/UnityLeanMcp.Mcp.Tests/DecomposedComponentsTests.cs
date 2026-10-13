@@ -785,6 +785,40 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public void RoslynCompilerHelper_GetCandidateDirectories_ReturnsLegacyAndUnity60003Paths()
+    {
+        string fakeDataPath = Path.Combine("fake", "Contents");
+        var candidates = UnityLeanMcp.RoslynCompilerHelper.GetCandidateDirectories(fakeDataPath);
+
+        Assert.NotNull(candidates);
+        Assert.NotEmpty(candidates);
+
+        // Legacy paths
+        Assert.Contains(Path.Combine(fakeDataPath, "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "DotNetSdkRoslyn"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "Tools", "Roslyn"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "MonoBleedingEdge", "lib", "mono", "4.5"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"), candidates);
+
+        // Unity 6000.3+ paths under Resources/Scripting
+        Assert.Contains(Path.Combine(fakeDataPath, "Resources", "Scripting", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "Resources", "Scripting", "DotNetSdkRoslyn"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "Resources", "Scripting", "Tools", "Roslyn"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "Resources", "Scripting", "MonoBleedingEdge", "lib", "mono", "4.5"), candidates);
+        Assert.Contains(Path.Combine(fakeDataPath, "Resources", "Scripting", "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"), candidates);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void RoslynCompilerHelper_GetCandidateDirectories_WhenNullOrEmpty_ReturnsEmpty(string? dataPath)
+    {
+        var candidates = UnityLeanMcp.RoslynCompilerHelper.GetCandidateDirectories(dataPath!);
+        Assert.NotNull(candidates);
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
     public void UnityClient_WithCustomOptions_SetsPropertiesProperly()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_opts_" + Guid.NewGuid().ToString("N"));

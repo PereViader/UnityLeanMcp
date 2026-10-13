@@ -42,6 +42,7 @@ Warnings are capped at 10; errors take priority within the overall response budg
 - Build reflection state privately and publish it only after successful initialization. Leave failed initialization retryable; do not expose a partial compiler graph.
 - Assemblies absent from `AppDomain.GetAssemblies()` can still be compiled project/plugin dependencies, including `autoReferenced: false` assemblies. Query the compilation pipeline as well. Compile-time metadata references alone do not establish runtime assembly resolution; emitted code can still fail at JIT time without resolving the DLL.
 - `Assembly.Load(byte[])` does not provide per-evaluation unloading. Generated assemblies accumulate until managed domain reload.
+- Roslyn compiler assemblies (`Microsoft.CodeAnalysis.CSharp.dll` and dependencies) are relocated under `Resources/Scripting/` in Unity 6000.3+ (e.g. `Resources/Scripting/DotNetSdkRoslyn` and `Resources/Scripting/MonoBleedingEdge/...`), while earlier versions place them directly under the application contents root (`DotNetSdkRoslyn`, `MonoBleedingEdge/...`). Candidate probing must check both layouts across platforms.
 
 ### Preserve snippet source positions
 

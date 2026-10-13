@@ -187,6 +187,28 @@ namespace UnityLeanMcp
             }
         }
 
+        internal static string[] GetCandidateDirectories(string dataPath)
+        {
+            if (string.IsNullOrEmpty(dataPath))
+            {
+                return Array.Empty<string>();
+            }
+
+            return new[]
+            {
+                Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"),
+                Path.Combine(dataPath, "DotNetSdkRoslyn"),
+                Path.Combine(dataPath, "Tools", "Roslyn"),
+                Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "4.5"),
+                Path.Combine(dataPath, "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"),
+                Path.Combine(dataPath, "Resources", "Scripting", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"),
+                Path.Combine(dataPath, "Resources", "Scripting", "DotNetSdkRoslyn"),
+                Path.Combine(dataPath, "Resources", "Scripting", "Tools", "Roslyn"),
+                Path.Combine(dataPath, "Resources", "Scripting", "MonoBleedingEdge", "lib", "mono", "4.5"),
+                Path.Combine(dataPath, "Resources", "Scripting", "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn")
+            };
+        }
+
         private static InitializationState TryInitialize()
         {
             var state = new InitializationState();
@@ -200,14 +222,7 @@ namespace UnityLeanMcp
                     return state;
                 }
 
-                string[] candidateDirs = new[]
-                {
-                    Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn"),
-                    Path.Combine(dataPath, "DotNetSdkRoslyn"),
-                    Path.Combine(dataPath, "Tools", "Roslyn"),
-                    Path.Combine(dataPath, "MonoBleedingEdge", "lib", "mono", "4.5"),
-                    Path.Combine(dataPath, "Frameworks", "MonoBleedingEdge", "lib", "mono", "msbuild", "Current", "bin", "Roslyn")
-                };
+                string[] candidateDirs = GetCandidateDirectories(dataPath);
 
                 string roslynDir = null;
                 foreach (var dir in candidateDirs)
