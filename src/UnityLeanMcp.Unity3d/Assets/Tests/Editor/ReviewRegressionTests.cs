@@ -46,6 +46,47 @@ namespace UnityLeanMcpTests
             }
         }
 
+        [Test]
+        public void UnawaitedAwaitableReturnsDiagnosticGuidance()
+        {
+            Assert.That(OperationExecutionEngine.IsUnawaitedAwaitable(null), Is.False);
+            Assert.That(OperationExecutionEngine.IsUnawaitedAwaitable("string"), Is.False);
+            Assert.That(OperationExecutionEngine.IsUnawaitedAwaitable(123), Is.False);
+
+            var asmName = new AssemblyName("MockAwaitableAssembly_" + Guid.NewGuid().ToString("N"));
+            var asmBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(asmName, System.Reflection.Emit.AssemblyBuilderAccess.Run);
+            var moduleBuilder = asmBuilder.DefineDynamicModule("MockModule");
+
+            var nonGenericBuilder = moduleBuilder.DefineType("UnityEngine.Awaitable", TypeAttributes.Public | TypeAttributes.Class);
+            var mockNonGenericType = nonGenericBuilder.CreateType();
+            var mockNonGeneric = Activator.CreateInstance(mockNonGenericType);
+            Assert.That(OperationExecutionEngine.IsUnawaitedAwaitable(mockNonGeneric), Is.True);
+
+            var genericBuilder = moduleBuilder.DefineType("UnityEngine.Awaitable`1", TypeAttributes.Public | TypeAttributes.Class);
+            genericBuilder.DefineGenericParameters("T");
+            var mockGenericType = genericBuilder.CreateType().MakeGenericType(typeof(int));
+            var mockGeneric = Activator.CreateInstance(mockGenericType);
+            Assert.That(OperationExecutionEngine.IsUnawaitedAwaitable(mockGeneric), Is.True);
+
+            using (var scope = new IsolatedOperation(OperationKinds.Eval))
+            {
+                string resultPath = Path.Combine(scope.Root, "eval_result.json");
+                OperationExecutionEngine.Execute(
+                    operationId: scope.Id,
+                    operationKind: OperationKinds.Eval,
+                    resultFilePath: resultPath,
+                    isVoid: false,
+                    invoker: _ => mockNonGeneric,
+                    canCancel: false
+                );
+
+                Assert.That(File.Exists(resultPath), Is.True);
+                var result = JsonUtility.FromJson<UnityOperationResult>(File.ReadAllText(resultPath));
+                Assert.That(result.success, Is.True);
+                Assert.That(result.payload, Is.EqualTo(OperationExecutionEngine.UnawaitedAwaitableMessage));
+            }
+        }
+
         [TestCase("{\"keep\":\"untouched\"}")]
         [TestCase("{\"keep\":\"untouched\",\"mcpServers\":{\"unity-lean-mcp\":{\"command\":\"old } quoted brace\"},\"other\":{\"command\":\"preserved\"}}}")]
         public void InstallerPreservesOtherSettingsAndReplacesOnlyItsServer(string existing)

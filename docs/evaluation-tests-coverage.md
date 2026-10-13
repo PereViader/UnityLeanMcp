@@ -12,7 +12,7 @@ Roslyn initialization is transactional and retryable. Build metadata references 
 
 Result formatters use a priority registry with thread-safe registration and a published array snapshot. More specific formatters precede base-type fallbacks. Composite formatters share one recursion context, with cycle, depth, item, character, and UTF-8 limits. These bound traversal and output, not the execution time of arbitrary getters or enumerators.
 
-`OperationExecutionEngine` unwraps `Task`, `Task<T>`, `ValueTask`, and `ValueTask<T>` without blocking the Editor thread. Pending task completion returns through the main-thread dispatcher before Unity-facing formatting and publication. Snippets receive `cancellationToken`; cancellation is cooperative and cannot forcibly stop arbitrary synchronous user code.
+`OperationExecutionEngine` unwraps `Task`, `Task<T>`, `ValueTask`, and `ValueTask<T>` without blocking the Editor thread. Pending task completion returns through the main-thread dispatcher before Unity-facing formatting and publication. Returning an un-awaited `UnityEngine.Awaitable` or `Awaitable<T>` emits diagnostic guidance (`(Evaluation returned an un-awaited Awaitable. Use 'return await <expr>;' to await the result.)`) rather than reflectively unwrapping it across the package's Unity 2021.3 baseline; if the minimum supported Unity version is updated to 2023.1+, full `Awaitable` unwrapping compatibility should be added. Snippets receive `cancellationToken`; cancellation is cooperative and cannot forcibly stop arbitrary synchronous user code.
 
 ### Tests and coverage
 

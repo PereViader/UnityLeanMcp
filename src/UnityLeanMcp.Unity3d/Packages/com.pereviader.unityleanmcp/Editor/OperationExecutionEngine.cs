@@ -237,17 +237,34 @@ namespace UnityLeanMcp
             string payload = null;
             if (!isVoid)
             {
-                try
+                if (IsUnawaitedAwaitable(rawResult))
                 {
-                    payload = CommandHelper.FormatResult(rawResult, false, false);
+                    payload = UnawaitedAwaitableMessage;
                 }
-                catch (Exception ex)
+                else
                 {
-                    Debug.LogWarning($"UnityLeanMcp: Failed to format result: {ex.Message}");
-                    payload = rawResult?.ToString();
+                    try
+                    {
+                        payload = CommandHelper.FormatResult(rawResult, false, false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"UnityLeanMcp: Failed to format result: {ex.Message}");
+                        payload = rawResult?.ToString();
+                    }
                 }
             }
             FinishOperation(operationId, operationKind, resultFilePath, true, "", duration, payload, finalLogs);
+        }
+
+        internal const string UnawaitedAwaitableMessage =
+            "(Evaluation returned an un-awaited Awaitable. Use 'return await <expr>;' to await the result.)";
+
+        internal static bool IsUnawaitedAwaitable(object rawResult)
+        {
+            if (rawResult == null) return false;
+            string fullName = rawResult.GetType().FullName;
+            return fullName != null && (fullName == "UnityEngine.Awaitable" || fullName.StartsWith("UnityEngine.Awaitable`", StringComparison.Ordinal));
         }
 
         private static void UnwrapCompletedTask(
