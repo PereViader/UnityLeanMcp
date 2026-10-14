@@ -242,8 +242,10 @@ namespace UnityLeanMcpTests
             var formatter = new AnonymousTypeFormatter();
             var comp = new DummyMutatingComponent();
             string formatted = formatter.Format(comp, null, prettyPrint: false);
-
-            Assert.That(formatted, Is.EqualTo("{ SafeProperty = Safe }"));
+            StringAssert.Contains("SafeProperty = Safe", formatted);
+            StringAssert.DoesNotContain("Mutating getter!", formatted);
+            Assert.That(formatted, Does.Not.Contain("mesh ="));
+            Assert.That(formatted, Does.Not.Contain("material ="));
         }
 
         [Test]

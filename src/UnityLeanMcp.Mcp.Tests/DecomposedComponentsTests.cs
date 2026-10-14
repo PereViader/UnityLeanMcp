@@ -23,13 +23,33 @@ public class DecomposedComponentsTests
         Assert.Equal("Running Unreachable", await client.GetStatusAsync());
     }
 
-    private sealed class StatusSnapshotTransport(bool connected, bool losePoll = false) : IUnitySocketTransport
+    private sealed class StatusSnapshotTransport(bool connected, bool losePoll = false, string pollResponse = "READY") : IUnitySocketTransport
     {
         public Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(connected ? (command == "PING" ? "PONG" : losePoll ? null : "READY") : null);
+            Task.FromResult(connected ? (command == "PING" ? "PONG" : losePoll ? null : pollResponse) : null);
         public Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds = 2,
             CancellationToken cancellationToken = default) => Task.FromResult(connected);
+    }
+
+    [Fact]
+    public async Task UnityClient_GetStatusAsync_WhenPollReturnsCompilationError_ReturnsCompilationError()
+    {
+        var resolver = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var manager = new StubProcessManager(resolver, isRunning: true);
+        var client = new UnityClient(manager, resolver, NullLogger<UnityClient>.Instance,
+            socketTransport: new StatusSnapshotTransport(true, pollResponse: "COMPILATION_ERROR"));
+        Assert.Equal("Compilation Error", await client.GetStatusAsync());
+    }
+
+    [Fact]
+    public async Task UnityClient_GetStatusAsync_WhenPollReturnsPlayMode_ReturnsPlayMode()
+    {
+        var resolver = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var manager = new StubProcessManager(resolver, isRunning: true);
+        var client = new UnityClient(manager, resolver, NullLogger<UnityClient>.Instance,
+            socketTransport: new StatusSnapshotTransport(true, pollResponse: "PLAYMODE"));
+        Assert.Equal("PlayMode", await client.GetStatusAsync());
     }
 
     [Fact]

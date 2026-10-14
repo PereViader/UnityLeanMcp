@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -1450,7 +1451,7 @@ namespace UnityLeanMcp
             bool isPrefab = false;
             try
             {
-                isPrefab = PrefabUtility.IsPartOfAnyPrefabInstance(instance);
+                isPrefab = PrefabUtility.IsPartOfPrefabInstance(instance);
             }
             catch { }
 

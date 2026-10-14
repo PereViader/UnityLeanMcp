@@ -30,6 +30,33 @@ namespace UnityLeanMcp
         private static readonly ConcurrentDictionary<TcpClient, byte> s_ActiveClients = new ConcurrentDictionary<TcpClient, byte>();
 
         public static bool IsRunning => _isRunning;
+        private static volatile bool s_IsPlayModeActive;
+        public static bool IsPlayModeActive => s_IsPlayModeActive;
+        private static volatile bool s_IsPlayModeChanging;
+        public static bool IsPlayModeChanging => s_IsPlayModeChanging;
+
+        private static void OnPlayModeStateChanged(PlayModeStateChange change)
+        {
+            switch (change)
+            {
+                case PlayModeStateChange.ExitingEditMode:
+                    s_IsPlayModeActive = false;
+                    s_IsPlayModeChanging = true;
+                    break;
+                case PlayModeStateChange.EnteredPlayMode:
+                    s_IsPlayModeActive = true;
+                    s_IsPlayModeChanging = false;
+                    break;
+                case PlayModeStateChange.ExitingPlayMode:
+                    s_IsPlayModeActive = false;
+                    s_IsPlayModeChanging = true;
+                    break;
+                case PlayModeStateChange.EnteredEditMode:
+                    s_IsPlayModeActive = false;
+                    s_IsPlayModeChanging = false;
+                    break;
+            }
+        }
 
         private static readonly ConcurrentDictionary<string, ICommandHandler> s_Handlers =
             new ConcurrentDictionary<string, ICommandHandler>(StringComparer.OrdinalIgnoreCase);
@@ -143,6 +170,10 @@ namespace UnityLeanMcp
                 // Register lifecycle callbacks before opening the socket. No
                 // external connection can be accepted until every dependency
                 // and recovery hook is ready.
+                s_IsPlayModeActive = EditorApplication.isPlaying && EditorApplication.isPlayingOrWillChangePlaymode;
+                s_IsPlayModeChanging = EditorApplication.isPlaying != EditorApplication.isPlayingOrWillChangePlaymode;
+                EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+                EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
                 AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
                 AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
                 EditorApplication.quitting -= OnEditorQuitting;
@@ -197,6 +228,9 @@ namespace UnityLeanMcp
         private static void OnBeforeAssemblyReload()
         {
             _isReloading = true;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            s_IsPlayModeActive = false;
+            s_IsPlayModeChanging = false;
             var operation = UnityLeanMcpOperationStore.Read();
             if (operation != null)
             {
@@ -209,6 +243,9 @@ namespace UnityLeanMcp
 
         private static void OnEditorQuitting()
         {
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            s_IsPlayModeActive = false;
+            s_IsPlayModeChanging = false;
             var operation = UnityLeanMcpOperationStore.Read();
             OperationLifecycleRegistry.NotifyQuitting(operation);
             // Lifecycle handlers release ownership only after publishing a durable result.
@@ -423,6 +460,8 @@ namespace UnityLeanMcp
                     writer.WriteLine("BUSY playmode");
                     writer.Flush();
                     EditorApplication.isPlaying = false;
+                    s_IsPlayModeActive = false;
+                    s_IsPlayModeChanging = true;
                     return;
                 }
             }

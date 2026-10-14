@@ -60,7 +60,7 @@ public class UnityClient : IUnityClient
     public int PollIntervalMs { get; init; } = 500;
 
     /// <summary>
-    /// Returns current Editor connection state: Ready, Not Running, Compiling, Running Unreachable, Busy.
+    /// Returns current Editor connection state: Ready, Not Running, Compiling, Running Unreachable, Busy, PlayMode, Compilation Error.
     /// </summary>
     public virtual async Task<string> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -73,10 +73,18 @@ public class UnityClient : IUnityClient
             string? pingResp = await SendCommandAsync("PING", 2, cancellationToken);
             if (pingResp == "PONG")
             {
-                string? pollResp = await SendCommandAsync("POLL_REFRESH", 2, cancellationToken);
+                string? pollResp = await SendCommandAsync("POLL_REFRESH", 10, cancellationToken);
                 if (pollResp == "COMPILING" || pollResp == "UPDATING")
                 {
                     return "Compiling";
+                }
+                if (string.Equals(pollResp, "PLAYMODE", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "PlayMode";
+                }
+                if (string.Equals(pollResp, "COMPILATION_ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Compilation Error";
                 }
                 if (pollResp != null && pollResp.StartsWith("BUSY ", StringComparison.OrdinalIgnoreCase))
                 {
@@ -151,9 +159,17 @@ public class UnityClient : IUnityClient
                 Message = $"Waiting for active '{kind ?? "operation"}' to complete..."
             });
 
-            string? check = await SendCommandAsync("POLL_REFRESH", 2, cancellationToken);
+            string? check = await SendCommandAsync("POLL_REFRESH", 10, cancellationToken);
             if (check != null)
             {
+                if (string.Equals(kind, "playmode", StringComparison.OrdinalIgnoreCase) &&
+                    (string.Equals(check, "PLAYMODE", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(check, "BUSY playmode", StringComparison.OrdinalIgnoreCase)))
+                {
+                    await Task.Delay(PollIntervalMs, cancellationToken);
+                    continue;
+                }
+
                 var busy = ParseBusyResponse(check);
                 if (!busy.isBusy)
                 {
@@ -373,33 +389,39 @@ public class UnityClient : IUnityClient
             Message = "Checking compilation and pending AssetDatabase changes before evaluation..."
         });
 
-        IProgress<ProgressNotificationValue>? refreshProgress = progress == null ? null : new ProgressRelay(p =>
-        {
-            int scaled = (int)Math.Round((p.Progress / (double)(p.Total ?? 100)) * 40);
-            progress.Report(new ProgressNotificationValue
-            {
-                Progress = scaled,
-                Total = 100,
-                Message = p.Message ?? "Checking compilation and pending AssetDatabase changes before evaluation..."
-            });
-        });
+        string? state = await SendCommandAsync("POLL_REFRESH", 10, cancellationToken);
+        bool isPlayMode = string.Equals(state, "PLAYMODE", StringComparison.OrdinalIgnoreCase);
 
-        var refreshResult = await RefreshBeforeUsingCompiledAssembliesAsync(refreshProgress, cancellationToken);
-        if (!refreshResult.Success)
+        if (!isPlayMode)
         {
-            return new UnityEvalResult
+            IProgress<ProgressNotificationValue>? refreshProgress = progress == null ? null : new ProgressRelay(p =>
             {
-                Success = false,
-                Interrupted = refreshResult.Interrupted,
-                Message = refreshResult.Message
-            };
+                int scaled = (int)Math.Round((p.Progress / (double)(p.Total ?? 100)) * 40);
+                progress.Report(new ProgressNotificationValue
+                {
+                    Progress = scaled,
+                    Total = 100,
+                    Message = p.Message ?? "Checking compilation and pending AssetDatabase changes before evaluation..."
+                });
+            });
+
+            var refreshResult = await RefreshBeforeUsingCompiledAssembliesAsync(refreshProgress, cancellationToken);
+            if (!refreshResult.Success)
+            {
+                return new UnityEvalResult
+                {
+                    Success = false,
+                    Interrupted = refreshResult.Interrupted,
+                    Message = refreshResult.Message
+                };
+            }
         }
 
         progress?.Report(new ProgressNotificationValue
         {
             Progress = 50,
             Total = 100,
-            Message = "Evaluating C# snippet..."
+            Message = isPlayMode ? "Evaluating C# snippet in PlayMode..." : "Evaluating C# snippet..."
         });
 
         string escapedCode = ProtocolCodec.EscapeLine(code);

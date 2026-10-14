@@ -396,14 +396,17 @@ namespace UnityEditor
         public UnityEngine.Object? objectReference { get; set; }
     }
 
-    public class AddedComponent
+    namespace SceneManagement
     {
-        public UnityEngine.Component? instanceComponent { get; set; }
-    }
+        public class AddedComponent
+        {
+            public UnityEngine.Component? instanceComponent { get; set; }
+        }
 
-    public class RemovedComponent
-    {
-        public UnityEngine.Component? assetComponent { get; set; }
+        public class RemovedComponent
+        {
+            public UnityEngine.Component? assetComponent { get; set; }
+        }
     }
 
     public static class PrefabUtility
@@ -411,8 +414,11 @@ namespace UnityEditor
         public static Func<UnityEngine.Object, bool>? IsPartOfAnyPrefabInstanceFunc;
         public static Func<UnityEngine.Object, UnityEngine.Object?>? GetCorrespondingObjectFromSourceFunc;
         public static Func<UnityEngine.Object, PropertyModification[]>? GetPropertyModificationsFunc;
-        public static Func<UnityEngine.GameObject, List<AddedComponent>>? GetAddedComponentsFunc;
-        public static Func<UnityEngine.GameObject, List<RemovedComponent>>? GetRemovedComponentsFunc;
+        public static Func<UnityEngine.GameObject, List<SceneManagement.AddedComponent>>? GetAddedComponentsFunc;
+        public static Func<UnityEngine.GameObject, List<SceneManagement.RemovedComponent>>? GetRemovedComponentsFunc;
+
+        public static bool IsPartOfPrefabInstance(UnityEngine.Object target) =>
+            IsPartOfAnyPrefabInstanceFunc?.Invoke(target) ?? false;
 
         public static bool IsPartOfAnyPrefabInstance(UnityEngine.Object target) =>
             IsPartOfAnyPrefabInstanceFunc?.Invoke(target) ?? false;
@@ -423,11 +429,11 @@ namespace UnityEditor
         public static PropertyModification[] GetPropertyModifications(UnityEngine.Object target) =>
             GetPropertyModificationsFunc?.Invoke(target) ?? Array.Empty<PropertyModification>();
 
-        public static List<AddedComponent> GetAddedComponents(UnityEngine.GameObject instance) =>
-            GetAddedComponentsFunc?.Invoke(instance) ?? new List<AddedComponent>();
+        public static List<SceneManagement.AddedComponent> GetAddedComponents(UnityEngine.GameObject instance) =>
+            GetAddedComponentsFunc?.Invoke(instance) ?? new List<SceneManagement.AddedComponent>();
 
-        public static List<RemovedComponent> GetRemovedComponents(UnityEngine.GameObject instance) =>
-            GetRemovedComponentsFunc?.Invoke(instance) ?? new List<RemovedComponent>();
+        public static List<SceneManagement.RemovedComponent> GetRemovedComponents(UnityEngine.GameObject instance) =>
+            GetRemovedComponentsFunc?.Invoke(instance) ?? new List<SceneManagement.RemovedComponent>();
     }
 
     namespace Compilation

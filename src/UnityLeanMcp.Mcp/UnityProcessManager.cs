@@ -1074,7 +1074,7 @@ public class UnityProcessManager : IUnityProcessManager
                 {
                     // Check if server is settled
                     string? refreshState = await ProbeSocketCommandAsync("POLL_REFRESH", 2, cancellationToken);
-                    if (refreshState == "READY" || refreshState == "COMPILATION_ERROR")
+                    if (refreshState == "READY" || refreshState == "PLAYMODE" || refreshState == "COMPILATION_ERROR")
                     {
                         _logger.LogInformation("Unity socket server is ready (state: {State}).", refreshState);
                         return;

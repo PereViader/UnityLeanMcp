@@ -8,7 +8,7 @@ UnityLeanMcp connects a .NET MCP host to an Editor-only Unity package over proje
 - Each mutation has a client-generated ID. Retry the same ID after an ambiguous acknowledgement. Correlated terminal files establish completion; shared history and generic readiness replies do not.
 - Persist the exact terminal payload before publication, and retain ownership while publication retries. `SessionState` survives managed reload, not process exit; do not promise crash-proof or indefinite exactly-once delivery.
 - Unity-dependent work runs on the main thread. Worker polling, early rejection, and teardown must remain usable while that thread is busy or the domain is unloading.
-- Eval and tests cross their own correlated refresh barrier before consuming compiled code. Compiler diagnostics survive no-op refreshes; runtime/import errors are scoped to the current refresh window.
+- Eval and tests cross their own correlated refresh barrier before consuming compiled code, except that eval bypasses refresh while PlayMode is active to preserve runtime state. Compiler diagnostics survive no-op refreshes; runtime/import errors are scoped to the current refresh window.
 - Validate the intended project on every socket command. A port, PID, or lockfile alone is not permission to mutate or terminate a particular Editor.
 - Preserve developer-owned Editor state: ordinary tests do not change profiling settings, refresh does not clear the Console, and startup compiler errors do not justify killing the Editor.
 

@@ -84,6 +84,16 @@ namespace UnityLeanMcp
                 return "IDLE";
             }
 
+            if (UnityLeanMcpServer.IsPlayModeActive)
+            {
+                return "PLAYMODE";
+            }
+
+            if (UnityLeanMcpServer.IsPlayModeChanging)
+            {
+                return "BUSY playmode";
+            }
+
             return "READY";
         }
     }

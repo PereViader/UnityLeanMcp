@@ -39,7 +39,7 @@ Runtime IPC, markers, diagnostics, and logs belong under the Unity project's `Te
 - Writers stage content in the destination directory and publish with move-overwrite. Editor code uses the native platform helper for Unity's API surface. Unique operation IDs avoid cross-operation collisions, but retries may encounter an existing destination.
 - Shared-history publication makes one best-effort attempt after the correlated result is published. History contention must not block operation completion.
 - Polling checks the correlated result before active state and rechecks before declaring unexpected idle. Running markers and ownership are progress evidence, not terminal outcomes.
-- Bare `POLL_REFRESH` probes availability; `POLL_REFRESH <operationId>` polls a specific operation. Unknown correlated IDs can return `IDLE`. Neither generic `READY` nor a foreign compilation outcome substitutes for a requested refresh's result.
+- Bare `POLL_REFRESH` probes availability, returning `"PLAYMODE"` when the Editor is in PlayMode, `"BUSY playmode"` while transitioning in or out of PlayMode, and otherwise `"READY"` when idle; `POLL_REFRESH <operationId>` polls a specific operation. Unknown correlated IDs can return `IDLE`. Neither generic `READY` nor a foreign compilation outcome substitutes for a requested refresh's result.
 - Use successful project-bound socket replies as liveness evidence; inspect processes when communication fails. Internal status requires an explicit ready response, not merely an earlier successful `PING`.
 
 ### Cancellation
@@ -63,7 +63,7 @@ During reload or shutdown, signal waiting dispatchers, close the listener under 
 
 ### Compilation and diagnostics
 
-Eval and test execution each cross a correlated normal `AssetDatabase.Refresh` barrier before consuming compiled user code. A readiness probe cannot establish that Unity has noticed external source edits. Normal refresh stays incremental; `unity_refresh(clean: true)` requests `RequestScriptCompilationOptions.CleanBuildCache`.
+Eval and test execution each cross a correlated normal `AssetDatabase.Refresh` barrier before consuming compiled user code, except when eval runs while PlayMode is active: eval then bypasses the refresh barrier so that live game and simulation state are not interrupted. In EditMode, a readiness probe cannot establish that Unity has noticed external source edits. Normal refresh stays incremental; `unity_refresh(clean: true)` requests `RequestScriptCompilationOptions.CleanBuildCache`.
 
 Compilation settlement tracks pending requests, compilation, and asset updates across multiple idle Editor ticks. These ticks are a settlement heuristic, not a deadline or proof of a universal Unity scheduling bound. Trigger exceptions publish failure and must not later become observer success. Socket acknowledgement failure cannot prevent admitted compilation work from starting; requested ownership alone is not evidence that compilation executed. A reload that restores a compilation request which never reached execution publishes an interrupted result.
 
@@ -85,7 +85,7 @@ The CLR runs a static constructor on the thread that first touches its type; `[I
 
 Registry access can happen before bootstrap. Preserve early custom registrations when adding built-ins. A load-time test must not join a worker that may itself need Unity's main thread for type loading.
 
-Most Unity object APIs require the main thread, but a blanket prohibition on all Unity utility APIs is inaccurate: Unity explicitly permits background-thread `JsonUtility` use with appropriate object synchronization. This project's worker codec and file logger remain Unity-independent to avoid engine lifecycle dependencies during reload and shutdown. [Unity JSON serialization documentation](https://docs.unity.com/en-us/engine/6000.0/manual/scripting/compilation-and-code-reload/script-serialization/json-serialization).
+Most Unity object APIs require the main thread, but a blanket prohibition on all Unity utility APIs is inaccurate: Unity explicitly permits background-thread `JsonUtility` use with appropriate object synchronization. Querying `EditorApplication.isPlaying` or `EditorApplication.isCompiling` directly from worker threads throws an exception; cache state updates (such as `playModeStateChanged`) into thread-safe fields for worker inspection (e.g. availability probes). This project's worker codec and file logger remain Unity-independent to avoid engine lifecycle dependencies during reload and shutdown. [Unity JSON serialization documentation](https://docs.unity.com/en-us/engine/6000.0/manual/scripting/compilation-and-code-reload/script-serialization/json-serialization).
 
 ### Refresh observations are asynchronous
 

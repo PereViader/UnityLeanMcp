@@ -237,6 +237,7 @@ public sealed class UnityClientCancellationTests
         public Task<string?> SendCommandAsync(int port, string projectRoot, string command,
             int timeoutSeconds = 10, CancellationToken cancellationToken = default)
         {
+            if (command.StartsWith("POLL_REFRESH", StringComparison.Ordinal)) return Task.FromResult<string?>("READY");
             if (command.StartsWith("REFRESH ")) return Task.FromResult<string?>("REFRESHING");
             Assert.True(command.StartsWith("EVAL ") || command.StartsWith("RUN_TESTS "));
             OperationId = command.Split(' ')[1];

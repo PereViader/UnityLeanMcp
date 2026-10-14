@@ -26,6 +26,34 @@ public sealed class AutoRefreshEfficiencyTests
     }
 
     [Fact]
+    public async Task EvalAsync_WhenInPlayMode_SkipsRefreshAndEvaluatesDirectly()
+    {
+        using var context = TestContext.Create();
+        context.Transport.IsPlayMode = true;
+
+        var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain(context.Transport.Commands, c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
+        Assert.Contains(context.Transport.Commands, c => c.StartsWith("EVAL ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EvalAsync_WhenBusyPlayMode_RefreshesBeforeEvaluating()
+    {
+        using var context = TestContext.Create();
+        context.Transport.AvailabilityResponse = "BUSY playmode";
+
+        var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
+
+        Assert.True(result.Success);
+        int refreshIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
+        int evalIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("EVAL ", StringComparison.Ordinal));
+        Assert.True(refreshIndex >= 0);
+        Assert.True(evalIndex > refreshIndex);
+    }
+
+    [Fact]
     public async Task RunTestsAsync_AlwaysRefreshesBeforeTests()
     {
         // Unity can return READY before its external-file watcher has reported
@@ -121,6 +149,9 @@ public sealed class AutoRefreshEfficiencyTests
             _resolver = resolver;
         }
 
+        public bool IsPlayMode { get; set; }
+        public string? AvailabilityResponse { get; set; }
+
         public Task<string?> SendCommandAsync(
             int port,
             string projectRoot, string command,
@@ -129,8 +160,14 @@ public sealed class AutoRefreshEfficiencyTests
         {
             Commands.Add(command);
 
-            if (command.StartsWith("POLL_REFRESH ", StringComparison.Ordinal))
+            if (command.StartsWith("POLL_REFRESH", StringComparison.Ordinal))
             {
+                if (command == "POLL_REFRESH")
+                {
+                    if (AvailabilityResponse != null) return Task.FromResult<string?>(AvailabilityResponse);
+                    return Task.FromResult<string?>(IsPlayMode ? "PLAYMODE" : "READY");
+                }
+
                 if (PendingCompilationPolls > 0)
                 {
                     PendingCompilationPolls--;
