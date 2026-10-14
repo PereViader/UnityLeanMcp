@@ -237,6 +237,27 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
+        public void AnonymousTypeFormatter_SkipsMutatingProperties_WhenTargetIsComponent()
+        {
+            var formatter = new AnonymousTypeFormatter();
+            var comp = new DummyMutatingComponent();
+            string formatted = formatter.Format(comp, null, prettyPrint: false);
+
+            Assert.That(formatted, Is.EqualTo("{ SafeProperty = Safe }"));
+        }
+
+        [Test]
+        public void AnonymousTypeFormatter_PreservesMatchingPropertyNames_WhenTargetIsNotComponent()
+        {
+            var value = new { material = "Plastic", profile = "High", SafeProperty = "Safe" };
+            string formatted = UnityResultFormatter.FormatResult(value, prettyPrint: false);
+
+            StringAssert.Contains("material = Plastic", formatted);
+            StringAssert.Contains("profile = High", formatted);
+            StringAssert.Contains("SafeProperty = Safe", formatted);
+        }
+
+        [Test]
         public void FormatResult_Vector3_UsesInvariantPeriodDecimalSeparator()
         {
             var v = new Vector3(1.5f, 2.75f, 3.25f);
@@ -276,6 +297,20 @@ namespace UnityLeanMcpTests
         {
             public string Value;
             public JsonNode Child;
+        }
+
+        private class DummyMutatingComponent : Component
+        {
+            public string SafeProperty => "Safe";
+            public string material => throw new System.InvalidOperationException("Mutating getter!");
+            public string materials => throw new System.InvalidOperationException("Mutating getter!");
+            public string mesh => throw new System.InvalidOperationException("Mutating getter!");
+            public string physicMaterial => throw new System.InvalidOperationException("Mutating getter!");
+            public string trailMaterial => throw new System.InvalidOperationException("Mutating getter!");
+            public string trailMaterials => throw new System.InvalidOperationException("Mutating getter!");
+            public string profile => throw new System.InvalidOperationException("Mutating getter!");
+            public string materialTemplate => throw new System.InvalidOperationException("Mutating getter!");
+            public string coefficients => throw new System.InvalidOperationException("Mutating getter!");
         }
     }
 }

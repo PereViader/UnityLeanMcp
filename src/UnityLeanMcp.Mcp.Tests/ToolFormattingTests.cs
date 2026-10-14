@@ -3052,6 +3052,71 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(fileUri, line, "C:/Project"));
     }
 
+    [Theory]
+    [InlineData("Packages/com.unity.test-framework/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
+    [InlineData("Packages\\com.unity.test-framework\\Foo.cs", 10, "C:\\Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
+    [InlineData("Packages/com.unity.test-framework/Foo.cs", 10, "/home/user/repo", "file:///home/user/repo/Packages/com.unity.test-framework/Foo.cs#L10")]
+    [InlineData("/Packages/com.unity.test-framework/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
+    [InlineData("\\Packages\\com.unity.test-framework\\Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
+    [InlineData("./Packages/com.unity.test-framework/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
+    [InlineData("Packages/com.unity.test-framework/Foo.cs", 10, null, "file:///Packages/com.unity.test-framework/Foo.cs#L10")]
+    public void BuildFileUri_PackageDependencies_ResolvesAgainstProjectRootWithLineAnchors(
+        string file,
+        int line,
+        string? projectRoot,
+        string expectedUri)
+    {
+        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, projectRoot));
+    }
+
+    [Theory]
+    [InlineData("/mnt/c/Repo/Assets/Foo.cs", 15, "C:/Repo", "file:///mnt/c/Repo/Assets/Foo.cs#L15")]
+    [InlineData("/mnt/c/Repo/Assets/Foo.cs", 15, null, "file:///mnt/c/Repo/Assets/Foo.cs#L15")]
+    [InlineData("/mnt/d/Project/Packages/com.foo/Bar.cs", 42, "C:/Repo", "file:///mnt/d/Project/Packages/com.foo/Bar.cs#L42")]
+    public void BuildFileUri_WslMountPaths_GeneratesValidFileUrisAcrossHosts(
+        string file,
+        int line,
+        string? projectRoot,
+        string expectedUri)
+    {
+        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, projectRoot));
+    }
+
+    [Theory]
+    [InlineData("\\\\server\\share\\Assets\\Foo.cs", 20, "file://server/share/Assets/Foo.cs#L20")]
+    [InlineData("//server/share/Assets/Foo.cs", 20, "file://server/share/Assets/Foo.cs#L20")]
+    [InlineData("\\\\build-server\\Shared Folder\\foo#bar.cs", 5, "file://build-server/Shared%20Folder/foo%23bar.cs#L5")]
+    [InlineData("//build-server/Shared Folder/naïve file.cs", 8, "file://build-server/Shared%20Folder/na%C3%AFve%20file.cs#L8")]
+    public void BuildFileUri_UncPaths_PreservesAuthorityAndLineAnchors(
+        string file,
+        int line,
+        string expectedUri)
+    {
+        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, "C:/Project"));
+    }
+
+    [Fact]
+    public void BuildFileUri_CrossDriveAndUnanchoredUnc_ProducesValidUris()
+    {
+        // Unanchored UNC path
+        Assert.Equal("file://server/share/file.cs", DiagnosticFormatter.BuildFileUri(@"\\server\share\file.cs", null, "C:/Project"));
+        Assert.Equal("file://server/share/file.cs", DiagnosticFormatter.BuildFileUri("//server/share/file.cs", null, "C:/Project"));
+
+        // Cross-drive paths
+        Assert.Equal("file:///D:/OtherDrive/Assets/Script.cs#L99", DiagnosticFormatter.BuildFileUri("D:/OtherDrive/Assets/Script.cs", 99, "C:/Project"));
+        Assert.Equal("file:///D:/OtherDrive/Assets/Script.cs#L99", DiagnosticFormatter.BuildFileUri(@"D:\OtherDrive\Assets\Script.cs", 99, "C:/Project"));
+    }
+
+    [Fact]
+    public void FormatCompilerDiagnostics_WithPackageDependencyPath_ResolvesAgainstProjectRoot()
+    {
+        string diagText = "Packages/com.unity.test-framework/Runner.cs(42,10): error CS0103: The name 'Runner' does not exist in the current context";
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(diagText, "C:/UnityProject", isSuccess: false);
+
+        Assert.Contains("file:///C:/UnityProject/Packages/com.unity.test-framework/Runner.cs#L42", formatted);
+        Assert.Contains("error CS0103", formatted);
+    }
+
     // ==========================================
     // 7. Tool description regression tests
     // ==========================================

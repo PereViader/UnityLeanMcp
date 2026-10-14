@@ -77,6 +77,20 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             return BuildExistingFileUri(rawFile, lineNumber);
 
         string resolvedPath = rawFile;
+        string normalizedRaw = resolvedPath.Replace('\\', '/');
+
+        // Normalize package and project-relative paths that may have leading slashes
+        if (normalizedRaw.StartsWith("/Packages/", StringComparison.OrdinalIgnoreCase))
+        {
+            normalizedRaw = normalizedRaw[1..];
+            resolvedPath = normalizedRaw;
+        }
+        else if (normalizedRaw.StartsWith("/Assets/", StringComparison.OrdinalIgnoreCase))
+        {
+            normalizedRaw = normalizedRaw[1..];
+            resolvedPath = normalizedRaw;
+        }
+
         if (!IsPathRootedCrossPlatform(resolvedPath) && !string.IsNullOrWhiteSpace(projectRoot))
         {
             string root = projectRoot.Replace('\\', '/').TrimEnd('/');
@@ -89,11 +103,17 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         }
 
         string normalizedPath = resolvedPath.Replace('\\', '/');
+        while (normalizedPath.StartsWith("./", StringComparison.Ordinal))
+        {
+            normalizedPath = normalizedPath[2..];
+        }
+
         string anchor = lineNumber.HasValue ? $"#L{lineNumber.Value}" : "";
 
         // A Windows UNC path is represented by the URI authority (the server),
         // not by an extra pair of leading slashes in the URI path.
-        if (normalizedPath.StartsWith("//", StringComparison.Ordinal))
+        if (normalizedPath.StartsWith("//", StringComparison.Ordinal) &&
+            !normalizedPath.StartsWith("///", StringComparison.Ordinal))
         {
             string uncPath = normalizedPath[2..];
             int separatorIndex = uncPath.IndexOf('/');
@@ -102,6 +122,11 @@ public class DiagnosticFormatter : IDiagnosticFormatter
                 string authority = EncodeUriAuthority(uncPath[..separatorIndex], preserveEscapes: false);
                 string path = EncodeUriPath(uncPath[separatorIndex..], preserveEscapes: false);
                 return $"file://{authority}{path}{anchor}";
+            }
+            else if (separatorIndex < 0 && uncPath.Length > 0)
+            {
+                string authority = EncodeUriAuthority(uncPath, preserveEscapes: false);
+                return $"file://{authority}/{anchor}";
             }
         }
 

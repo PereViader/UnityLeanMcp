@@ -51,17 +51,30 @@ internal static class UnityProcessCommandLineReader
         return false;
     }
 
-    private static bool TryReadLinux(int processId, out string commandLine)
+    internal static bool TryReadLinux(int processId, out string commandLine)
     {
+        commandLine = string.Empty;
         string path = $"/proc/{processId}/cmdline";
         if (!File.Exists(path))
         {
-            commandLine = string.Empty;
             return false;
         }
 
-        commandLine = File.ReadAllText(path);
-        return !string.IsNullOrEmpty(commandLine);
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (bytes.Length == 0)
+            {
+                return false;
+            }
+
+            commandLine = Encoding.UTF8.GetString(bytes);
+            return !string.IsNullOrEmpty(commandLine);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TryReadMacOs(int processId, out string commandLine)

@@ -463,6 +463,7 @@ public class UnityProcessManager : IUnityProcessManager
     // tests deterministic without making command-line inspection part of the
     // public process-manager contract.
     internal Func<Process, string?>? ProcessCommandLineProvider { get; set; }
+    internal Func<int, string?>? LinuxProcessCwdProvider { get; set; }
 
     internal virtual Process[] GetUnityProcesses()
     {
@@ -615,14 +616,15 @@ public class UnityProcessManager : IUnityProcessManager
                 return true;
             }
 
-            if (processId.HasValue && RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            if (processId.HasValue && (LinuxProcessCwdProvider != null || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
             {
                 string? procCwd = TryGetLinuxProcessCwd(processId.Value);
                 if (!string.IsNullOrWhiteSpace(procCwd))
                 {
                     try
                     {
-                        string resolved = Path.GetFullPath(Path.Combine(procCwd, projectPathArg));
+                        string combined = Path.Combine(procCwd, projectPathArg);
+                        string resolved = FileUnityProcessIdentityStore.ResolveRealPath(combined);
                         if (FileUnityProcessIdentityStore.PathsEqual(resolved, _pathResolver.ProjectRoot))
                         {
                             return true;
@@ -644,17 +646,16 @@ public class UnityProcessManager : IUnityProcessManager
             return false;
         }
 
-        char[] separators = commandLine.Contains('\0') ? new[] { '\0' } : new[] { ' ', '\t' };
-        string[] parts = commandLine.Split(separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        List<string> tokens = ParseCommandLineTokens(commandLine);
 
-        for (int i = 0; i < parts.Length; i++)
+        for (int i = 0; i < tokens.Count; i++)
         {
-            string part = parts[i].Trim('"', '\'');
+            string part = tokens[i].Trim('"', '\'');
             if (part.Equals("-projectPath", StringComparison.OrdinalIgnoreCase))
             {
-                if (i + 1 < parts.Length)
+                if (i + 1 < tokens.Count)
                 {
-                    projectPath = parts[i + 1].Trim('"', '\'');
+                    projectPath = tokens[i + 1].Trim('"', '\'');
                     return !string.IsNullOrWhiteSpace(projectPath);
                 }
             }
@@ -668,15 +669,98 @@ public class UnityProcessManager : IUnityProcessManager
         return false;
     }
 
-    private static string? TryGetLinuxProcessCwd(int pid)
+    private static List<string> ParseCommandLineTokens(string commandLine)
     {
+        var tokens = new List<string>();
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return tokens;
+        }
+
+        if (commandLine.Contains('\0'))
+        {
+            string[] rawParts = commandLine.Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (string part in rawParts)
+            {
+                if (part.Contains("-projectPath", StringComparison.OrdinalIgnoreCase) &&
+                    (part.Contains(' ') || part.Contains('\t')))
+                {
+                    tokens.AddRange(TokenizeSpaceSeparated(part));
+                }
+                else
+                {
+                    tokens.Add(part);
+                }
+            }
+            return tokens;
+        }
+
+        return TokenizeSpaceSeparated(commandLine);
+    }
+
+    private static List<string> TokenizeSpaceSeparated(string text)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+        char quoteChar = '\0';
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if ((c == '"' || c == '\'') && !inQuotes)
+            {
+                inQuotes = true;
+                quoteChar = c;
+            }
+            else if (inQuotes && c == quoteChar)
+            {
+                inQuotes = false;
+                quoteChar = '\0';
+            }
+            else if (!inQuotes && (c == ' ' || c == '\t'))
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
+    }
+
+    internal string? TryGetLinuxProcessCwd(int pid)
+    {
+        if (LinuxProcessCwdProvider != null)
+        {
+            try
+            {
+                string? cwd = LinuxProcessCwdProvider(pid);
+                if (!string.IsNullOrWhiteSpace(cwd))
+                {
+                    return FileUnityProcessIdentityStore.ResolveRealPath(cwd);
+                }
+            }
+            catch { }
+        }
+
         try
         {
             string cwdLink = $"/proc/{pid}/cwd";
             if (Directory.Exists(cwdLink))
             {
-                var target = File.ResolveLinkTarget(cwdLink, returnFinalTarget: true);
-                return target?.FullName ?? cwdLink;
+                return FileUnityProcessIdentityStore.ResolveRealPath(cwdLink);
             }
         }
         catch { }

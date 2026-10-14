@@ -72,7 +72,7 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         }
 
         string fullExecutablePath = Path.GetFullPath(executablePath);
-        string resolvedExecutablePath = TryResolveFinalTarget(fullExecutablePath) ?? fullExecutablePath;
+        string resolvedExecutablePath = ResolveRealPath(fullExecutablePath);
         var identity = new UnityProcessIdentityRecord
         {
             ProcessId = process.Id,
@@ -282,6 +282,8 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         return null;
     }
 
+    internal static Func<string, string?>? CustomLinkResolver { get; set; }
+
     internal static bool PathsEqual(string? left, string? right)
     {
         if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
@@ -304,8 +306,8 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
                 return true;
             }
 
-            string resolvedLeft = TryResolveFinalTarget(fullLeft) ?? fullLeft;
-            string resolvedRight = TryResolveFinalTarget(fullRight) ?? fullRight;
+            string resolvedLeft = ResolveRealPath(fullLeft);
+            string resolvedRight = ResolveRealPath(fullRight);
             return string.Equals(resolvedLeft, resolvedRight, comparison);
         }
         catch
@@ -314,17 +316,113 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         }
     }
 
-    private static string? TryResolveFinalTarget(string path)
+    internal static string ResolveRealPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return path ?? string.Empty;
+        }
+
+        try
+        {
+            string fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            int loopCount = 0;
+            const int maxHops = 32;
+            string current = fullPath;
+
+            while (loopCount++ < maxHops)
+            {
+                var finalTarget = ResolveLink(current);
+                if (finalTarget != null && !string.IsNullOrWhiteSpace(finalTarget.FullName))
+                {
+                    string targetFull = Path.GetFullPath(finalTarget.FullName).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    if (!string.Equals(targetFull, current, StringComparison.Ordinal))
+                    {
+                        current = targetFull;
+                        continue;
+                    }
+                }
+
+                string? resolvedAncestor = ResolveAncestors(current);
+                if (resolvedAncestor != null)
+                {
+                    string ancestorFull = Path.GetFullPath(resolvedAncestor).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    if (!string.Equals(ancestorFull, current, StringComparison.Ordinal))
+                    {
+                        current = ancestorFull;
+                        continue;
+                    }
+                }
+
+                break;
+            }
+
+            return current;
+        }
+        catch
+        {
+            return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+    }
+
+    private static string? ResolveAncestors(string path)
+    {
+        string? root = Path.GetPathRoot(path);
+        if (string.IsNullOrEmpty(root))
+        {
+            return null;
+        }
+
+        string relative = path.Substring(root.Length);
+        string[] parts = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+
+        string current = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.IsNullOrEmpty(current) && root.StartsWith('/'))
+        {
+            current = "/";
+        }
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            current = Path.Combine(current, parts[i]);
+            var target = ResolveLink(current);
+            if (target != null && !string.IsNullOrWhiteSpace(target.FullName))
+            {
+                string targetPath = Path.GetFullPath(target.FullName).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!string.Equals(targetPath, current, StringComparison.Ordinal))
+                {
+                    if (i + 1 == parts.Length)
+                    {
+                        return targetPath;
+                    }
+
+                    string remainder = string.Join(Path.DirectorySeparatorChar.ToString(), parts, i + 1, parts.Length - (i + 1));
+                    return Path.Combine(targetPath, remainder);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static FileSystemInfo? ResolveLink(string path)
     {
         try
         {
-            if (File.Exists(path) || Directory.Exists(path))
+            string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (CustomLinkResolver != null)
             {
-                var target = File.ResolveLinkTarget(path, returnFinalTarget: true);
-                if (target != null && !string.IsNullOrWhiteSpace(target.FullName))
+                string? customTarget = CustomLinkResolver(trimmed) ?? CustomLinkResolver(trimmed.Replace('\\', '/'));
+                if (customTarget != null)
                 {
-                    return target.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    return new DirectoryInfo(customTarget);
                 }
+            }
+
+            if (File.Exists(trimmed) || Directory.Exists(trimmed))
+            {
+                return File.ResolveLinkTarget(trimmed, returnFinalTarget: true);
             }
         }
         catch

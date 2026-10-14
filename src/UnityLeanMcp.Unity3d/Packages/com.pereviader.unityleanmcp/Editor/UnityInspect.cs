@@ -6,6 +6,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -1046,6 +1047,7 @@ namespace UnityLeanMcp
                 var p = props[i];
                 if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
                 if (p.IsDefined(typeof(ObsoleteAttribute), inherit: true)) continue;
+                if (IsIgnoredComponentProperty(p.Name, isComponent: target is Component || target is UnityEngine.Object)) continue;
 
                 count++;
                 object val = null;
@@ -1185,12 +1187,25 @@ namespace UnityLeanMcp
             return val.ToString();
         }
 
-        private static bool IsIgnoredComponentProperty(string propName)
+        internal static bool IsIgnoredComponentProperty(string propName, bool isComponent = true)
         {
             if (string.IsNullOrEmpty(propName)) return false;
 
             switch (propName.ToLowerInvariant())
             {
+                // EditMode mutating properties that instantiate copies / leak assets:
+                case "material":
+                case "materials":
+                case "mesh":
+                case "physicmaterial":
+                case "trailmaterial":
+                case "trailmaterials":
+                case "profile":
+                case "materialtemplate":
+                case "coefficients":
+                    return true;
+
+                // Component-specific legacy shortcuts and metadata:
                 case "rigidbody":
                 case "rigidbody2d":
                 case "camera":
@@ -1213,15 +1228,8 @@ namespace UnityLeanMcp
                 case "tag":
                 case "name":
                 case "hideflags":
-                // EditMode mutating properties that instantiate copies / leak assets:
-                case "material":
-                case "materials":
-                case "mesh":
-                case "physicmaterial":
-                case "trailmaterial":
-                case "trailmaterials":
-                case "profile":
-                    return true;
+                    return isComponent;
+
                 default:
                     return false;
             }
@@ -1424,6 +1432,246 @@ namespace UnityLeanMcp
             }
         }
 
+        /// <summary>
+        /// Inspects a prefab instance GameObject and returns its modifications, added components,
+        /// and removed components relative to the source prefab asset.
+        /// </summary>
+        public static string PrefabOverrides(GameObject instance, int maxItems = 50)
+        {
+            if (ReferenceEquals(instance, null))
+            {
+                return "(GameObject is null)";
+            }
+            if (instance == null)
+            {
+                return "(GameObject is destroyed)";
+            }
+
+            bool isPrefab = false;
+            try
+            {
+                isPrefab = PrefabUtility.IsPartOfAnyPrefabInstance(instance);
+            }
+            catch { }
+
+            if (!isPrefab)
+            {
+                return "(GameObject is not a prefab instance)";
+            }
+
+            maxItems = Math.Max(1, maxItems);
+
+            UnityEngine.Object source = null;
+            try
+            {
+                source = PrefabUtility.GetCorrespondingObjectFromSource(instance);
+            }
+            catch { }
+
+            string assetPath = null;
+            if (source != null)
+            {
+                try
+                {
+                    assetPath = AssetDatabase.GetAssetPath(source);
+                }
+                catch { }
+            }
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                try
+                {
+                    assetPath = AssetDatabase.GetAssetPath(instance);
+                }
+                catch { }
+            }
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                assetPath = assetPath.Replace('\\', '/');
+            }
+
+            List<AddedComponent> addedComponents = null;
+            try
+            {
+                addedComponents = PrefabUtility.GetAddedComponents(instance);
+            }
+            catch { }
+
+            var validAdded = new List<AddedComponent>();
+            if (addedComponents != null)
+            {
+                for (int i = 0; i < addedComponents.Count; i++)
+                {
+                    var added = addedComponents[i];
+                    if (added != null && added.instanceComponent != null)
+                    {
+                        validAdded.Add(added);
+                    }
+                }
+            }
+
+            List<RemovedComponent> removedComponents = null;
+            try
+            {
+                removedComponents = PrefabUtility.GetRemovedComponents(instance);
+            }
+            catch { }
+
+            var validRemoved = new List<RemovedComponent>();
+            if (removedComponents != null)
+            {
+                for (int i = 0; i < removedComponents.Count; i++)
+                {
+                    var removed = removedComponents[i];
+                    if (removed != null && removed.assetComponent != null)
+                    {
+                        validRemoved.Add(removed);
+                    }
+                }
+            }
+
+            PropertyModification[] rawMods = null;
+            try
+            {
+                rawMods = PrefabUtility.GetPropertyModifications(instance);
+            }
+            catch { }
+
+            var validMods = new List<PropertyModification>();
+            if (rawMods != null)
+            {
+                for (int i = 0; i < rawMods.Length; i++)
+                {
+                    var mod = rawMods[i];
+                    if (mod == null || mod.target == null) continue;
+                    string path = mod.propertyPath;
+                    if (string.IsNullOrEmpty(path)) continue;
+                    if (path == "m_ObjectHideFlags" || path.StartsWith("m_ObjectHideFlags.")) continue;
+                    if (path.StartsWith("m_CorrespondingSourceObject") || path.StartsWith("m_PrefabInstance") || path.StartsWith("m_PrefabAsset")) continue;
+                    if (path.StartsWith("<") || path.Contains("$")) continue;
+                    validMods.Add(mod);
+                }
+            }
+
+            var sb = new StringBuilder();
+            string goName = "GameObject";
+            try
+            {
+                goName = instance.name;
+            }
+            catch { }
+
+            string sourcePath = !string.IsNullOrEmpty(assetPath) ? assetPath : "(unknown source)";
+            sb.AppendLine($"Prefab Instance: \"{goName}\" (Source: {sourcePath})");
+
+            int totalOverrides = validAdded.Count + validRemoved.Count + validMods.Count;
+            if (totalOverrides == 0)
+            {
+                sb.AppendLine("  Status: No overrides (clean instance)");
+                return LimitOutput(sb.ToString().TrimEnd(), DefaultMaxOutputCharacters, DefaultMaxOutputBytes);
+            }
+
+            sb.AppendLine($"  Status: {totalOverrides} override(s) ({validAdded.Count} added, {validRemoved.Count} removed, {validMods.Count} modified)");
+
+            int itemCount = 0;
+            bool itemLimitReached = false;
+
+            if (validAdded.Count > 0)
+            {
+                sb.AppendLine("  Added Components:");
+                for (int i = 0; i < validAdded.Count; i++)
+                {
+                    var added = validAdded[i];
+                    string compName = "Component";
+                    try
+                    {
+                        if (added.instanceComponent != null)
+                        {
+                            compName = added.instanceComponent.GetType().Name;
+                        }
+                    }
+                    catch { }
+                    sb.AppendLine($"    + {compName}");
+                    itemCount++;
+                    if (itemCount >= maxItems && itemCount < totalOverrides)
+                    {
+                        sb.AppendLine($"    {ItemTruncationMarker}");
+                        itemLimitReached = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!itemLimitReached && validRemoved.Count > 0)
+            {
+                sb.AppendLine("  Removed Components:");
+                for (int i = 0; i < validRemoved.Count; i++)
+                {
+                    var removed = validRemoved[i];
+                    string compName = "Component";
+                    try
+                    {
+                        if (removed.assetComponent != null)
+                        {
+                            compName = removed.assetComponent.GetType().Name;
+                        }
+                    }
+                    catch { }
+                    sb.AppendLine($"    - {compName}");
+                    itemCount++;
+                    if (itemCount >= maxItems && itemCount < totalOverrides)
+                    {
+                        sb.AppendLine($"    {ItemTruncationMarker}");
+                        itemLimitReached = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!itemLimitReached && validMods.Count > 0)
+            {
+                sb.AppendLine("  Modified Properties:");
+                for (int i = 0; i < validMods.Count; i++)
+                {
+                    var mod = validMods[i];
+                    string targetType = "Object";
+                    try
+                    {
+                        if (mod.target != null)
+                        {
+                            targetType = mod.target.GetType().Name;
+                        }
+                    }
+                    catch { }
+
+                    string val = "null";
+                    try
+                    {
+                        if (mod.objectReference != null)
+                        {
+                            val = $"{mod.objectReference.name} ({mod.objectReference.GetType().Name})";
+                        }
+                        else if (mod.value != null)
+                        {
+                            val = mod.value;
+                        }
+                    }
+                    catch { }
+
+                    sb.AppendLine($"    ~ {targetType}.{mod.propertyPath} = {val}");
+                    itemCount++;
+                    if (itemCount >= maxItems && itemCount < totalOverrides)
+                    {
+                        sb.AppendLine($"    {ItemTruncationMarker}");
+                        itemLimitReached = true;
+                        break;
+                    }
+                }
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd(), DefaultMaxOutputCharacters, DefaultMaxOutputBytes);
+        }
+
         #endregion
 
         #region Selection & Main Camera Viewport
@@ -1590,7 +1838,11 @@ namespace UnityLeanMcp
             {
                 try
                 {
+#if UNITY_2023_1_OR_NEWER
+                    cam = UnityEngine.Object.FindFirstObjectByType<Camera>();
+#else
                     cam = UnityEngine.Object.FindObjectOfType<Camera>();
+#endif
                 }
                 catch { }
             }
@@ -1668,16 +1920,64 @@ namespace UnityLeanMcp
         {
             var sb = new StringBuilder();
             sb.AppendLine("UnityLeanMcp Inspection Helpers (UnityLeanMcp.Inspect):");
-            sb.AppendLine("• Hierarchy([root], [maxDepth], [maxItems]) - Indented tree of GameObjects, active states, and components.");
-            sb.AppendLine("• GameObject(go, [maxItems])                - Inspect GameObject, transform, components, and fields.");
-            sb.AppendLine("• Component(comp, [maxItems])              - Inspect Component type, enabled state, and properties.");
-            sb.AppendLine("• Object(target, [maxDepth], [maxItems])   - General inspection of ScriptableObjects, materials, or C# objects.");
-            sb.AppendLine("• FindAssets([filter], [type], [label])    - Search project assets by name, type (e.g. 'Scene'), or label.");
-            sb.AppendLine("• FindPrefabs([filter], [maxItems])        - Shortcut to find prefabs matching a filter.");
-            sb.AppendLine("• FindAsset(nameOrPath)                    - Inspect a single asset's path, type, and GUID.");
-            sb.AppendLine("• Selection([maxItems])                    - Current Unity Editor selection and selected objects.");
-            sb.AppendLine("• MainCamera()                             - Active Camera projection, FOV, viewport rect, and culling mask.");
+
+            var methods = typeof(Inspect).GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Where(m => !m.IsSpecialName)
+                .OrderBy(m => m.Name, StringComparer.Ordinal)
+                .ThenBy(m => m.GetParameters().Length);
+
+            foreach (var m in methods)
+            {
+                string retType = FormatTypeName(m.ReturnType);
+                var paramStrings = new List<string>();
+                foreach (var p in m.GetParameters())
+                {
+                    string pType = FormatTypeName(p.ParameterType);
+                    string pStr = $"{pType} {p.Name}";
+                    if (p.HasDefaultValue)
+                    {
+                        string defVal;
+                        if (p.DefaultValue == null)
+                        {
+                            defVal = "null";
+                        }
+                        else if (p.DefaultValue is bool b)
+                        {
+                            defVal = b ? "true" : "false";
+                        }
+                        else if (p.DefaultValue is string s)
+                        {
+                            defVal = $"\"{s}\"";
+                        }
+                        else
+                        {
+                            defVal = Convert.ToString(p.DefaultValue, CultureInfo.InvariantCulture);
+                        }
+                        pStr += $" = {defVal}";
+                    }
+                    paramStrings.Add(pStr);
+                }
+
+                sb.AppendLine($"• {retType} {m.Name}({string.Join(", ", paramStrings)})");
+            }
+
             return sb.ToString().TrimEnd();
+        }
+
+        private static string FormatTypeName(Type type)
+        {
+            if (type == null) return "void";
+            if (type == typeof(void)) return "void";
+            if (type.IsArray) return FormatTypeName(type.GetElementType()) + "[]";
+            var underlyingNullable = Nullable.GetUnderlyingType(type);
+            if (underlyingNullable != null) return FormatTypeName(underlyingNullable) + "?";
+            if (type == typeof(string)) return "string";
+            if (type == typeof(int)) return "int";
+            if (type == typeof(bool)) return "bool";
+            if (type == typeof(float)) return "float";
+            if (type == typeof(double)) return "double";
+            if (type == typeof(object)) return "object";
+            return type.Name;
         }
 
         #endregion

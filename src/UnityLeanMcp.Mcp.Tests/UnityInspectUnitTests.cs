@@ -26,6 +26,11 @@ namespace UnityLeanMcp.Mcp.Tests
             AssetDatabase.GUIDToAssetPathFunc = null;
             AssetDatabase.GetMainAssetTypeAtPathFunc = null;
             AssetDatabase.GetAssetPathFunc = null;
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = null;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = null;
+            PrefabUtility.GetPropertyModificationsFunc = null;
+            PrefabUtility.GetAddedComponentsFunc = null;
+            PrefabUtility.GetRemovedComponentsFunc = null;
             SerializedObject.CustomProperties.Clear();
         }
 
@@ -42,6 +47,11 @@ namespace UnityLeanMcp.Mcp.Tests
             AssetDatabase.GUIDToAssetPathFunc = null;
             AssetDatabase.GetMainAssetTypeAtPathFunc = null;
             AssetDatabase.GetAssetPathFunc = null;
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = null;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = null;
+            PrefabUtility.GetPropertyModificationsFunc = null;
+            PrefabUtility.GetAddedComponentsFunc = null;
+            PrefabUtility.GetRemovedComponentsFunc = null;
             SerializedObject.CustomProperties.Clear();
         }
 
@@ -667,6 +677,8 @@ namespace UnityLeanMcp.Mcp.Tests
             public string material => throw new InvalidOperationException("Material getter should not be called in EditMode!");
             public string mesh => throw new InvalidOperationException("Mesh getter should not be called in EditMode!");
             public string profile => throw new InvalidOperationException("Profile getter should not be called in EditMode!");
+            public string materialTemplate => throw new InvalidOperationException("MaterialTemplate getter should not be called in EditMode!");
+            public string coefficients => throw new InvalidOperationException("Coefficients getter should not be called in EditMode!");
             [Obsolete] public string DeprecatedProp => throw new InvalidOperationException("Deprecated property should not be called!");
             [Obsolete] public int DeprecatedField = 999;
         }
@@ -686,8 +698,59 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.DoesNotContain("Material getter", result);
             Assert.DoesNotContain("Mesh getter", result);
             Assert.DoesNotContain("Profile getter", result);
+            Assert.DoesNotContain("MaterialTemplate getter", result);
+            Assert.DoesNotContain("Coefficients getter", result);
             Assert.DoesNotContain("DeprecatedProp", result);
             Assert.DoesNotContain("DeprecatedField", result);
+        }
+
+        [Fact]
+        public void Inspect_Object_OnComponent_IgnoresMutatingAndObsoleteMembers()
+        {
+            var go = new GameObject("Owner");
+            var customComp = new CustomTestComponent { gameObject = go };
+            go.AddRawComponent(customComp);
+
+            string result = Inspect.Object(customComp);
+
+            Assert.Contains("PublicField: 42", result);
+            Assert.Contains("DebugStatus: \"Active\"", result);
+            Assert.Contains("SafeProperty: \"SafeValue\"", result);
+            Assert.DoesNotContain("Material getter", result);
+            Assert.DoesNotContain("Mesh getter", result);
+            Assert.DoesNotContain("Profile getter", result);
+            Assert.DoesNotContain("MaterialTemplate getter", result);
+            Assert.DoesNotContain("Coefficients getter", result);
+            Assert.DoesNotContain("DeprecatedProp", result);
+            Assert.DoesNotContain("DeprecatedField", result);
+        }
+
+        private class CustomTestObject
+        {
+            public int PublicField = 42;
+            public string SafeProperty => "SafeValue";
+            public string material => throw new InvalidOperationException("Material getter should not be called in EditMode!");
+            public string mesh => throw new InvalidOperationException("Mesh getter should not be called in EditMode!");
+            public string profile => throw new InvalidOperationException("Profile getter should not be called in EditMode!");
+            public string materialTemplate => throw new InvalidOperationException("MaterialTemplate getter should not be called in EditMode!");
+            public string coefficients => throw new InvalidOperationException("Coefficients getter should not be called in EditMode!");
+            [Obsolete] public string DeprecatedProp => throw new InvalidOperationException("Deprecated property should not be called!");
+        }
+
+        [Fact]
+        public void Inspect_Object_OnPlainObject_IgnoresMutatingAndObsoleteMembers()
+        {
+            var obj = new CustomTestObject();
+            string result = Inspect.Object(obj);
+
+            Assert.Contains("PublicField: 42", result);
+            Assert.Contains("SafeProperty: \"SafeValue\"", result);
+            Assert.DoesNotContain("Material getter", result);
+            Assert.DoesNotContain("Mesh getter", result);
+            Assert.DoesNotContain("Profile getter", result);
+            Assert.DoesNotContain("MaterialTemplate getter", result);
+            Assert.DoesNotContain("Coefficients getter", result);
+            Assert.DoesNotContain("DeprecatedProp", result);
         }
 
         [Fact]
@@ -1048,6 +1111,7 @@ namespace UnityLeanMcp.Mcp.Tests
         {
             string inspectHelp = Inspect.Help();
 
+            Assert.StartsWith("UnityLeanMcp Inspection Helpers (UnityLeanMcp.Inspect):", inspectHelp);
             Assert.Contains("Hierarchy", inspectHelp);
             Assert.Contains("GameObject", inspectHelp);
             Assert.Contains("Component", inspectHelp);
@@ -1057,6 +1121,256 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("FindAsset", inspectHelp);
             Assert.Contains("Selection", inspectHelp);
             Assert.Contains("MainCamera", inspectHelp);
+            Assert.Contains("PrefabOverrides", inspectHelp);
+            Assert.Contains("• string PrefabOverrides(GameObject instance, int maxItems = 50)", inspectHelp);
+        }
+
+        #endregion
+
+        #region Prefab Overrides Tests
+
+        [Fact]
+        public void PrefabOverrides_NullGameObject_ReturnsNullNotification()
+        {
+            string result = Inspect.PrefabOverrides(null);
+            Assert.Equal("(GameObject is null)", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_DestroyedGameObject_ReturnsDestroyedNotification()
+        {
+            var go = new GameObject("DeadObject");
+            UnityEngine.Object.DestroyImmediate(go);
+
+            string result = Inspect.PrefabOverrides(go);
+            Assert.Equal("(GameObject is destroyed)", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_NonPrefabInstance_ReturnsNotPrefabNotification()
+        {
+            var go = new GameObject("PlainObject");
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = _ => false;
+
+            string result = Inspect.PrefabOverrides(go);
+            Assert.Equal("(GameObject is not a prefab instance)", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_CleanPrefabInstance_ReturnsNoOverridesCleanStatus()
+        {
+            var go = new GameObject("CleanPlayer");
+            var source = new GameObject("PlayerSource");
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = _ => true;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = _ => source;
+            AssetDatabase.GetAssetPathFunc = obj => "Assets/Prefabs/Player.prefab";
+
+            string result = Inspect.PrefabOverrides(go);
+
+            Assert.Contains("Prefab Instance: \"CleanPlayer\" (Source: Assets/Prefabs/Player.prefab)", result);
+            Assert.Contains("Status: No overrides (clean instance)", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_AddedComponents_FormatsAddedComponentsCleanly()
+        {
+            var go = new GameObject("VariantPlayer");
+            var source = new GameObject("PlayerSource");
+            var audio = go.AddComponent<AudioSource>();
+
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = _ => true;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = _ => source;
+            AssetDatabase.GetAssetPathFunc = obj => "Assets/Prefabs/Player.prefab";
+            PrefabUtility.GetAddedComponentsFunc = _ => new List<AddedComponent>
+            {
+                new AddedComponent { instanceComponent = audio }
+            };
+
+            string result = Inspect.PrefabOverrides(go);
+
+            Assert.Contains("1 override(s) (1 added, 0 removed, 0 modified)", result);
+            Assert.Contains("Added Components:", result);
+            Assert.Contains("+ AudioSource", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_RemovedComponents_FormatsRemovedComponentsCleanly()
+        {
+            var go = new GameObject("VariantPlayer");
+            var source = new GameObject("PlayerSource");
+            var rb = source.AddComponent<Rigidbody>();
+
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = _ => true;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = _ => source;
+            AssetDatabase.GetAssetPathFunc = obj => "Assets/Prefabs/Player.prefab";
+            PrefabUtility.GetRemovedComponentsFunc = _ => new List<RemovedComponent>
+            {
+                new RemovedComponent { assetComponent = rb }
+            };
+
+            string result = Inspect.PrefabOverrides(go);
+
+            Assert.Contains("1 override(s) (0 added, 1 removed, 0 modified)", result);
+            Assert.Contains("Removed Components:", result);
+            Assert.Contains("- Rigidbody", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_PropertyModifications_FiltersEngineNoiseAndFormatsDeltas()
+        {
+            var go = new GameObject("VariantPlayer");
+            var source = new GameObject("PlayerSource");
+
+            var mat = new Material { name = "HeroMat" };
+            var targetTr = go.transform;
+
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = _ => true;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = _ => source;
+            AssetDatabase.GetAssetPathFunc = obj => "Assets/Prefabs/Player.prefab";
+            PrefabUtility.GetPropertyModificationsFunc = _ => new[]
+            {
+                // Valid modifications
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_LocalPosition.x",
+                    value = "10.5"
+                },
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_Material",
+                    objectReference = mat
+                },
+                // Internal engine noise: null target
+                new PropertyModification
+                {
+                    target = null,
+                    propertyPath = "m_LocalPosition.y",
+                    value = "20"
+                },
+                // Internal engine noise: m_ObjectHideFlags
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_ObjectHideFlags",
+                    value = "0"
+                },
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_ObjectHideFlags.someField",
+                    value = "0"
+                },
+                // Internal engine noise: compiler-generated / internal bookkeeping
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_CorrespondingSourceObject",
+                    value = "12345"
+                },
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_PrefabInstance",
+                    value = "67890"
+                },
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "m_PrefabAsset",
+                    value = "54321"
+                },
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "<>c__DisplayClass0_0",
+                    value = "noise"
+                },
+                new PropertyModification
+                {
+                    target = targetTr,
+                    propertyPath = "$internal$field",
+                    value = "noise"
+                }
+            };
+
+            string result = Inspect.PrefabOverrides(go);
+
+            Assert.Contains("2 override(s) (0 added, 0 removed, 2 modified)", result);
+            Assert.Contains("Modified Properties:", result);
+            Assert.Contains("~ Transform.m_LocalPosition.x = 10.5", result);
+            Assert.Contains("~ Transform.m_Material = HeroMat (Material)", result);
+
+            // Verify noise is completely filtered
+            Assert.DoesNotContain("m_ObjectHideFlags", result);
+            Assert.DoesNotContain("m_CorrespondingSourceObject", result);
+            Assert.DoesNotContain("m_PrefabInstance", result);
+            Assert.DoesNotContain("m_PrefabAsset", result);
+            Assert.DoesNotContain("DisplayClass", result);
+            Assert.DoesNotContain("$internal$field", result);
+        }
+
+        [Fact]
+        public void PrefabOverrides_ItemTruncation_TruncatesWhenExceedingMaxItems()
+        {
+            var go = new GameObject("TruncatedPlayer");
+            var source = new GameObject("PlayerSource");
+            var audio = go.AddComponent<AudioSource>();
+            var rb = source.AddComponent<Rigidbody>();
+
+            PrefabUtility.IsPartOfAnyPrefabInstanceFunc = _ => true;
+            PrefabUtility.GetCorrespondingObjectFromSourceFunc = _ => source;
+            AssetDatabase.GetAssetPathFunc = obj => "Assets/Prefabs/Player.prefab";
+            PrefabUtility.GetAddedComponentsFunc = _ => new List<AddedComponent>
+            {
+                new AddedComponent { instanceComponent = audio }
+            };
+            PrefabUtility.GetRemovedComponentsFunc = _ => new List<RemovedComponent>
+            {
+                new RemovedComponent { assetComponent = rb }
+            };
+            PrefabUtility.GetPropertyModificationsFunc = _ => new[]
+            {
+                new PropertyModification
+                {
+                    target = go.transform,
+                    propertyPath = "m_LocalPosition.z",
+                    value = "5.0"
+                }
+            };
+
+            // Max items = 1, while there are 3 overrides
+            string result = Inspect.PrefabOverrides(go, maxItems: 1);
+
+            Assert.Contains("3 override(s) (1 added, 1 removed, 1 modified)", result);
+            Assert.Contains("+ AudioSource", result);
+            Assert.Contains(Inspect.ItemTruncationMarker, result);
+            // Since maxItems is 1, later sections should not display their items
+            Assert.DoesNotContain("- Rigidbody", result);
+            Assert.DoesNotContain("m_LocalPosition.z", result);
+        }
+
+        [Fact]
+        public void MainCamera_FindFirstObjectByType_ResolvesCameraSuccessfully()
+        {
+            Camera.main = null;
+            Camera.AllCamerasList.Clear();
+
+            var go = new GameObject("CameraGo");
+            var cam = go.AddComponent<Camera>();
+            cam.name = "MyUniqueCamera";
+
+            UnityEngine.Object.FindObjectsOfTypeFunc = type => type == typeof(Camera) ? new object[] { cam } : Array.Empty<object>();
+
+            var resolved = UnityEngine.Object.FindFirstObjectByType<Camera>();
+            Assert.NotNull(resolved);
+            Assert.Equal("MyUniqueCamera", resolved!.name);
+
+            string result = Inspect.MainCamera();
+            Assert.Contains("Main Camera: \"MyUniqueCamera\"", result);
+
+            UnityEngine.Object.FindObjectsOfTypeFunc = null;
         }
 
         #endregion

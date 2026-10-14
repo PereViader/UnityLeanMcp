@@ -41,11 +41,12 @@ An MCP startup claim must retain the same inode for its whole lifetime. Unlinkin
 
 ### Path identity
 
-- `Path.GetFullPath` does not resolve symlinks. Process executable verification may need the final symlink target to match OS-reported identity.
+- `Path.GetFullPath` does not resolve symlinks. Process executable verification and project ownership checks resolve the full symlink chain of `/proc/{pid}/cwd` and path components to match canonical targets across symlinked directories. Path comparisons use symlink-resolving equality.
+- Linux `/proc/{pid}/cmdline` is NUL-separated. Argument parsing extracts `-projectPath` arguments whether delimited by `\0` or spaces/quotes, resolving relative paths against the target process's working directory rather than the MCP host's directory.
+- Diagnostic URI generation normalizes package dependencies (`Packages/...`), WSL mount paths (`/mnt/c/...`), and Windows UNC shares (`//server/share` or `\\server\share`). Package and project-relative paths resolve against `projectRoot` when provided, preserving authority and producing valid `file://` URIs with `#L<line>` anchors across Windows and POSIX host shells.
 - macOS commonly uses case-insensitive volumes but also supports case-sensitive ones. Do not infer universal filesystem equality from the OS. The current process identity helper uses case-insensitive comparison on Windows/macOS; project protocol validation deliberately uses ordinal comparison on Unix. Tests should expose this distinction rather than claim one policy fits every volume.
 - `Path.IsPathRooted` uses the host OS's syntax. Diagnostic URI conversion must recognize Windows drive paths even when running on Unix.
 - Windows quoted arguments need correct trailing-backslash handling; blindly appending a closing quote can swallow following arguments. Preserve filesystem roots when normalizing paths.
-- Resolve relative `-projectPath` arguments against the target process's working directory, not the MCP host's directory. If that context is unavailable, do not invent ownership evidence.
 
 ### Process discovery pitfalls
 

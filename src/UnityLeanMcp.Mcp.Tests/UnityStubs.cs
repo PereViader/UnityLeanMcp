@@ -54,6 +54,11 @@ namespace UnityEngine
             return arr.Length > 0 ? arr[0] : null;
         }
 
+        public static T? FindFirstObjectByType<T>() where T : Object
+        {
+            return FindObjectOfType<T>();
+        }
+
         public static T[] FindObjectsOfType<T>() where T : Object
         {
             if (FindObjectsOfTypeFunc != null)
@@ -142,6 +147,9 @@ namespace UnityEngine
     public class MonoBehaviour : Behaviour { }
     public class Collider : Component { public bool enabled { get; set; } = true; }
     public class Renderer : Component { public bool enabled { get; set; } = true; }
+    public class AudioSource : Behaviour { }
+    public class Rigidbody : Component { }
+    public class Material : Object { }
 
     public class Camera : Behaviour
     {
@@ -380,6 +388,48 @@ namespace UnityEditor
         public static string AssetPathToGUID(string path) => "test_guid_" + Math.Abs(path.GetHashCode()).ToString("x");
     }
 
+    public class PropertyModification
+    {
+        public UnityEngine.Object? target { get; set; }
+        public string propertyPath { get; set; } = string.Empty;
+        public string value { get; set; } = string.Empty;
+        public UnityEngine.Object? objectReference { get; set; }
+    }
+
+    public class AddedComponent
+    {
+        public UnityEngine.Component? instanceComponent { get; set; }
+    }
+
+    public class RemovedComponent
+    {
+        public UnityEngine.Component? assetComponent { get; set; }
+    }
+
+    public static class PrefabUtility
+    {
+        public static Func<UnityEngine.Object, bool>? IsPartOfAnyPrefabInstanceFunc;
+        public static Func<UnityEngine.Object, UnityEngine.Object?>? GetCorrespondingObjectFromSourceFunc;
+        public static Func<UnityEngine.Object, PropertyModification[]>? GetPropertyModificationsFunc;
+        public static Func<UnityEngine.GameObject, List<AddedComponent>>? GetAddedComponentsFunc;
+        public static Func<UnityEngine.GameObject, List<RemovedComponent>>? GetRemovedComponentsFunc;
+
+        public static bool IsPartOfAnyPrefabInstance(UnityEngine.Object target) =>
+            IsPartOfAnyPrefabInstanceFunc?.Invoke(target) ?? false;
+
+        public static T? GetCorrespondingObjectFromSource<T>(T target) where T : UnityEngine.Object =>
+            GetCorrespondingObjectFromSourceFunc?.Invoke(target) as T;
+
+        public static PropertyModification[] GetPropertyModifications(UnityEngine.Object target) =>
+            GetPropertyModificationsFunc?.Invoke(target) ?? Array.Empty<PropertyModification>();
+
+        public static List<AddedComponent> GetAddedComponents(UnityEngine.GameObject instance) =>
+            GetAddedComponentsFunc?.Invoke(instance) ?? new List<AddedComponent>();
+
+        public static List<RemovedComponent> GetRemovedComponents(UnityEngine.GameObject instance) =>
+            GetRemovedComponentsFunc?.Invoke(instance) ?? new List<RemovedComponent>();
+    }
+
     namespace Compilation
     {
         public enum AssembliesType
@@ -432,6 +482,27 @@ namespace UnityLeanMcp
                 UnityEditor.SerializedPropertyType.String => $"\"{prop.stringValue}\"",
                 _ => prop.propertyType.ToString()
             };
+        }
+
+        public static bool IsMutatingComponentProperty(string propName)
+        {
+            if (string.IsNullOrEmpty(propName)) return false;
+
+            switch (propName.ToLowerInvariant())
+            {
+                case "material":
+                case "materials":
+                case "mesh":
+                case "physicmaterial":
+                case "trailmaterial":
+                case "trailmaterials":
+                case "profile":
+                case "materialtemplate":
+                case "coefficients":
+                    return true;
+                default:
+                    return false;
+            }
         }
     }
 

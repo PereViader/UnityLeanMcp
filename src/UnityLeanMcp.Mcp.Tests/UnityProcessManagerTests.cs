@@ -1899,4 +1899,134 @@ public class UnityProcessManagerTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult<string?>(null);
     }
+
+    [Fact]
+    public void CommandLineTargetsProject_LinuxNulDelimitedCmdline_ResolvesCwdSymlinks()
+    {
+        string realRoot = Path.Combine(Path.GetTempPath(), "unity_real_root_" + Guid.NewGuid().ToString("N"));
+        string symlinkRoot = Path.Combine(Path.GetTempPath(), "unity_symlink_root_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(realRoot);
+
+        try
+        {
+            var resolver = new UnityPathResolver(realRoot);
+            var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+
+            const int testPid = 54321;
+            pm.LinuxProcessCwdProvider = pid => pid == testPid ? symlinkRoot : null;
+
+            FileUnityProcessIdentityStore.CustomLinkResolver = path =>
+            {
+                string normalized = path.Replace('\\', '/').TrimEnd('/');
+                if (string.Equals(normalized, symlinkRoot.Replace('\\', '/').TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+                {
+                    return realRoot;
+                }
+                return null;
+            };
+
+            // 1. NUL-delimited relative -projectPath .
+            Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath\0.\0-nographics\0", testPid));
+
+            // 2. NUL-delimited relative -projectPath ./
+            Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath\0./\0-nographics\0", testPid));
+
+            // 3. NUL-delimited with space within argument token
+            Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath .\0-nographics\0", testPid));
+
+            // 4. NUL-delimited with -projectPath=.
+            Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath=.\0-nographics\0", testPid));
+
+            // 5. NUL-delimited targeting symlink directly
+            Assert.True(pm.CommandLineTargetsProject($"Unity\0-batchmode\0-projectPath\0{symlinkRoot}\0-nographics\0", testPid));
+
+            // 6. NUL-delimited targeting unrelated directory
+            Assert.False(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath\0/tmp/other_project\0-nographics\0", testPid));
+        }
+        finally
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = null;
+            try { Directory.Delete(realRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void ResolveRealPath_MultiHopAndIntermediateSymlinks_ResolvesCanonicalPath()
+    {
+        try
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = path =>
+            {
+                string norm = path.Replace('\\', '/').TrimEnd('/');
+                if (norm.EndsWith("/hop1", StringComparison.OrdinalIgnoreCase)) return "/hop2";
+                if (norm.EndsWith("/hop2", StringComparison.OrdinalIgnoreCase)) return "/hop3";
+                if (norm.EndsWith("/hop3", StringComparison.OrdinalIgnoreCase)) return "/canonical";
+                if (norm.EndsWith("/parent_link", StringComparison.OrdinalIgnoreCase)) return "/real_parent";
+                return null;
+            };
+
+            // Multi-hop chain: hop1 -> hop2 -> hop3 -> canonical
+            string result1 = FileUnityProcessIdentityStore.ResolveRealPath("/hop1");
+            Assert.Equal(Path.GetFullPath("/canonical").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), result1);
+
+            // Intermediate ancestor symlink: /parent_link/child/sub -> /real_parent/child/sub
+            string result2 = FileUnityProcessIdentityStore.ResolveRealPath("/parent_link/child/sub");
+            Assert.Equal(Path.GetFullPath("/real_parent/child/sub").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), result2);
+
+            // PathsEqual using multi-hop symlink
+            Assert.True(FileUnityProcessIdentityStore.PathsEqual("/hop1", "/canonical"));
+            Assert.True(FileUnityProcessIdentityStore.PathsEqual("/parent_link/child/sub", "/real_parent/child/sub"));
+        }
+        finally
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = null;
+        }
+    }
+
+    [Fact]
+    public void ResolveRealPath_CircularSymlink_DoesNotHangAndReturnsBoundedPath()
+    {
+        try
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = path =>
+            {
+                string norm = path.Replace('\\', '/').TrimEnd('/');
+                return norm switch
+                {
+                    "/loop_a" => "/loop_b",
+                    "/loop_b" => "/loop_a",
+                    _ => null
+                };
+            };
+
+            // Should terminate within bounded hops without infinite recursion or hanging
+            string result = FileUnityProcessIdentityStore.ResolveRealPath("/loop_a");
+            Assert.NotNull(result);
+        }
+        finally
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = null;
+        }
+    }
+
+    [Fact]
+    public void UnityProcessManager_TryExtractProjectPathArgument_ParsesQuotedAndNulArguments()
+    {
+        // 1. Quoted path with spaces
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath \"C:/My Folder/My Project\" -nographics", out var path1));
+        Assert.Equal("C:/My Folder/My Project", path1);
+
+        // 2. Quoted path with = syntax and spaces
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=\"/Users/test/Unity Projects/Repo\" -nographics", out var path2));
+        Assert.Equal("/Users/test/Unity Projects/Repo", path2);
+
+        // 3. NUL-delimited with spaces in path
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("Unity\0-batchmode\0-projectPath\0/var/opt/my unity project\0-nographics", out var path3));
+        Assert.Equal("/var/opt/my unity project", path3);
+
+        // 4. Incomplete or trailing -projectPath
+        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath", out _));
+        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=", out _));
+        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("", out _));
+    }
 }

@@ -723,6 +723,27 @@ namespace UnityLeanMcp
                 return null;
             }
         }
+
+        internal static bool IsMutatingComponentProperty(string propName)
+        {
+            if (string.IsNullOrEmpty(propName)) return false;
+
+            switch (propName.ToLowerInvariant())
+            {
+                case "material":
+                case "materials":
+                case "mesh":
+                case "physicmaterial":
+                case "trailmaterial":
+                case "trailmaterials":
+                case "profile":
+                case "materialtemplate":
+                case "coefficients":
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 
     public class TransformFormatter : IUnityTypeFormatter
@@ -961,18 +982,32 @@ namespace UnityLeanMcp
             var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             if (props.Length == 0) return "{}";
 
+            var validProps = new List<PropertyInfo>();
+            for (int i = 0; i < props.Length; i++)
+            {
+                var p = props[i];
+                if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
+                if (UnityResultFormatter.IsMutatingComponentProperty(p.Name) &&
+                    (value is Component || value is UnityEngine.Object || typeof(UnityEngine.Object).IsAssignableFrom(p.DeclaringType)))
+                {
+                    continue;
+                }
+                validProps.Add(p);
+            }
+            if (validProps.Count == 0) return "{}";
+
             var sb = new StringBuilder();
             if (prettyPrint)
             {
                 sb.AppendLine("{");
-                for (int i = 0; i < props.Length; i++)
+                for (int i = 0; i < validProps.Count; i++)
                 {
-                    var prop = props[i];
+                    var prop = validProps[i];
                     object propVal = null;
                     try { propVal = prop.GetValue(value, null); } catch (Exception ex) { propVal = $"<error: {ex.Message}>"; }
                     string childStr = formatChild != null ? formatChild(propVal) : UnityResultFormatter.FormatResult(propVal, false, prettyPrint);
                     sb.Append("  ").Append(prop.Name).Append(" = ").Append(childStr);
-                    if (i < props.Length - 1) sb.Append(",");
+                    if (i < validProps.Count - 1) sb.Append(",");
                     sb.AppendLine();
                 }
                 sb.Append("}");
@@ -980,14 +1015,14 @@ namespace UnityLeanMcp
             else
             {
                 sb.Append("{ ");
-                for (int i = 0; i < props.Length; i++)
+                for (int i = 0; i < validProps.Count; i++)
                 {
-                    var prop = props[i];
+                    var prop = validProps[i];
                     object propVal = null;
                     try { propVal = prop.GetValue(value, null); } catch (Exception ex) { propVal = $"<error: {ex.Message}>"; }
                     string childStr = formatChild != null ? formatChild(propVal) : UnityResultFormatter.FormatResult(propVal, false, prettyPrint);
                     sb.Append(prop.Name).Append(" = ").Append(childStr);
-                    if (i < props.Length - 1) sb.Append(", ");
+                    if (i < validProps.Count - 1) sb.Append(", ");
                 }
                 sb.Append(" }");
             }
