@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Threading;
 using NUnit.Framework;
 using UnityLeanMcp;
+using PereViader.UnityLeanMcp.Editor;
 
 namespace UnityLeanMcpTests
 {
