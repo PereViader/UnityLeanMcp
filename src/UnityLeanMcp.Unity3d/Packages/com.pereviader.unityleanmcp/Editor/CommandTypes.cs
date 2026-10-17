@@ -118,6 +118,7 @@ namespace UnityLeanMcp
     {
         public string message;
         public string logType;
+        public string stackTrace;
     }
 
     [Serializable]

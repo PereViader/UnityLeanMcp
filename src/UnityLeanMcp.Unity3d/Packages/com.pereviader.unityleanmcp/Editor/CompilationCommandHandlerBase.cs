@@ -53,8 +53,9 @@ namespace PereViader.UnityLeanMcp.Editor
             }
 
             UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
+            RefreshErrorLogCapture.StartCapture(operationId);
             UnityLeanMcpCompilationTracker.RefreshPending = true;
-            UnityLeanMcpCompilationTracker.CompilationRequested = true;
+            UnityLeanMcpCompilationTracker.AwaitingCompilationStart = true;
             UnityCommandGate.Update(operationId, OperationKind == OperationKinds.Refresh ? OperationStatus.Refreshing : OperationStatus.Recompiling);
 
             try
@@ -63,7 +64,8 @@ namespace PereViader.UnityLeanMcp.Editor
             }
             catch (Exception ex)
             {
-                UnityLeanMcpCompilationTracker.CompilationRequested = false;
+                RefreshErrorLogCapture.StopActiveCapture();
+                UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
                 var result = new UnityRefreshResult { operationId = operationId, success = false, message = ex.ToString() };
                 UnityCommandGate.PublishResult(OperationKind, operationId,
                     UnityLeanMcpPaths.GetRefreshResultFile(operationId), JsonUtility.ToJson(result, true));

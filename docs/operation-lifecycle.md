@@ -109,6 +109,6 @@ Persist native ownership before publishing the worker snapshot; erase native own
 
 ## Code and history
 
-[UnityCommandGate](../src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/Editor/UnityCommandGate.cs), [UnityLeanMcpServer](../src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/Editor/UnityLeanMcpServer.cs), [OperationPoller](../src/UnityLeanMcp.Mcp/OperationPoller.cs).
+[UnityCommandGate](../src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/Editor/UnityCommandGate.cs), [UnityLeanMcpCompilationTracker](../src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/Editor/UnityLeanMcpCompilationTracker.cs), [RefreshErrorLogCapture](../src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/Editor/RefreshErrorLogCapture.cs), [UnityLeanMcpServer](../src/UnityLeanMcp.Unity3d/Packages/com.pereviader.unityleanmcp/Editor/UnityLeanMcpServer.cs), [OperationPoller](../src/UnityLeanMcp.Mcp/OperationPoller.cs).
 
 History anchors (inspect with `git show <commit>`): `75f3116` (asset-import worker exclusion), `c585b64` (SessionState gate), `c0a105d` (retry pacing and removal of host semaphore).

@@ -814,6 +814,7 @@ namespace UnityLeanMcp
     public class ConsoleLogEntry
     {
         public string type = "";
+        public string logType = "";
         public string message = "";
         public string stackTrace = "";
     }

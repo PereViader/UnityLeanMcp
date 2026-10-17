@@ -228,7 +228,7 @@ namespace UnityLeanMcpTests
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
             var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
-            var scoped = typeof(UnityLeanMcpCompilationTracker).GetField("s_ScopedDiagnostics", flags);
+            var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
             var capture = typeof(UnityLeanMcpCompilationTracker).GetMethod("CaptureOperationError", flags);
             var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
             object originalSnapshot = snapshot.GetValue(null), originalScoped = scoped.GetValue(null);
@@ -261,7 +261,7 @@ namespace UnityLeanMcpTests
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
             var tracker = typeof(UnityLeanMcpCompilationTracker);
             var assemblies = (System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>)tracker.GetField("s_AssemblyDiagnostics", flags).GetValue(null);
-            var scoped = tracker.GetField("s_ScopedDiagnostics", flags);
+            var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
             object originalScoped = scoped.GetValue(null);
             string originalSession = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
             string assembly = "test-assembly-" + Guid.NewGuid().ToString("N");
@@ -454,7 +454,7 @@ namespace UnityLeanMcpTests
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
             var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
-            var scoped = typeof(UnityLeanMcpCompilationTracker).GetField("s_ScopedDiagnostics", flags);
+            var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
             var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
             var init = typeof(UnityLeanMcpCompilationTracker).GetMethod("InitializeMainThread", flags);
             object originalSnapshot = snapshot.GetValue(null);
@@ -527,7 +527,7 @@ namespace UnityLeanMcpTests
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
             var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
-            var scoped = typeof(UnityLeanMcpCompilationTracker).GetField("s_ScopedDiagnostics", flags);
+            var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
             var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
             object originalSnapshot = snapshot.GetValue(null);
             object originalScoped = scoped.GetValue(null);

@@ -43,16 +43,24 @@ namespace UnityLeanMcp
                 }
 
                 string boundedCondition = Truncate(condition);
+                string boundedStackTrace = null;
+                if ((type == LogType.Error || type == LogType.Exception || type == LogType.Assert) && !string.IsNullOrEmpty(stackTrace))
+                {
+                    boundedStackTrace = Truncate(stackTrace);
+                }
+
+                int entryLength = boundedCondition.Length + (boundedStackTrace != null ? boundedStackTrace.Length : 0);
                 int maxStoredCharacters = MaxTotalMessageCharacters - OutputTruncationMarker.Length;
                 if (m_Logs.Count < MaxEntries &&
-                    m_TotalMessageCharacters + boundedCondition.Length <= maxStoredCharacters)
+                    m_TotalMessageCharacters + entryLength <= maxStoredCharacters)
                 {
                     m_Logs.Add(new ConsoleLogEntry
                     {
                         message = boundedCondition,
-                        logType = type.ToString()
+                        logType = type.ToString(),
+                        stackTrace = boundedStackTrace
                     });
-                    m_TotalMessageCharacters += boundedCondition.Length;
+                    m_TotalMessageCharacters += entryLength;
                 }
                 else if (!m_LimitReached)
                 {

@@ -21,88 +21,32 @@ namespace UnityLeanMcp
     {
         private static readonly Dictionary<string, List<string>> s_AssemblyDiagnostics = new Dictionary<string, List<string>>();
         private static readonly object s_DiagnosticsLock = new object();
-        private const string ScopedDiagnosticsKey = "UnityLeanMcp_RefreshDiagnostics";
-        private static ScopedDiagnostics s_ScopedDiagnostics = new ScopedDiagnostics();
-        private static int s_MainThreadId;
-
         private static readonly System.Text.RegularExpressions.Regex s_LeadingLocationRegex = new System.Text.RegularExpressions.Regex(
             @"^(?<file>(?:[a-zA-Z]:[\\/]|/|(?:Assets|Packages|[A-Za-z0-9_.\-@\+\(\)]+)[\\/])[^:\r\n'""]*?)(?:\((?<line>\d+)(?:,\s*(?<col>\d+))?\)|:(?<line>\d+)(?::(?<col>\d+))?)?:\s*(?<rest>.*)$",
             System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        private static readonly System.Text.RegularExpressions.Regex s_TrailingShaderLocationRegex = new System.Text.RegularExpressions.Regex(
-            @"\bat\s+(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n'""]+?)(?:\((?<line>\d+)(?:,\s*(?<col>\d+))?\)|:(?<line>\d+)(?::(?<col>\d+))?\b)(?![/\\])",
-            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        private static readonly System.Text.RegularExpressions.Regex s_QuotedAssetRegex = new System.Text.RegularExpressions.Regex(
-            @"(?:['""](?<file>(?:Assets|Packages)[/\\].+?\.[a-zA-Z0-9_\-]+)['""]|(?<file>(?:Assets|Packages)[/\\].+?\.[a-zA-Z0-9_\-]+)(?:[:\s,\r\n'""\)\.;!]|$))",
-            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        private static readonly System.Text.RegularExpressions.Regex s_StackTraceLocationRegex = new System.Text.RegularExpressions.Regex(
-            @"(?:(?:\)\s+in|\(at|\bin(?=\s+(?:[a-zA-Z]:[\\/]|/|(?:Assets|Packages)[\\/])))\s+)(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n]+?):(?:line\s+)?(?<line>\d+)\)?",
-            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        private static readonly System.Text.RegularExpressions.Regex s_BareStackTraceLocationRegex = new System.Text.RegularExpressions.Regex(
-            @"^\s*at\s+(?<file>(?:[a-zA-Z]:[\\/]|/|[A-Za-z0-9_.\-@\+\s\(\)]+[\\/])[^:\r\n]+?):(?:line\s+)?(?<line>\d+)\)?$",
-            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Multiline);
 
         private static readonly System.Text.RegularExpressions.Regex s_IsErrorRegex = new System.Text.RegularExpressions.Regex(
             @"^(?!(?:warning|info)\b)(?:(?:[a-zA-Z]:[\\/])?[^:\r\n]+(?:\(\d+(?:,\s*\d+)?\)|:\d+(?::\d+)?)?:\s*)?error(?::|\s|$)",
             System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        internal const int MaxScopedDiagnosticsCount = 200;
+        internal const int MaxScopedDiagnosticsCount = RefreshErrorLogCapture.MaxScopedDiagnosticsCount;
 
         internal static void CaptureOperationError(string message, string stackTrace, LogType type)
         {
-            if (type != LogType.Error && type != LogType.Exception && type != LogType.Assert) return;
-            // Publication diagnostics are infrastructure failures, not errors from asset import.
-            if (message != null && message.StartsWith("UnityLeanMcp:", StringComparison.Ordinal)) return;
-            var active = UnityCommandGate.ReadSnapshot();
-            if (active == null || (active.Kind != OperationKinds.Refresh && active.Kind != OperationKinds.Recompile)) return;
-            string formatted = FormatOperationDiagnostic(message, stackTrace, true);
-            if (string.IsNullOrEmpty(formatted)) return;
-            lock (s_DiagnosticsLock)
-            {
-                if (s_ScopedDiagnostics.operationId != active.OperationId)
-                    s_ScopedDiagnostics = new ScopedDiagnostics { operationId = active.OperationId };
-                if (s_ScopedDiagnostics.messages.Count >= MaxScopedDiagnosticsCount)
-                    return;
-                if (!s_ScopedDiagnostics.messages.Contains(formatted))
-                {
-                    s_ScopedDiagnostics.messages.Add(formatted);
-                    PersistScopedDiagnostics();
-                }
-            }
+            RefreshErrorLogCapture.RecordError(message, stackTrace, type);
         }
-
-        private static void PersistScopedDiagnostics()
-        {
-            if (s_MainThreadId != 0 && Thread.CurrentThread.ManagedThreadId != s_MainThreadId) return;
-            lock (s_DiagnosticsLock)
-            {
-                try
-                {
-                    SessionState.SetString(ScopedDiagnosticsKey, JsonUtility.ToJson(s_ScopedDiagnostics));
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError($"UnityLeanMcp: Failed to persist scoped diagnostics: {e}");
-                }
-            }
-        }
-
-
-        private const int CompilationRequestIdleFrameThreshold = 3;
 
         private static volatile bool s_IsCompiling;
         private static volatile bool s_IsUpdating;
         private static volatile bool s_RefreshPending;
         private static volatile bool s_ScriptCompilationFailed;
-        private static volatile bool s_CompilationRequested;
+        private static volatile bool s_AwaitingCompilationStart;
+        private static volatile bool s_CompilationInProgress;
+        private static volatile bool s_CompilationFinished;
         // Conservative latch for changes reported by Unity's project-change
         // notification. It starts set after a domain load because the client
         // cannot safely assume that an earlier process refreshed this domain.
         private static volatile bool s_RefreshRequired = true;
-        private static int s_CompilationRequestIdleFrames;
         private static string s_ObservedOperationId;
         private static int s_SettledUpdateCount;
 
@@ -133,63 +77,56 @@ namespace UnityLeanMcp
             set => s_RefreshPending = value;
         }
 
-        public static bool CompilationRequested
+        public static bool AwaitingCompilationStart
         {
-            get => s_CompilationRequested;
+            get => s_AwaitingCompilationStart;
             set
             {
-                s_CompilationRequested = value;
-                s_CompilationRequestIdleFrames = 0;
+                s_AwaitingCompilationStart = value;
+                if (value)
+                {
+                    s_CompilationInProgress = false;
+                    s_CompilationFinished = false;
+                }
             }
+        }
+
+        public static bool CompilationInProgress
+        {
+            get => s_CompilationInProgress;
+            set
+            {
+                s_CompilationInProgress = value;
+                if (value)
+                {
+                    s_AwaitingCompilationStart = false;
+                    s_CompilationFinished = false;
+                }
+            }
+        }
+
+        public static bool CompilationFinished
+        {
+            get => s_CompilationFinished;
+            set
+            {
+                s_CompilationFinished = value;
+                if (value)
+                {
+                    s_AwaitingCompilationStart = false;
+                    s_CompilationInProgress = false;
+                }
+            }
+        }
+
+        public static bool CompilationRequested
+        {
+            get => s_AwaitingCompilationStart;
+            set => AwaitingCompilationStart = value;
         }
 
         private static bool s_Initialized;
         private static readonly object s_InitLock = new object();
-
-        private static Type s_LogEntriesType;
-        private static Type s_LogEntryType;
-        private static MethodInfo s_GetCountMethod;
-        private static MethodInfo s_GetEntryInternalMethod;
-        private static MethodInfo s_StartGettingEntriesMethod;
-        private static MethodInfo s_EndGettingEntriesMethod;
-        private static MethodInfo s_ClearMethod;
-        private static FieldInfo s_ConditionField;
-        private static FieldInfo s_ErrorNumField;
-        private static FieldInfo s_FileField;
-        private static FieldInfo s_LineField;
-        private static FieldInfo s_ColumnField;
-        private static FieldInfo s_ModeField;
-        private static bool s_LogReflectionInitialized;
-
-        private static void EnsureLogReflectionCached()
-        {
-            if (s_LogReflectionInitialized) return;
-
-            s_LogEntriesType = CommandHelper.FindType("UnityEditor.LogEntries") ?? CommandHelper.FindType("UnityEditorInternal.LogEntries");
-            s_LogEntryType = CommandHelper.FindType("UnityEditor.LogEntry") ?? CommandHelper.FindType("UnityEditorInternal.LogEntry");
-
-            if (s_LogEntriesType != null)
-            {
-                s_GetCountMethod = s_LogEntriesType.GetMethod("GetCount", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                s_GetEntryInternalMethod = s_LogEntriesType.GetMethod("GetEntryInternal", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                s_StartGettingEntriesMethod = s_LogEntriesType.GetMethod("StartGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                s_EndGettingEntriesMethod = s_LogEntriesType.GetMethod("EndGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                s_ClearMethod = s_LogEntriesType.GetMethod("Clear", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-            }
-
-            if (s_LogEntryType != null)
-            {
-                s_ConditionField = s_LogEntryType.GetField("condition", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                                ?? s_LogEntryType.GetField("message", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                s_ErrorNumField = s_LogEntryType.GetField("errorNum", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                s_FileField = s_LogEntryType.GetField("file", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                s_LineField = s_LogEntryType.GetField("line", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                s_ColumnField = s_LogEntryType.GetField("column", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                s_ModeField = s_LogEntryType.GetField("mode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            }
-
-            s_LogReflectionInitialized = true;
-        }
 
         public static void EnsureInitialized()
         {
@@ -204,19 +141,8 @@ namespace UnityLeanMcp
 
         private static void InitializeMainThread()
         {
-            s_MainThreadId = Thread.CurrentThread.ManagedThreadId;
             UnityLeanMcpPaths.EnsureInitialized();
-            EnsureLogReflectionCached();
-            string scopedJson = SessionState.GetString(ScopedDiagnosticsKey, "");
-            if (!string.IsNullOrEmpty(scopedJson))
-            {
-                try { s_ScopedDiagnostics = JsonUtility.FromJson<ScopedDiagnostics>(scopedJson) ?? new ScopedDiagnostics(); }
-                catch { s_ScopedDiagnostics = new ScopedDiagnostics(); }
-            }
-            Application.logMessageReceivedThreaded -= CaptureOperationError;
-            Application.logMessageReceivedThreaded += CaptureOperationError;
-            AssemblyReloadEvents.beforeAssemblyReload -= PersistScopedDiagnostics;
-            AssemblyReloadEvents.beforeAssemblyReload += PersistScopedDiagnostics;
+            RefreshErrorLogCapture.InitializeMainThread();
             UpdateCompilationState();
             var operation = UnityCommandGate.ReadSnapshot();
             bool resumingCompilation = operation != null &&
@@ -242,13 +168,13 @@ namespace UnityLeanMcp
         private static void OnCompilationStarted(object obj)
         {
             s_IsCompiling = true;
-            s_CompilationRequested = false;
-            s_CompilationRequestIdleFrames = 0;
+            CompilationInProgress = true;
         }
 
         private static void OnCompilationFinished(object obj)
         {
             s_IsCompiling = false;
+            CompilationFinished = true;
             s_ScriptCompilationFailed = EditorUtility.scriptCompilationFailed;
             WriteActiveErrorsToFile();
         }
@@ -308,8 +234,11 @@ namespace UnityLeanMcp
             lock (s_DiagnosticsLock)
             {
                 var active = UnityCommandGate.ReadSnapshot();
-                if (active != null && s_ScopedDiagnostics.operationId == active.OperationId && s_ScopedDiagnostics.messages != null)
-                    diagnostics.AddRange(s_ScopedDiagnostics.messages);
+                var refreshErrors = RefreshErrorLogCapture.GetCapturedErrors(active?.OperationId);
+                if (refreshErrors != null && refreshErrors.Count > 0)
+                {
+                    diagnostics.AddRange(refreshErrors);
+                }
                 foreach (var list in s_AssemblyDiagnostics.Values)
                 {
                     if (list != null && list.Count > 0)
@@ -422,100 +351,7 @@ namespace UnityLeanMcp
 
         internal static string FormatOperationDiagnostic(string rawMessage, string stackTrace, bool isError)
         {
-            if (string.IsNullOrWhiteSpace(rawMessage)) return null;
-            string msg = rawMessage.Trim();
-            int nlIdx = msg.IndexOfAny(new[] { '\r', '\n' });
-            if (nlIdx >= 0)
-            {
-                msg = msg.Substring(0, nlIdx).Trim();
-            }
-            if (string.IsNullOrEmpty(msg)) return null;
-
-            string file = "";
-            int line = 0;
-            int column = 0;
-
-            var leadingMatch = s_LeadingLocationRegex.Match(msg);
-            if (leadingMatch.Success)
-            {
-                file = leadingMatch.Groups["file"].Value;
-                if (leadingMatch.Groups["line"].Success)
-                {
-                    line = int.TryParse(leadingMatch.Groups["line"].Value, out int parsedLine) ? parsedLine : 0;
-                }
-                if (leadingMatch.Groups["col"].Success)
-                {
-                    column = int.TryParse(leadingMatch.Groups["col"].Value, out int parsedCol) ? parsedCol : 0;
-                }
-                msg = leadingMatch.Groups["rest"].Value;
-            }
-
-            if (string.IsNullOrEmpty(file) || line == 0)
-            {
-                var shaderMatch = s_TrailingShaderLocationRegex.Match(rawMessage);
-                if (shaderMatch.Success)
-                {
-                    if (string.IsNullOrEmpty(file))
-                    {
-                        file = shaderMatch.Groups["file"].Value;
-                    }
-                    if (shaderMatch.Groups["line"].Success)
-                    {
-                        line = int.TryParse(shaderMatch.Groups["line"].Value, out int parsedLine) ? parsedLine : 0;
-                    }
-                    if (shaderMatch.Groups["col"].Success)
-                    {
-                        column = int.TryParse(shaderMatch.Groups["col"].Value, out int parsedCol) ? parsedCol : 0;
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(file))
-            {
-                var quotedMatch = s_QuotedAssetRegex.Match(rawMessage);
-                if (quotedMatch.Success)
-                {
-                    file = quotedMatch.Groups["file"].Value;
-                }
-            }
-
-            if (string.IsNullOrEmpty(file) && !string.IsNullOrWhiteSpace(stackTrace))
-            {
-                foreach (System.Text.RegularExpressions.Match match in s_StackTraceLocationRegex.Matches(stackTrace))
-                {
-                    if (match.Success)
-                    {
-                        string candidateFile = match.Groups["file"].Value.Trim();
-                        if (candidateFile.StartsWith("<", StringComparison.Ordinal)) continue;
-                        if (match.Groups["line"].Success && int.TryParse(match.Groups["line"].Value, out int parsedLine) && parsedLine > 0)
-                        {
-                            file = candidateFile;
-                            line = parsedLine;
-                            break;
-                        }
-                    }
-                }
-
-                if (string.IsNullOrEmpty(file))
-                {
-                    foreach (System.Text.RegularExpressions.Match match in s_BareStackTraceLocationRegex.Matches(stackTrace))
-                    {
-                        if (match.Success)
-                        {
-                            string candidateFile = match.Groups["file"].Value.Trim();
-                            if (candidateFile.StartsWith("<", StringComparison.Ordinal)) continue;
-                            if (match.Groups["line"].Success && int.TryParse(match.Groups["line"].Value, out int parsedLine) && parsedLine > 0)
-                            {
-                                file = candidateFile;
-                                line = parsedLine;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            return FormatCompilerDiagnostic(msg, file, line, column, isError);
+            return RefreshErrorLogCapture.FormatDiagnostic(rawMessage, stackTrace, isError);
         }
 
         public static void UpdateCompilationState()
@@ -524,31 +360,14 @@ namespace UnityLeanMcp
             s_IsUpdating = EditorApplication.isUpdating;
             s_ScriptCompilationFailed = EditorUtility.scriptCompilationFailed;
 
-            if (s_CompilationRequested)
+            if (s_IsCompiling || EditorApplication.isCompiling)
             {
-                if (s_IsCompiling || EditorApplication.isCompiling)
-                {
-                    s_CompilationRequested = false;
-                    s_CompilationRequestIdleFrames = 0;
-                }
-                else if (s_RefreshPending || s_IsUpdating || EditorApplication.isUpdating)
-                {
-                    s_CompilationRequestIdleFrames = 0;
-                }
-                else
-                {
-                    s_CompilationRequestIdleFrames++;
-                    if (s_CompilationRequestIdleFrames >= CompilationRequestIdleFrameThreshold)
-                    {
-                        s_CompilationRequested = false;
-                        s_CompilationRequestIdleFrames = 0;
-                        WriteActiveErrorsToFile();
-                    }
-                }
+                CompilationInProgress = true;
             }
-            else
+            else if (s_CompilationInProgress && !s_IsCompiling && !EditorApplication.isCompiling)
             {
-                s_CompilationRequestIdleFrames = 0;
+                CompilationFinished = true;
+                WriteActiveErrorsToFile();
             }
 
             ObserveOperationUntilSettled();
@@ -583,7 +402,7 @@ namespace UnityLeanMcp
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
             }
 
-            if (s_RefreshPending || s_CompilationRequested || EditorApplication.isCompiling || EditorApplication.isUpdating)
+            if (s_RefreshPending || s_CompilationInProgress || EditorApplication.isCompiling || EditorApplication.isUpdating)
             {
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
                 if (snap.Status != OperationStatus.WaitingForUnity)
@@ -611,6 +430,10 @@ namespace UnityLeanMcp
             string json = JsonUtility.ToJson(result, true);
             UnityCommandGate.PublishResult(UnityCommandGate.ReadSnapshot()?.Kind, snap.OperationId,
                 UnityLeanMcpPaths.GetRefreshResultFile(snap.OperationId), json);
+            RefreshErrorLogCapture.StopActiveCapture();
+            s_AwaitingCompilationStart = false;
+            s_CompilationInProgress = false;
+            s_CompilationFinished = false;
             s_RefreshRequired = false;
             s_ObservedOperationId = null;
             Interlocked.Exchange(ref s_SettledUpdateCount, 0);
@@ -649,36 +472,12 @@ namespace UnityLeanMcp
                 UnityLeanMcpPaths.GetRefreshResultFile(operationId), json);
         }
 
-        public static void ClearActiveEntries()
-        {
-            try
-            {
-                EnsureLogReflectionCached();
-                s_ClearMethod?.Invoke(null, null);
-            }
-            catch(Exception e)
-            {
-                Debug.LogError($"UnityLeanMcp: Failed to clear active compilation diagnostics: {e}");
-            }
-        }
-
         internal static void ClearCapturedDiagnostics()
         {
             lock (s_DiagnosticsLock)
             {
-                // Compiler diagnostics describe the current assembly state. A no-op
-                // refresh after failed compilation has no new compiler callbacks;
-                // retain that evidence until the assembly callback replaces it.
-                // Only operation-scoped asset/runtime errors restart here.
-                s_ScopedDiagnostics = new ScopedDiagnostics { operationId = UnityCommandGate.ReadSnapshot()?.OperationId };
-                try
-                {
-                    if (s_MainThreadId == 0 || Thread.CurrentThread.ManagedThreadId == s_MainThreadId)
-                    {
-                        SessionState.EraseString(ScopedDiagnosticsKey);
-                    }
-                }
-                catch { }
+                var active = UnityCommandGate.ReadSnapshot();
+                RefreshErrorLogCapture.Clear(active?.OperationId);
             }
         }
 
@@ -703,53 +502,8 @@ namespace UnityLeanMcp
             var diagnostics = GetCapturedDiagnosticsSnapshot();
             try
             {
-                PersistScopedDiagnostics();
+                RefreshErrorLogCapture.Persist();
                 string errorsPath = UnityLeanMcpPaths.DiagnosticsFile;
-                var seenDiagnostics = new HashSet<string>(diagnostics, StringComparer.Ordinal);
-
-                EnsureLogReflectionCached();
-
-                if (s_LogEntriesType != null && s_LogEntryType != null && s_GetCountMethod != null && s_GetEntryInternalMethod != null && s_ConditionField != null && s_ModeField != null)
-                {
-                    s_StartGettingEntriesMethod?.Invoke(null, null);
-                    try
-                    {
-                        int count = (int) s_GetCountMethod.Invoke(null, null);
-                        var logEntry = Activator.CreateInstance(s_LogEntryType);
-                        var parameters = new object[] { 0, logEntry };
-
-                        for (int i = 0; i < count; i++)
-                        {
-                            parameters[0] = i;
-                            s_GetEntryInternalMethod.Invoke(null, parameters);
-                            var currentEntry = parameters[1];
-
-                            string message = (string) s_ConditionField.GetValue(currentEntry);
-                            int mode = (int) s_ModeField.GetValue(currentEntry);
-                            bool isCompileError = (mode & (1 << 11)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("error CS"));
-                            bool isCompileWarning = (mode & (1 << 12)) != 0 || (!string.IsNullOrEmpty(message) && message.Contains("warning CS"));
-                            // Non-compiler errors are captured only while this operation owns
-                            // the gate. Historical gameplay logs must never poison a refresh.
-                            if (isCompileError || isCompileWarning)
-                            {
-                                string file = s_FileField != null ? (string) s_FileField.GetValue(currentEntry) : "";
-                                int line = s_LineField != null ? (int) s_LineField.GetValue(currentEntry) : 0;
-                                int column = s_ColumnField != null ? (int) s_ColumnField.GetValue(currentEntry) : 0;
-
-                                bool isError = isCompileError;
-                                string formatted = FormatCompilerDiagnostic(message, file, line, column, isError);
-                                if (!string.IsNullOrEmpty(formatted) && seenDiagnostics.Add(formatted))
-                                {
-                                    diagnostics.Add(formatted);
-                                }
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        s_EndGettingEntriesMethod?.Invoke(null, null);
-                    }
-                }
 
                 if (diagnostics.Count > 0)
                 {

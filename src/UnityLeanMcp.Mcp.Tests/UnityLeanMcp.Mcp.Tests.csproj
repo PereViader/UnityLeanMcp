@@ -66,6 +66,9 @@
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpCompilationTracker.cs" Link="UnityLeanMcpCompilationTracker.cs">
       <Nullable>disable</Nullable>
     </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RefreshErrorLogCapture.cs" Link="RefreshErrorLogCapture.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollHelper.cs" Link="PollHelper.cs">
       <Nullable>disable</Nullable>
     </Compile>
@@ -85,6 +88,9 @@
       <Nullable>disable</Nullable>
     </Compile>
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.cs" Link="RunTestsHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ConsoleLogCapture.cs" Link="ConsoleLogCapture.cs">
       <Nullable>disable</Nullable>
     </Compile>
   </ItemGroup>

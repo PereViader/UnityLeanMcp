@@ -5,6 +5,7 @@ using UnityLeanMcp;
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("CommandGate")]
 public sealed class CommandGatePublicationTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

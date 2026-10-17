@@ -28,6 +28,9 @@ public class ConsoleLogEntry
 
     [JsonPropertyName("logType")]
     public string LogType { get; set; } = "";
+
+    [JsonPropertyName("stackTrace")]
+    public string? StackTrace { get; set; }
 }
 
 public interface IOperationResult

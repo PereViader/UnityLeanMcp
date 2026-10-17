@@ -72,7 +72,7 @@ public class LifecycleAndCompilationTests
         });
 
         Assert.False(result.IsError, result.Text);
-        Assert.Contains("OK:BUSY eval ", result.Text);
+        Assert.Contains("OK:BUSY eval", result.Text);
     }
 
     [Fact]

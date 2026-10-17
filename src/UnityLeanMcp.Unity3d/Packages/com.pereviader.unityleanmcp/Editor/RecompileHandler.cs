@@ -1,3 +1,4 @@
+using UnityEditor;
 using UnityEditor.Compilation;
 using UnityLeanMcp;
 
@@ -7,6 +8,10 @@ namespace PereViader.UnityLeanMcp.Editor
     {
         protected override string OperationKind => OperationKinds.Recompile;
         protected override string StatusWord => "RECOMPILING";
-        protected override void ExecuteCompilation() => CompilationPipeline.RequestScriptCompilation(RequestScriptCompilationOptions.CleanBuildCache);
+        protected override void ExecuteCompilation()
+        {
+            AssetDatabase.Refresh();
+            CompilationPipeline.RequestScriptCompilation(RequestScriptCompilationOptions.CleanBuildCache);
+        }
     }
 }

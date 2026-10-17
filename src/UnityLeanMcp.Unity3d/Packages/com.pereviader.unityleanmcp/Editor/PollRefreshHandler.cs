@@ -24,35 +24,60 @@ namespace UnityLeanMcp
                 return "ERROR Invalid refresh operation id.";
             }
 
-            if (!string.IsNullOrEmpty(operationId) && UnityLeanMcpCompilationTracker.TryReadRefreshResultThreadSafe(operationId, out var result))
+            bool isCorrelated = !string.IsNullOrEmpty(operationId);
+
+            if (isCorrelated && UnityLeanMcpCompilationTracker.TryReadRefreshResultThreadSafe(operationId, out var result))
             {
                 if (result.Interrupted) return $"INTERRUPTION {PollHelper.EscapeLine(result.Message)}";
                 return result.Success ? "READY" : "COMPILATION_ERROR";
             }
+
             var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null)
             {
-                if (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile)
+                if (isCorrelated)
                 {
-                    if (operation.Status == OperationStatus.Interrupted)
+                    if (operation.OperationId == operationId)
                     {
-                        return "INTERRUPTION Unity editor restarted before the operation completed.";
+                        if (operation.Status == OperationStatus.Interrupted)
+                        {
+                            return "INTERRUPTION Unity editor restarted before the operation completed.";
+                        }
+                        return "COMPILING";
                     }
-                    return "COMPILING";
-                }
 
-                if (string.IsNullOrEmpty(operationId) || operation.OperationId != operationId)
+                    return $"BUSY {operation.Kind}";
+                }
+                else
                 {
-                    return $"BUSY {operation.Kind} {operation.OperationId}";
+                    if (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile)
+                    {
+                        if (operation.Status == OperationStatus.Interrupted)
+                        {
+                            return "INTERRUPTION Unity editor restarted before the operation completed.";
+                        }
+                        return "COMPILING";
+                    }
+
+                    return $"BUSY {operation.Kind}";
                 }
             }
 
-            if (UnityLeanMcpCompilationTracker.RefreshPending || UnityLeanMcpCompilationTracker.CompilationRequested)
+            if (isCorrelated)
             {
-                return "COMPILING";
+                if (UnityLeanMcpCompilationTracker.TryReadRefreshResultThreadSafe(operationId, out result))
+                {
+                    if (result.Interrupted) return $"INTERRUPTION {PollHelper.EscapeLine(result.Message)}";
+                    return result.Success ? "READY" : "COMPILATION_ERROR";
+                }
+
+                return "IDLE";
             }
 
-            if (UnityLeanMcpCompilationTracker.IsCompiling)
+            if (UnityLeanMcpCompilationTracker.RefreshPending ||
+                UnityLeanMcpCompilationTracker.AwaitingCompilationStart ||
+                UnityLeanMcpCompilationTracker.CompilationInProgress ||
+                UnityLeanMcpCompilationTracker.IsCompiling)
             {
                 return "COMPILING";
             }
@@ -70,18 +95,12 @@ namespace UnityLeanMcp
                     return "COMPILATION_ERROR";
                 }
 
-                return "COMPILING";
-            }
-
-            if (!string.IsNullOrEmpty(operationId))
-            {
-                if (UnityLeanMcpCompilationTracker.TryReadRefreshResultThreadSafe(operationId, out result))
+                if (FileExistsSafe(diagnosticsPath))
                 {
-                    if (result.Interrupted) return $"INTERRUPTION {PollHelper.EscapeLine(result.Message)}";
-                    return result.Success ? "READY" : "COMPILATION_ERROR";
+                    return "COMPILING";
                 }
 
-                return "IDLE";
+                return "COMPILATION_ERROR";
             }
 
             if (UnityLeanMcpServer.IsPlayModeActive)
@@ -95,6 +114,19 @@ namespace UnityLeanMcp
             }
 
             return "READY";
+        }
+
+        private static bool FileExistsSafe(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                return File.Exists(path);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         internal static Func<string, long> DiagnosticsFileLengthProvider { get; set; }
