@@ -75,36 +75,21 @@ namespace UnityLeanMcp
             return OperationCancelResult.NotCancelable;
         }
 
-        public static void RecoverOnDomainLoad(UnityLeanMcpOperationState operation, bool isRestart)
+        public static void RecoverOnDomainLoad(UnityLeanMcpOperationState operation)
         {
             if (operation == null)
             {
                 return;
             }
 
-            if (isRestart)
+            const string message = "Operation was interrupted by Unity domain reload.";
+            if (TryGetHandler(operation.kind, out var handler))
             {
-                const string message = "Unity editor restarted before the operation completed.";
-                if (TryGetHandler(operation.kind, out var handler))
-                {
-                    handler.OnEditorRestarted(operation.operationId, message);
-                }
-                else
-                {
-                    UnityLeanMcpOperationStore.Complete(operation.operationId);
-                }
+                handler.OnDomainReloaded(operation.operationId, message);
             }
             else
             {
-                const string message = "Operation was interrupted by Unity domain reload.";
-                if (TryGetHandler(operation.kind, out var handler))
-                {
-                    handler.OnDomainReloaded(operation.operationId, message);
-                }
-                else
-                {
-                    UnityLeanMcpOperationStore.Complete(operation.operationId);
-                }
+                UnityLeanMcpOperationStore.Complete(operation.operationId);
             }
         }
 
@@ -137,11 +122,6 @@ namespace UnityLeanMcp
             return RunTestsHandler.CancelActiveTestRun(operationId);
         }
 
-        public void OnEditorRestarted(string operationId, string message)
-        {
-            RunTestsHandler.WriteInterruptedResult(message, operationId);
-        }
-
         public void OnDomainReloaded(string operationId, string message)
         {
             // Test runner api callbacks survive domain reload and are bound during server initialization.
@@ -161,11 +141,6 @@ namespace UnityLeanMcp
         {
             bool cancelled = EvalHandler.CancelActiveEval(operationId);
             return cancelled ? OperationCancelResult.Cancelled : OperationCancelResult.NotCancelable;
-        }
-
-        public void OnEditorRestarted(string operationId, string message)
-        {
-            EvalHandler.MarkInterrupted(message, operationId);
         }
 
         public void OnDomainReloaded(string operationId, string message)
@@ -191,11 +166,6 @@ namespace UnityLeanMcp
         public OperationCancelResult TryCancel(string operationId)
         {
             return OperationCancelResult.NotCancelable;
-        }
-
-        public void OnEditorRestarted(string operationId, string message)
-        {
-            UnityLeanMcpCompilationTracker.WriteInterruptedRefreshResult(operationId, message);
         }
 
         public void OnDomainReloaded(string operationId, string message)

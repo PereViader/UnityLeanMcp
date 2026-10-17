@@ -12,7 +12,7 @@ using Coverage = UnityEngine.TestTools.Coverage;
 
 namespace UnityLeanMcp
 {
-    internal class RunTestsHandler : ICommandHandler
+    internal partial class RunTestsHandler : ICommandHandler
     {
         public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.EditModeOnly;
         public bool IsMutating => true;
@@ -96,7 +96,8 @@ namespace UnityLeanMcp
         internal static void MarkTransportInterruption(string status)
         {
             var state = ReadRunningState();
-            if (state == null || string.IsNullOrEmpty(state.runId))
+            if (state == null || string.IsNullOrEmpty(state.runId) ||
+                state.status == OperationStatus.Cancelling || state.status == OperationStatus.Interrupted)
             {
                 return;
             }
@@ -295,7 +296,7 @@ namespace UnityLeanMcp
                             failedTests = new List<FailedTestInfo>()
                         };
                         UnityCommandGate.PublishResult(OperationKinds.Test, operationId, UnityLeanMcpPaths.GetTestResultsFile(operationId), JsonUtility.ToJson(emptyResult, true));
-                        writer.WriteLine($"SUCCESS {msg}");
+                        writer.WriteLine("RUNNING");
                         writer.Flush();
                         return;
                     }
@@ -687,6 +688,11 @@ namespace UnityLeanMcp
 
         internal static OperationCancelResult CancelActiveTestRun(string operationId)
         {
+            if (string.IsNullOrWhiteSpace(operationId))
+            {
+                return OperationCancelResult.NotFound;
+            }
+
             var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
             var runningState = ReadThreadSafeSnapshot();
 
@@ -694,38 +700,30 @@ namespace UnityLeanMcp
             if (operation == null && runningState == null)
             {
                 string resPath = UnityLeanMcpPaths.GetTestResultsFile(operationId);
-                if (!string.IsNullOrEmpty(operationId) && File.Exists(resPath))
+                if (WorkerThreadSnapshots.TryReadOperationResult(resPath, out var existing) &&
+                    existing.OperationId == operationId &&
+                    (existing.Interrupted ||
+                     existing.ResultState == OperationStatus.Cancelled ||
+                     existing.ResultState == OperationStatus.Interrupted))
                 {
-                    try
-                    {
-                        var existing = JsonUtility.FromJson<UnityTestRunResult>(CommandHelper.ReadFileWithRetry(resPath, maxRetries: 3, delayMs: 10));
-                        if (existing != null && existing.runId == operationId)
-                        {
-                            return OperationCancelResult.Cancelled;
-                        }
-                    }
-                    catch { }
+                    return OperationCancelResult.Cancelled;
                 }
 
                 return OperationCancelResult.NotFound;
             }
 
             // 2. If the operation belongs to another operation ID
-            if (operation != null && !string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
+            if (operation != null && operation.OperationId != operationId)
             {
                 return OperationCancelResult.NotCancelable;
             }
 
-            if (runningState != null && !string.IsNullOrEmpty(operationId) && runningState.RunId != operationId)
+            if (runningState != null && runningState.RunId != operationId)
             {
                 return OperationCancelResult.NotCancelable;
             }
 
             string activeRunId = operationId;
-            if (string.IsNullOrEmpty(activeRunId))
-            {
-                activeRunId = runningState?.RunId ?? operation?.OperationId;
-            }
 
             if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, activeRunId))
             {
@@ -823,11 +821,17 @@ namespace UnityLeanMcp
             }
         }
 
-        private static bool IsCancellationRequested(string runId)
+        internal static bool IsCancellationRequested(string runId)
         {
             if (string.IsNullOrEmpty(runId))
             {
                 return false;
+            }
+
+            var snapshot = UnityCommandGate.ReadSnapshot();
+            if (snapshot != null && snapshot.OperationId == runId && snapshot.Status == OperationStatus.Cancelling)
+            {
+                return true;
             }
 
             var state = ReadRunningState();

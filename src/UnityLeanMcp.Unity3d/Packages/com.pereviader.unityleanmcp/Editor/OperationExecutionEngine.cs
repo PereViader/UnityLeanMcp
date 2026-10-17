@@ -39,10 +39,15 @@ namespace UnityLeanMcp
 
         public static bool TryCancel(string operationId)
         {
+            if (string.IsNullOrWhiteSpace(operationId))
+            {
+                return false;
+            }
+
             CancellationTokenSource ctsToCancel = null;
             lock (s_CtsLock)
             {
-                if (s_ActiveCts != null && s_ActiveIsCancelable && (string.IsNullOrEmpty(operationId) || s_ActiveOperationId == operationId))
+                if (s_ActiveCts != null && s_ActiveIsCancelable && s_ActiveOperationId == operationId)
                 {
                     ctsToCancel = s_ActiveCts;
                 }
@@ -221,7 +226,7 @@ namespace UnityLeanMcp
                         {
                             FailWithException(ex, operationId, operationKind, resultFilePath, stopwatch, logCapture);
                         }
-                    }));
+                    }), TaskScheduler.Default);
                     return;
                 }
 

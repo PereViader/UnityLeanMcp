@@ -11,6 +11,7 @@ namespace PereViader.UnityLeanMcp.Editor
         public bool IsMutating => true;
         public bool RequiresCompilationSettled => false;
 
+        internal string Kind => OperationKind;
         protected abstract string OperationKind { get; }
         protected abstract string StatusWord { get; }
         protected abstract void ExecuteCompilation();

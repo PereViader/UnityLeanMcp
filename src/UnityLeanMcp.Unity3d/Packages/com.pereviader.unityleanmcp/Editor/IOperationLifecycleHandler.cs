@@ -13,7 +13,6 @@ namespace UnityLeanMcp
     {
         string OperationKind { get; }
         OperationCancelResult TryCancel(string operationId);
-        void OnEditorRestarted(string operationId, string message);
         void OnDomainReloaded(string operationId, string message);
         void OnEditorQuitting(string operationId);
     }

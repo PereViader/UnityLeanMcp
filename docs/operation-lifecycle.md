@@ -54,7 +54,7 @@ Unity-dependent initialization and execution run on the main thread. Asset-impor
 
 - Bootstrap explicitly initializes paths, gate state, compilation tracking, dispatch, Roslyn services, recovery, and lifecycle callbacks before opening the listener. Static initialization must not accidentally invoke main-thread-only APIs from a worker.
 - Worker polling uses immutable-by-convention snapshots and a Unity-independent JSON reader. Worker and teardown diagnostics use the managed file logger so they do not depend on engine services during unload.
-- Handler metadata (`ExecutionTarget`, `IsMutating`, `RequiresCompilationSettled`) controls dispatch and early busy rejection, including compilation checks for coverage reads.
+- Handler metadata (`ExecutionTarget`, `IsMutating`, `RequiresCompilationSettled`) controls dispatch and early busy rejection.
 - Public command registration can precede bootstrap. Add built-in defaults without overwriting external registrations or constructing Unity-dependent handlers on a registration caller's thread.
 - Lifecycle handlers return domain results; dispatchers own wire framing. Refresh and recompile share their common lifecycle implementation.
 - Resource cancellation and disposal occur outside synchronization locks, after checking the owning operation ID.

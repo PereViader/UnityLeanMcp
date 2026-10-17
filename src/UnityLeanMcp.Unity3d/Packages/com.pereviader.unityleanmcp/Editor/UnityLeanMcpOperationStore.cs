@@ -12,7 +12,6 @@ namespace UnityLeanMcp
         public string operationId;
         public string kind;
         public string status;
-        public string editorSessionId;
         public string startedUtc;
         public string updatedUtc;
     }
@@ -32,33 +31,6 @@ namespace UnityLeanMcp
     /// </summary>
     internal static class UnityLeanMcpOperationStore
     {
-        private const string EditorSessionKey = "UnityLeanMcp.EditorSessionId";
-        private static volatile string s_EditorSessionId;
-
-        internal static string EditorSessionId => s_EditorSessionId ?? "";
-
-        internal static void EnsureInitialized()
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(s_EditorSessionId))
-                {
-                    string value = SessionState.GetString(EditorSessionKey, "");
-                    if (string.IsNullOrEmpty(value))
-                    {
-                        value = Guid.NewGuid().ToString("N");
-                        SessionState.SetString(EditorSessionKey, value);
-                    }
-                    s_EditorSessionId = value;
-                }
-                UnityCommandGate.InitializeMainThread();
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"UnityLeanMcp: Failed to initialize operation store: {ex}");
-            }
-        }
-
         internal static BeginOperationResult TryBegin(string operationId, string kind, string status, out UnityLeanMcpOperationState existing)
         {
             var res = UnityCommandGate.TryBegin(kind, operationId, status, out var busyReason);
@@ -71,7 +43,6 @@ namespace UnityLeanMcp
                     kind = parts.Length > 0 ? parts[0] : "compile",
                     operationId = parts.Length > 1 ? parts[1] : "",
                     status = OperationStatus.Running,
-                    editorSessionId = EditorSessionId,
                     startedUtc = DateTime.UtcNow.ToString("o"),
                     updatedUtc = DateTime.UtcNow.ToString("o")
                 };
@@ -95,7 +66,6 @@ namespace UnityLeanMcp
                 operationId = snap.OperationId,
                 kind = snap.Kind,
                 status = snap.Status,
-                editorSessionId = EditorSessionId,
                 startedUtc = new DateTime(snap.StartTime > 0 ? snap.StartTime : DateTime.UtcNow.Ticks, DateTimeKind.Utc).ToString("o"),
                 updatedUtc = DateTime.UtcNow.ToString("o")
             };
@@ -109,7 +79,6 @@ namespace UnityLeanMcp
                 snap.OperationId,
                 snap.Kind,
                 snap.Status,
-                EditorSessionId,
                 new DateTime(snap.StartTime > 0 ? snap.StartTime : DateTime.UtcNow.Ticks, DateTimeKind.Utc).ToString("o"),
                 DateTime.UtcNow.ToString("o"));
         }

@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -172,6 +173,7 @@ namespace UnityLeanMcp
 
             string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
             var normalizedFilters = new List<string> { "" };
+            var normalizedPathCache = new Dictionary<string, string>(StringComparer.Ordinal);
 
             // Find assemblies containing scripts that match any requested filter
             var allAssemblies = CompilationPipeline.GetAssemblies();
@@ -185,7 +187,14 @@ namespace UnityLeanMcp
 
                 foreach (var srcFile in asm.sourceFiles)
                 {
-                    string normSrc = NormalizePathRelativeToProject(srcFile, projectRoot);
+                    if (string.IsNullOrEmpty(srcFile))
+                        continue;
+
+                    if (!normalizedPathCache.TryGetValue(srcFile, out string normSrc))
+                    {
+                        normSrc = NormalizePathRelativeToProject(srcFile, projectRoot);
+                        normalizedPathCache[srcFile] = normSrc;
+                    }
 
                     if (MatchesAnyFilter(normSrc, normalizedFilters))
                     {
@@ -252,7 +261,7 @@ namespace UnityLeanMcp
                     if (type == null || type.IsNested)
                         continue;
 
-                    ProcessType(type, projectRoot, normalizedFilters, pointsByFile, visitedTypes);
+                    ProcessType(type, projectRoot, normalizedFilters, pointsByFile, visitedTypes, normalizedPathCache);
                 }
             }
 
@@ -470,16 +479,28 @@ namespace UnityLeanMcp
             return result;
         }
 
-        internal static void ProcessType(Type type, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile, HashSet<Type> visitedTypes)
+        internal static void ProcessType(
+            Type type,
+            string projectRoot,
+            List<string> filters,
+            Dictionary<string, List<CoveredSequencePoint>> pointsByFile,
+            HashSet<Type> visitedTypes,
+            Dictionary<string, string> normalizedPathCache = null)
         {
+            normalizedPathCache ??= new Dictionary<string, string>(StringComparer.Ordinal);
             var methods = GetAllMethodsAndConstructorsRecursive(type, visitedTypes);
             foreach (var m in methods)
             {
-                ProcessMethod(m, projectRoot, filters, pointsByFile);
+                ProcessMethod(m, projectRoot, filters, pointsByFile, normalizedPathCache);
             }
         }
 
-        private static void ProcessMethod(MethodBase method, string projectRoot, List<string> filters, Dictionary<string, List<CoveredSequencePoint>> pointsByFile)
+        internal static void ProcessMethod(
+            MethodBase method,
+            string projectRoot,
+            List<string> filters,
+            Dictionary<string, List<CoveredSequencePoint>> pointsByFile,
+            Dictionary<string, string> normalizedPathCache = null)
         {
             if (method == null) return;
 
@@ -499,13 +520,25 @@ namespace UnityLeanMcp
             foreach (var sp in points)
             {
                 // Ignore Roslyn hidden sequence point (0xfeefee) and invalid lines
-                if (sp.line == 0xfeefee || sp.line <= 0)
+                if (sp.line == 0xfeefee || sp.line == 0 || sp.line > int.MaxValue)
                     continue;
 
                 if (string.IsNullOrEmpty(sp.filename))
                     continue;
 
-                string normFile = NormalizePathRelativeToProject(sp.filename, projectRoot);
+                string normFile;
+                if (normalizedPathCache != null)
+                {
+                    if (!normalizedPathCache.TryGetValue(sp.filename, out normFile))
+                    {
+                        normFile = NormalizePathRelativeToProject(sp.filename, projectRoot);
+                        normalizedPathCache[sp.filename] = normFile;
+                    }
+                }
+                else
+                {
+                    normFile = NormalizePathRelativeToProject(sp.filename, projectRoot);
+                }
 
                 if (!MatchesAnyFilter(normFile, filters))
                     continue;

@@ -23,6 +23,13 @@ namespace UnityLeanMcp
             s_Queue.Enqueue(action);
         }
 
+        public static void Clear()
+        {
+            while (s_Queue.TryDequeue(out _))
+            {
+            }
+        }
+
         public static void Update()
         {
             while (s_Queue.TryDequeue(out var action))

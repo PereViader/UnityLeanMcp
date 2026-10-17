@@ -9,7 +9,6 @@ namespace UnityLeanMcp
         public const string Recompile = "recompile";
         public const string Test = "test";
         public const string Eval = "eval";
-        public const string Coverage = "coverage";
     }
 
     internal static class OperationStatus
@@ -139,8 +138,10 @@ namespace UnityLeanMcp
     public class UnityOperationResult : IOperationResult
     {
         public string operationId;
+        public string runId;
         public bool success;
         public bool interrupted;
+        public string resultState;
         public string message;
         public double duration;
         public string payload;

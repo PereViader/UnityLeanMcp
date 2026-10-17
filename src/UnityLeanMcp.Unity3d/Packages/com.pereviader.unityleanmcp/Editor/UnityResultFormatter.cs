@@ -1,3 +1,5 @@
+#nullable disable
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -47,8 +49,7 @@ namespace UnityLeanMcp
         {
             private readonly HashSet<object> m_ActiveReferences =
                 new HashSet<object>(ReferenceIdentityComparer.Instance);
-            private int m_ItemsFormatted;
-            private int m_ItemsInspected;
+            private int m_ItemsVisited;
             private long m_EstimatedOutputCharacters;
             private long m_EstimatedOutputBytes;
 
@@ -80,23 +81,12 @@ namespace UnityLeanMcp
 
             public bool TryTakeItem()
             {
-                if (m_ItemsFormatted >= MaxItems)
+                if (m_ItemsVisited >= MaxItems)
                 {
                     return false;
                 }
 
-                m_ItemsFormatted++;
-                return true;
-            }
-
-            private bool TryTakeInspectionItem()
-            {
-                if (m_ItemsInspected >= MaxItems)
-                {
-                    return false;
-                }
-
-                m_ItemsInspected++;
+                m_ItemsVisited++;
                 return true;
             }
 
@@ -135,7 +125,7 @@ namespace UnityLeanMcp
                     {
                         foreach (var item in enumerable)
                         {
-                            if (!TryTakeInspectionItem())
+                            if (!TryTakeItem())
                             {
                                 return GraphGuardResult.Items;
                             }
@@ -181,58 +171,61 @@ namespace UnityLeanMcp
                 }
 
                 int fieldIndex = 0;
-                foreach (var field in value.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                for (var t = value.GetType(); t != null && t != typeof(object) && t != typeof(UnityEngine.Object); t = t.BaseType)
                 {
-                    if (field.IsStatic || field.IsNotSerialized ||
-                        (field.IsPrivate && !field.IsDefined(typeof(SerializeField), inherit: true)))
+                    foreach (var field in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
                     {
-                        continue;
-                    }
+                        if (field.IsStatic || field.IsNotSerialized ||
+                            (!field.IsPublic && !field.IsDefined(typeof(SerializeField), inherit: true)))
+                        {
+                            continue;
+                        }
 
-                    if (fieldIndex++ > 0)
-                    {
-                        objectEstimate = TryAddEstimatedOutput(1, 1); // ,
+                        if (fieldIndex++ > 0)
+                        {
+                            objectEstimate = TryAddEstimatedOutput(1, 1); // ,
+                            if (objectEstimate != GraphGuardResult.Safe)
+                            {
+                                return objectEstimate;
+                            }
+                        }
+
+                        if (prettyPrint)
+                        {
+                            objectEstimate = TryAddEstimatedOutput(1 + ((depth + 1) * 4), 1 + ((depth + 1) * 4));
+                            if (objectEstimate != GraphGuardResult.Safe)
+                            {
+                                return objectEstimate;
+                            }
+                        }
+
+                        objectEstimate = EstimateJsonString(field.Name);
                         if (objectEstimate != GraphGuardResult.Safe)
                         {
                             return objectEstimate;
                         }
-                    }
 
-                    if (prettyPrint)
-                    {
-                        objectEstimate = TryAddEstimatedOutput(1 + ((depth + 1) * 4), 1 + ((depth + 1) * 4));
+                        objectEstimate = TryAddEstimatedOutput(1, 1); // :
                         if (objectEstimate != GraphGuardResult.Safe)
                         {
                             return objectEstimate;
                         }
-                    }
 
-                    objectEstimate = EstimateJsonString(field.Name);
-                    if (objectEstimate != GraphGuardResult.Safe)
-                    {
-                        return objectEstimate;
-                    }
+                        object fieldValue;
+                        try
+                        {
+                            fieldValue = field.GetValue(value);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
 
-                    objectEstimate = TryAddEstimatedOutput(1, 1); // :
-                    if (objectEstimate != GraphGuardResult.Safe)
-                    {
-                        return objectEstimate;
-                    }
-
-                    object fieldValue;
-                    try
-                    {
-                        fieldValue = field.GetValue(value);
-                    }
-                    catch
-                    {
-                        continue;
-                    }
-
-                    var fieldResult = InspectValue(fieldValue, depth + 1, prettyPrint);
-                    if (fieldResult != GraphGuardResult.Safe)
-                    {
-                        return fieldResult;
+                        var fieldResult = InspectValue(fieldValue, depth + 1, prettyPrint);
+                        if (fieldResult != GraphGuardResult.Safe)
+                        {
+                            return fieldResult;
+                        }
                     }
                 }
 
@@ -436,7 +429,7 @@ namespace UnityLeanMcp
             lock (s_Lock)
             {
                 s_Entries.Clear();
-                s_DefaultFormattersRegistered = false;
+                Volatile.Write(ref s_DefaultFormattersRegistered, false);
                 EnsureDefaultFormattersLocked();
             }
         }
@@ -452,7 +445,7 @@ namespace UnityLeanMcp
 
         private static void EnsureDefaultFormatters()
         {
-            if (s_DefaultFormattersRegistered) return;
+            if (Volatile.Read(ref s_DefaultFormattersRegistered)) return;
             lock (s_Lock)
             {
                 EnsureDefaultFormattersLocked();
@@ -461,7 +454,7 @@ namespace UnityLeanMcp
 
         private static void EnsureDefaultFormattersLocked()
         {
-            if (s_DefaultFormattersRegistered) return;
+            if (Volatile.Read(ref s_DefaultFormattersRegistered)) return;
 
             s_Entries.Add(new FormatterEntry(new TransformFormatter(110), ++s_OrderCounter));
             s_Entries.Add(new FormatterEntry(new GameObjectFormatter(100), ++s_OrderCounter));
@@ -476,7 +469,7 @@ namespace UnityLeanMcp
             s_Entries.Add(new FormatterEntry(new JsonUtilityFallbackFormatter(-1000), ++s_OrderCounter));
 
             SortEntriesLocked();
-            s_DefaultFormattersRegistered = true;
+            Volatile.Write(ref s_DefaultFormattersRegistered, true);
         }
 
         private static void SortEntriesLocked()
@@ -613,7 +606,7 @@ namespace UnityLeanMcp
             return FormatResult(child, false, prettyPrint, context, parentDepth + 1);
         }
 
-        private static string LimitOutput(string value, FormattingContext context)
+        internal static string LimitOutput(string value, FormattingContext context)
         {
             if (value == null)
             {
@@ -633,12 +626,28 @@ namespace UnityLeanMcp
             }
 
             int markerBytes = Encoding.UTF8.GetByteCount(marker);
+            int maxPrefixBytes = context.MaxOutputBytes - markerBytes;
             int prefixLength = Math.Min(value.Length, context.MaxOutputCharacters - marker.Length);
-            while (prefixLength > 0 &&
-                   (Encoding.UTF8.GetByteCount(value, 0, prefixLength) + markerBytes > context.MaxOutputBytes ||
-                    (prefixLength < value.Length && char.IsHighSurrogate(value[prefixLength - 1]))))
+            if (prefixLength > 0 && prefixLength < value.Length && char.IsHighSurrogate(value[prefixLength - 1]))
             {
                 prefixLength--;
+            }
+
+            int currentBytes = prefixLength > 0 ? Encoding.UTF8.GetByteCount(value, 0, prefixLength) : 0;
+            while (prefixLength > 0 && currentBytes > maxPrefixBytes)
+            {
+                int step = prefixLength >= 2 &&
+                           char.IsHighSurrogate(value[prefixLength - 2]) &&
+                           char.IsLowSurrogate(value[prefixLength - 1])
+                    ? 2
+                    : 1;
+                prefixLength -= step;
+                currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, step);
+                if (prefixLength > 0 && char.IsHighSurrogate(value[prefixLength - 1]))
+                {
+                    prefixLength--;
+                    currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, 1);
+                }
             }
 
             return value.Substring(0, prefixLength) + marker;
@@ -721,27 +730,6 @@ namespace UnityLeanMcp
             catch
             {
                 return null;
-            }
-        }
-
-        internal static bool IsMutatingComponentProperty(string propName)
-        {
-            if (string.IsNullOrEmpty(propName)) return false;
-
-            switch (propName.ToLowerInvariant())
-            {
-                case "material":
-                case "materials":
-                case "mesh":
-                case "physicmaterial":
-                case "trailmaterial":
-                case "trailmaterials":
-                case "profile":
-                case "materialtemplate":
-                case "coefficients":
-                    return true;
-                default:
-                    return false;
             }
         }
     }
@@ -987,11 +975,6 @@ namespace UnityLeanMcp
             {
                 var p = props[i];
                 if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
-                if (UnityResultFormatter.IsMutatingComponentProperty(p.Name) &&
-                    (value is Component || value is UnityEngine.Object || typeof(UnityEngine.Object).IsAssignableFrom(p.DeclaringType)))
-                {
-                    continue;
-                }
                 validProps.Add(p);
             }
             if (validProps.Count == 0) return "{}";

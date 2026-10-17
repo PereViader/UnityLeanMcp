@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using UnityEditor;
 using UnityEngine;
 
@@ -31,7 +32,6 @@ namespace UnityLeanMcp
         }
     }
 
-    [InitializeOnLoad]
     public static class UnityCommandGate
     {
         [Serializable]
@@ -44,14 +44,13 @@ namespace UnityLeanMcp
         }
 
         private const string PendingResultKey = "UnityLeanMcp_PendingResult";
-        private static PendingResult s_PendingResult;
+        private static volatile PendingResult s_PendingResult;
         internal static int RetryThrottleMs = 100;
         private static long s_LastRetryTicks;
         private const string SessionKey = "UnityLeanMcp_ActiveOp";
         private static readonly object s_Lock = new object();
         private static volatile ActiveOperationSnapshot s_Snapshot;
 
-        [InitializeOnLoadMethod]
         public static void InitializeMainThread()
         {
             lock (s_Lock)
@@ -76,9 +75,15 @@ namespace UnityLeanMcp
                     string pendingJson = SessionState.GetString(PendingResultKey, null);
                     if (!string.IsNullOrEmpty(pendingJson))
                     {
-                        s_PendingResult = JsonUtility.FromJson<PendingResult>(pendingJson);
-                        if (s_PendingResult != null && s_PendingResult.OperationId == op.OperationId)
+                        PendingResult pending = null;
+                        try { pending = JsonUtility.FromJson<PendingResult>(pendingJson); } catch { }
+                        if (pending != null &&
+                            !string.IsNullOrEmpty(pending.OperationId) &&
+                            !string.IsNullOrEmpty(pending.Path) &&
+                            !string.IsNullOrEmpty(pending.Kind) &&
+                            pending.OperationId == op.OperationId)
                         {
+                            s_PendingResult = pending;
                             s_LastRetryTicks = 0;
                             EditorApplication.update -= RetryPendingResult;
                             EditorApplication.update += RetryPendingResult;
@@ -99,9 +104,8 @@ namespace UnityLeanMcp
                         return;
                     }
 
-                    // 1. Sweep non-surviving in-domain operations (eval & coverage)
-                    if (string.Equals(op.Kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(op.Kind, OperationKinds.Coverage, StringComparison.OrdinalIgnoreCase))
+                    // 1. Sweep non-surviving in-domain operations (eval)
+                    if (string.Equals(op.Kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
                     {
                         WriteInterruptedResult(op.Kind, op.OperationId, "Operation interrupted by domain reload.");
                         return;
@@ -141,7 +145,16 @@ namespace UnityLeanMcp
             if (!RunTestsHandler.TryGetTestRunnerActiveState(out bool isActive)) return;
             EditorApplication.update -= RecoverTestRun;
             if (!isActive)
-                WriteInterruptedResult(OperationKinds.Test, operation.OperationId, "Test run was interrupted by an unexpected domain reload.");
+            {
+                if (operation.Status == OperationStatus.Cancelling || RunTestsHandler.IsCancellationRequested(operation.OperationId))
+                {
+                    RunTestsHandler.WriteCancelledResult(operation.OperationId);
+                }
+                else
+                {
+                    WriteInterruptedResult(OperationKinds.Test, operation.OperationId, "Test run was interrupted by an unexpected domain reload.");
+                }
+            }
         }
 
         // Called lock-free from background worker threads
@@ -220,6 +233,13 @@ namespace UnityLeanMcp
             {
                 if (s_Snapshot != null && (string.IsNullOrEmpty(opId) || s_Snapshot.OperationId == opId))
                 {
+                    if (s_PendingResult != null && (string.IsNullOrEmpty(opId) || s_PendingResult.OperationId == opId))
+                    {
+                        SessionState.EraseString(PendingResultKey);
+                        s_PendingResult = null;
+                        s_LastRetryTicks = 0;
+                        EditorApplication.update -= RetryPendingResult;
+                    }
                     // Safe publication ordering: Erase native SessionState first, then clear volatile snapshot
                     SessionState.EraseString(SessionKey);
                     s_Snapshot = null;
@@ -253,28 +273,35 @@ namespace UnityLeanMcp
         // Each Editor tick makes a bounded I/O attempt; ownership remains held on failure.
         internal static void PublishResult(string kind, string opId, string path, string json)
         {
-            if (!IsOwnedBy(opId, kind)) return;
-            if (s_PendingResult != null && s_PendingResult.OperationId == opId) return;
-            var pending = new PendingResult { Kind = kind, OperationId = opId, Path = path, Json = json };
-            SessionState.SetString(PendingResultKey, JsonUtility.ToJson(pending));
-            s_PendingResult = pending;
-            s_LastRetryTicks = 0;
-            EditorApplication.update -= RetryPendingResult;
-            EditorApplication.update += RetryPendingResult;
+            lock (s_Lock)
+            {
+                if (!IsOwnedBy(opId, kind)) return;
+                if (s_PendingResult != null && s_PendingResult.OperationId == opId) return;
+                var pending = new PendingResult { Kind = kind, OperationId = opId, Path = path, Json = json };
+                SessionState.SetString(PendingResultKey, JsonUtility.ToJson(pending));
+                s_PendingResult = pending;
+                s_LastRetryTicks = 0;
+                EditorApplication.update -= RetryPendingResult;
+                EditorApplication.update += RetryPendingResult;
+            }
             RetryPendingResult();
         }
 
-        internal static bool HasPendingResult(string opId) => s_PendingResult != null && s_PendingResult.OperationId == opId;
+        internal static bool HasPendingResult(string opId)
+        {
+            var pending = s_PendingResult;
+            return pending != null && pending.OperationId == opId;
+        }
 
         private static void RetryPendingResult()
         {
             var pending = s_PendingResult;
             if (pending == null) return;
 
-            long now = DateTime.UtcNow.Ticks;
+            long now = Stopwatch.GetTimestamp();
             if (RetryThrottleMs > 0 && s_LastRetryTicks > 0)
             {
-                long elapsedMs = (now - s_LastRetryTicks) / TimeSpan.TicksPerMillisecond;
+                double elapsedMs = (now - s_LastRetryTicks) * 1000.0 / Stopwatch.Frequency;
                 if (elapsedMs < RetryThrottleMs)
                     return;
             }
@@ -294,11 +321,17 @@ namespace UnityLeanMcp
                 {
                     UnityLeanMcpOperationStore.TryWriteStaticHistory(UnityLeanMcpPaths.RefreshResultFile, pending.Json, pending.OperationId);
                 }
-                Complete(pending.OperationId);
-                SessionState.EraseString(PendingResultKey);
-                s_PendingResult = null;
-                s_LastRetryTicks = 0;
-                EditorApplication.update -= RetryPendingResult;
+                lock (s_Lock)
+                {
+                    if (s_PendingResult != null && s_PendingResult.OperationId == pending.OperationId)
+                    {
+                        SessionState.EraseString(PendingResultKey);
+                        s_PendingResult = null;
+                        s_LastRetryTicks = 0;
+                        EditorApplication.update -= RetryPendingResult;
+                    }
+                    Complete(pending.OperationId);
+                }
             }
             catch (Exception ex)
             {
@@ -309,8 +342,18 @@ namespace UnityLeanMcp
 
         private static void WriteInterruptedResult(string kind, string opId, string message)
         {
+            Update(opId, OperationStatus.Interrupted);
             string path = UnityLeanMcpPaths.GetResultFilePath(kind, opId);
-            string json = "{\"operationId\":\"" + opId + "\",\"runId\":\"" + opId + "\",\"success\":false,\"interrupted\":true,\"resultState\":\"Interrupted\",\"message\":\"" + message + "\"}";
+            var result = new UnityOperationResult
+            {
+                operationId = opId,
+                runId = opId,
+                success = false,
+                interrupted = true,
+                resultState = OperationStatus.Interrupted,
+                message = message
+            };
+            string json = JsonUtility.ToJson(result, true);
             PublishResult(kind, opId, path, json);
         }
     }

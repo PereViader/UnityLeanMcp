@@ -18,13 +18,17 @@ namespace UnityLeanMcp
         public static void CancelActiveOperation(string operationId, StreamWriter writer)
         {
             operationId = operationId?.Trim();
+            if (string.IsNullOrWhiteSpace(operationId))
+            {
+                writer.WriteLine("NO_OPERATION");
+                writer.Flush();
+                return;
+            }
+
             var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
             if (operation == null)
             {
-                if (!string.IsNullOrEmpty(operationId)
-                    && (IsTerminalInterruptedResult(UnityLeanMcpPaths.GetTestResultsFile(operationId), operationId)
-                        || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetEvalResultFile(operationId), operationId)
-                        || IsTerminalInterruptedRefreshResult(UnityLeanMcpPaths.GetRefreshResultFile(operationId), operationId)))
+                if (IsTerminalInterruptedResult(operationId))
                 {
                     writer.WriteLine("CANCELLED");
                     writer.Flush();
@@ -36,14 +40,19 @@ namespace UnityLeanMcp
                 return;
             }
 
-            if (!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
+            if (operation.OperationId != operationId)
             {
                 writer.WriteLine($"MISMATCH {operation.OperationId}");
                 writer.Flush();
                 return;
             }
 
-            OperationCancelResult result = OperationLifecycleRegistry.Cancel(operation.Kind, operation.OperationId);
+            OperationCancelResult result = OperationLifecycleRegistry.Cancel(operation.Kind, operationId);
+            if ((result == OperationCancelResult.NotFound || result == OperationCancelResult.NotCancelable) &&
+                IsTerminalInterruptedResult(operationId))
+            {
+                result = OperationCancelResult.Cancelled;
+            }
 
             switch (result)
             {
@@ -61,12 +70,21 @@ namespace UnityLeanMcp
             writer.Flush();
         }
 
+        private static bool IsTerminalInterruptedResult(string operationId)
+        {
+            return IsTerminalInterruptedResult(UnityLeanMcpPaths.GetTestResultsFile(operationId), operationId)
+                || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetEvalResultFile(operationId), operationId)
+                || IsTerminalInterruptedRefreshResult(UnityLeanMcpPaths.GetRefreshResultFile(operationId), operationId);
+        }
+
         private static bool IsTerminalInterruptedResult(string path, string operationId)
         {
             return !string.IsNullOrEmpty(path)
                 && WorkerThreadSnapshots.TryReadOperationResult(path, out var result)
                 && result.OperationId == operationId
-                && (result.Interrupted || result.ResultState == OperationStatus.Cancelled);
+                && (result.Interrupted
+                    || result.ResultState == OperationStatus.Cancelled
+                    || result.ResultState == OperationStatus.Interrupted);
         }
 
         private static bool IsTerminalInterruptedRefreshResult(string path, string operationId)

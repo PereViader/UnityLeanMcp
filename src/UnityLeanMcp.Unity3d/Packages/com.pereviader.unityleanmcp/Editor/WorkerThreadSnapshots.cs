@@ -14,12 +14,11 @@ namespace UnityLeanMcp
     /// </summary>
     internal sealed class WorkerOperationStateSnapshot
     {
-        public WorkerOperationStateSnapshot(string operationId, string kind, string status, string editorSessionId, string startedUtc, string updatedUtc)
+        public WorkerOperationStateSnapshot(string operationId, string kind, string status, string startedUtc, string updatedUtc)
         {
             OperationId = operationId;
             Kind = kind;
             Status = status;
-            EditorSessionId = editorSessionId;
             StartedUtc = startedUtc;
             UpdatedUtc = updatedUtc;
         }
@@ -27,7 +26,6 @@ namespace UnityLeanMcp
         public string OperationId { get; }
         public string Kind { get; }
         public string Status { get; }
-        public string EditorSessionId { get; }
         public string StartedUtc { get; }
         public string UpdatedUtc { get; }
     }
@@ -256,24 +254,13 @@ namespace UnityLeanMcp
                     return true;
                 }
 
-                if (File.Exists(path))
-                {
-                    // A marker for another run can only be stale here: the
-                    // operation gate serializes test runs. Remove it so a
-                    // newly accepted request is not lost after a crash.
-                    File.Delete(path);
-                }
-
                 string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
                     File.WriteAllText(tempPath, runId, new UTF8Encoding(false));
                     try
                     {
-                        // The destination is intentionally created only by the
-                        // move. Repeated requests race safely: the losing
-                        // writer verifies that the winner recorded this run.
-                        File.Move(tempPath, path);
+                        UnityLeanMcpStaticHistoryWriter.MoveWithOverwrite(tempPath, path);
                         return true;
                     }
                     catch (IOException)

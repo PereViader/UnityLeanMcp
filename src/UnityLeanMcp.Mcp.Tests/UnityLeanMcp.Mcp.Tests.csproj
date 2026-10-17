@@ -57,6 +57,42 @@
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.cs" Link="UnityInspect.cs">
       <Nullable>disable</Nullable>
     </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpDispatcher.cs" Link="UnityLeanMcpDispatcher.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\IOperationLifecycleHandler.cs" Link="IOperationLifecycleHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CancelOperationHandler.cs" Link="CancelOperationHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpCompilationTracker.cs" Link="UnityLeanMcpCompilationTracker.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollHelper.cs" Link="PollHelper.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollRefreshHandler.cs" Link="PollRefreshHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\EvalHandler.cs" Link="EvalHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\IUnityTypeFormatter.cs" Link="IUnityTypeFormatter.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityResultFormatter.cs" Link="UnityResultFormatter.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\GetCoverageHandler.cs" Link="GetCoverageHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\MyTestCallbacks.cs" Link="MyTestCallbacks.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.cs" Link="RunTestsHandler.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
   </ItemGroup>
 
 </Project>

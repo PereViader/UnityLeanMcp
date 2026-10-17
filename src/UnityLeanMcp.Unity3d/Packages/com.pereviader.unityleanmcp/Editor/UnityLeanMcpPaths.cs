@@ -97,9 +97,6 @@ namespace UnityLeanMcp
         public static string GetEvalResultFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? EvalResultFile : Path.Combine(TempDir, $"unity_eval_{operationId}.json");
 
-        public static string GetCoverageResultFile(string operationId) =>
-            string.IsNullOrEmpty(operationId) ? Path.Combine(TempDir, "unity_coverage_result.json") : Path.Combine(TempDir, $"unity_coverage_{operationId}.json");
-
         public static string GetTestResultsFile(string operationId) =>
             string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
 
@@ -119,11 +116,6 @@ namespace UnityLeanMcp
             if (string.Equals(kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
             {
                 return GetEvalResultFile(operationId);
-            }
-
-            if (string.Equals(kind, OperationKinds.Coverage, StringComparison.OrdinalIgnoreCase))
-            {
-                return GetCoverageResultFile(operationId);
             }
 
             throw new ArgumentOutOfRangeException(nameof(kind), kind, $"Unknown operation kind: {kind}");

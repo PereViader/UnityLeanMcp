@@ -733,25 +733,27 @@ namespace UnityLeanMcp
                                         }
                                     }
 
-                                    if (spansToRemove.Count > 0)
+                                    if (spansToRemove.Count == 0)
                                     {
-                                        spansToRemove.Sort((a, b) => a.start.CompareTo(b.start));
-                                        var chars = sourceCode.ToCharArray();
-                                        foreach (var (start, length, text) in spansToRemove)
+                                        return false;
+                                    }
+
+                                    spansToRemove.Sort((a, b) => a.start.CompareTo(b.start));
+                                    var chars = sourceCode.ToCharArray();
+                                    foreach (var (start, length, text) in spansToRemove)
+                                    {
+                                        usings.Add(text);
+                                        int end = Math.Min(start + length, chars.Length);
+                                        for (int i = start; i < end; i++)
                                         {
-                                            usings.Add(text);
-                                            int end = Math.Min(start + length, chars.Length);
-                                            for (int i = start; i < end; i++)
+                                            if (chars[i] != '\r' && chars[i] != '\n')
                                             {
-                                                if (chars[i] != '\r' && chars[i] != '\n')
-                                                {
-                                                    chars[i] = ' ';
-                                                }
+                                                chars[i] = ' ';
                                             }
                                         }
-                                        methodBody = new string(chars);
-                                        return true;
                                     }
+                                    methodBody = new string(chars);
+                                    return true;
                                 }
                             }
                         }

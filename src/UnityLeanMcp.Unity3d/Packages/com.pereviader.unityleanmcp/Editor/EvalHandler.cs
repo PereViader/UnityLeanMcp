@@ -44,7 +44,7 @@ namespace UnityLeanMcp
 
             if (UnityLeanMcpCompilationTracker.IsCompiling ||
                 UnityLeanMcpCompilationTracker.RefreshPending ||
-                UnityLeanMcpCompilationTracker.RefreshRequired)
+                (UnityLeanMcpCompilationTracker.RefreshRequired && !UnityLeanMcpServer.IsPlayModeActive))
             {
                 writer.WriteLine("BUSY compile");
                 return;
@@ -71,6 +71,7 @@ namespace UnityLeanMcp
             string resultFilePath = UnityLeanMcpPaths.GetEvalResultFile(operationId);
             var cts = OperationExecutionEngine.RegisterActiveOperation(operationId, isCancelable: true);
 
+            bool runningSent = false;
             try
             {
                 if (cts.IsCancellationRequested)
@@ -112,6 +113,7 @@ namespace UnityLeanMcp
                 // Acknowledge execution start to client immediately
                 writer.WriteLine("RUNNING");
                 writer.Flush();
+                runningSent = true;
 
                 // Execute compiled assembly under async harness
                 UnityLeanMcpOperationStore.Update(operationId, OperationStatus.Executing);
@@ -145,12 +147,15 @@ namespace UnityLeanMcp
             {
                 Debug.LogError($"UnityLeanMcp: Unhandled exception during Eval: {ex}");
                 OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, ex.ToString(), 0, null, null);
-                try
+                if (!runningSent)
                 {
-                    writer.WriteLine($"FAILURE {ProtocolCodec.EscapeLine(ex.Message)}");
-                    writer.Flush();
+                    try
+                    {
+                        writer.WriteLine($"FAILURE {ProtocolCodec.EscapeLine(ex.Message)}");
+                        writer.Flush();
+                    }
+                    catch { }
                 }
-                catch { }
             }
         }
 

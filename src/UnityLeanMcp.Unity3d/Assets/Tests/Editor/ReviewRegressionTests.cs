@@ -135,6 +135,44 @@ namespace UnityLeanMcpTests
             }
         }
 
+        [Test]
+        public void TestCallbacksRecordSuiteFailureWhenNoChildFailedAndPreservePassSkipCountsOnError()
+        {
+            using (var scope = new IsolatedOperation(OperationKinds.Test))
+            {
+                var state = new UnityTestRunState { runId = scope.Id, status = OperationStatus.Running, totalTests = 2 };
+                File.WriteAllText(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state));
+                RunTestsHandler.ClearCachedRunState();
+
+                var skippedChild = new ResultNode
+                {
+                    FullName = "Suite.SkippedLeaf",
+                    Name = "SkippedLeaf",
+                    ResultState = "Skipped",
+                    TestStatus = UnityEditor.TestTools.TestRunner.Api.TestStatus.Skipped,
+                    FailCount = 0
+                };
+                var failedSuite = new ResultNode
+                {
+                    FullName = "Suite",
+                    Name = "Suite",
+                    ResultState = "Failed: Error",
+                    TestStatus = UnityEditor.TestTools.TestRunner.Api.TestStatus.Failed,
+                    Message = "OneTimeSetUp failed",
+                    StackTrace = "Suite.cs:5",
+                    Children = new[] { skippedChild }
+                };
+
+                var callbacks = new MyTestCallbacks();
+                callbacks.BindRun(scope.Id);
+                callbacks.RunFinished(failedSuite);
+                var result = JsonUtility.FromJson<UnityTestRunResult>(File.ReadAllText(UnityLeanMcpPaths.GetTestResultsFile(scope.Id)));
+                Assert.That(result.failedTests.Count, Is.EqualTo(1));
+                Assert.That(result.failedTests[0].fullName, Is.EqualTo("Suite"));
+                Assert.That(result.failedTests[0].message, Is.EqualTo("OneTimeSetUp failed"));
+            }
+        }
+
         [Serializable] public class InstallerDocument { public string keep; public InstallerServers mcpServers; }
         [Serializable] public class InstallerServers { public InstallerServer other; }
         [Serializable] public class InstallerServer { public string command; }
@@ -144,17 +182,17 @@ namespace UnityLeanMcpTests
             public ITestAdaptor Test => null;
             public string Name { get; set; } = "Suite";
             public string FullName { get; set; } = "Suite";
-            public string ResultState => "Failed";
-            public UnityEditor.TestTools.TestRunner.Api.TestStatus TestStatus => UnityEditor.TestTools.TestRunner.Api.TestStatus.Failed;
+            public string ResultState { get; set; } = "Failed";
+            public UnityEditor.TestTools.TestRunner.Api.TestStatus TestStatus { get; set; } = UnityEditor.TestTools.TestRunner.Api.TestStatus.Failed;
             public double Duration => 1;
             public DateTime StartTime => default;
             public DateTime EndTime => default;
             public string Message { get; set; } = "";
             public string StackTrace { get; set; } = "";
             public int AssertCount => 1;
-            public int FailCount => 1;
-            public int PassCount => 0;
-            public int SkipCount => 0;
+            public int FailCount { get; set; } = 1;
+            public int PassCount { get; set; } = 0;
+            public int SkipCount { get; set; } = 0;
             public int InconclusiveCount => 0;
             public bool HasChildren => Children.Any();
             public IEnumerable<ITestResultAdaptor> Children { get; set; } = new ITestResultAdaptor[0];

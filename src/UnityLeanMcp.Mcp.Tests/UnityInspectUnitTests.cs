@@ -730,28 +730,141 @@ namespace UnityLeanMcp.Mcp.Tests
         {
             public int PublicField = 42;
             public string SafeProperty => "SafeValue";
-            public string material => throw new InvalidOperationException("Material getter should not be called in EditMode!");
-            public string mesh => throw new InvalidOperationException("Mesh getter should not be called in EditMode!");
-            public string profile => throw new InvalidOperationException("Profile getter should not be called in EditMode!");
-            public string materialTemplate => throw new InvalidOperationException("MaterialTemplate getter should not be called in EditMode!");
-            public string coefficients => throw new InvalidOperationException("Coefficients getter should not be called in EditMode!");
+            public string Material => "Steel";
+            public string Mesh => "CubeMesh";
+            public string Profile => "HighQuality";
+            public string MaterialTemplate => "TerrainLit";
+            public string Coefficients => "ClothWeights";
             [Obsolete] public string DeprecatedProp => throw new InvalidOperationException("Deprecated property should not be called!");
         }
 
         [Fact]
-        public void Inspect_Object_OnPlainObject_IgnoresMutatingAndObsoleteMembers()
+        public void Inspect_Object_OnPlainObject_PreservesComponentNamedPropertiesAndIgnoresObsoleteMembers()
         {
             var obj = new CustomTestObject();
             string result = Inspect.Object(obj);
 
             Assert.Contains("PublicField: 42", result);
             Assert.Contains("SafeProperty: \"SafeValue\"", result);
-            Assert.DoesNotContain("Material getter", result);
-            Assert.DoesNotContain("Mesh getter", result);
-            Assert.DoesNotContain("Profile getter", result);
-            Assert.DoesNotContain("MaterialTemplate getter", result);
-            Assert.DoesNotContain("Coefficients getter", result);
+            Assert.Contains("Material: \"Steel\"", result);
+            Assert.Contains("Mesh: \"CubeMesh\"", result);
+            Assert.Contains("Profile: \"HighQuality\"", result);
+            Assert.Contains("MaterialTemplate: \"TerrainLit\"", result);
+            Assert.Contains("Coefficients: \"ClothWeights\"", result);
             Assert.DoesNotContain("DeprecatedProp", result);
+        }
+
+        [Fact]
+        public void Inspect_ComponentAndUnityObject_DeterministicallyDisposesSerializedObject()
+        {
+            SerializedObject.DisposeCount = 0;
+
+            var go = new GameObject("Owner");
+            var collider = go.AddComponent<Collider>();
+            Inspect.Component(collider);
+            Assert.Equal(1, SerializedObject.DisposeCount);
+
+            var asset = new UnityEngine.Object { name = "SomeAsset" };
+            Inspect.Object(asset);
+            Assert.Equal(2, SerializedObject.DisposeCount);
+        }
+
+        [Fact]
+        public void LimitOutput_65KMultiByteCharactersAndSurrogatePairs_TruncatesLinearlyAndPreservesValidUtf16()
+        {
+            // 65,536 3-byte UTF-8 characters (196,608 UTF-8 bytes)
+            string multiByteBmp = new string('€', 65536);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            string limitedInspect = Inspect.LimitOutput(multiByteBmp, maxCharacters: 65536, maxBytes: 65536);
+            string limitedFormatter = UnityResultFormatter.FormatResult(multiByteBmp, prettyPrint: false);
+            sw.Stop();
+
+            Assert.True(sw.ElapsedMilliseconds < 2000, $"Expected fast O(N) truncation, took {sw.ElapsedMilliseconds}ms");
+            Assert.True(Encoding.UTF8.GetByteCount(limitedInspect) <= 65536);
+            Assert.True(Encoding.UTF8.GetByteCount(limitedFormatter) <= 65536);
+            Assert.Contains("... (truncated: maximum output size reached)", limitedInspect);
+            Assert.Contains("... (truncated: maximum output size reached)", limitedFormatter);
+
+            // 32,768 emoji surrogate pairs (65,536 UTF-16 chars, 131,072 UTF-8 bytes)
+            var emojiBuilder = new StringBuilder(65536);
+            for (int i = 0; i < 32768; i++)
+            {
+                emojiBuilder.Append("\uD83D\uDE00");
+            }
+            string emojiText = emojiBuilder.ToString();
+            string limitedEmoji = Inspect.LimitOutput(emojiText, maxCharacters: 65536, maxBytes: 65536);
+            Assert.True(Encoding.UTF8.GetByteCount(limitedEmoji) <= 65536);
+            int markerIndex = limitedEmoji.IndexOf("... (truncated: maximum output size reached)", StringComparison.Ordinal);
+            Assert.True(markerIndex > 0);
+            Assert.False(char.IsHighSurrogate(limitedEmoji[markerIndex - 1]));
+        }
+
+        private class BaseSerializableNode
+        {
+            [SerializeField] private BaseSerializableNode? _serializedPrivateCycle;
+            internal BaseSerializableNode? InternalNonSerializedCycle;
+            protected BaseSerializableNode? ProtectedNonSerializedCycle;
+
+            public void SetPrivateCycle(BaseSerializableNode target) => _serializedPrivateCycle = target;
+            public void SetProtectedCycle(BaseSerializableNode target) => ProtectedNonSerializedCycle = target;
+        }
+
+        private sealed class DerivedSerializableNode : BaseSerializableNode
+        {
+            public string Label = "Node";
+        }
+
+        [Fact]
+        public void FormattingContext_InspectChildren_IgnoresInternalAndProtectedFieldsAndVisitsInheritedPrivateSerializeField()
+        {
+            var nodeWithNonPublicCycles = new DerivedSerializableNode();
+            nodeWithNonPublicCycles.InternalNonSerializedCycle = nodeWithNonPublicCycles;
+            nodeWithNonPublicCycles.SetProtectedCycle(nodeWithNonPublicCycles);
+
+            var ctx1 = new UnityResultFormatter.FormattingContext(
+                UnityResultFormatter.DefaultMaxDepth,
+                UnityResultFormatter.DefaultMaxItems,
+                UnityResultFormatter.DefaultMaxOutputCharacters,
+                UnityResultFormatter.DefaultMaxOutputBytes);
+            Assert.Equal(
+                UnityResultFormatter.GraphGuardResult.Safe,
+                ctx1.InspectChildren(nodeWithNonPublicCycles, depth: 0, prettyPrint: false));
+
+            // Setting the inherited [SerializeField] private field to a self-cycle must be detected
+            var nodeWithInheritedSerializedCycle = new DerivedSerializableNode();
+            nodeWithInheritedSerializedCycle.SetPrivateCycle(nodeWithInheritedSerializedCycle);
+
+            var ctx2 = new UnityResultFormatter.FormattingContext(
+                UnityResultFormatter.DefaultMaxDepth,
+                UnityResultFormatter.DefaultMaxItems,
+                UnityResultFormatter.DefaultMaxOutputCharacters,
+                UnityResultFormatter.DefaultMaxOutputBytes);
+            Assert.Equal(
+                UnityResultFormatter.GraphGuardResult.Cycle,
+                ctx2.InspectChildren(nodeWithInheritedSerializedCycle, depth: 0, prettyPrint: false));
+        }
+
+        private sealed class FallbackArrayWrapper
+        {
+            public int[] Items = new[] { 1, 2, 3 };
+        }
+
+        [Fact]
+        public void FormattingContext_SharesUnifiedItemBudgetAcrossCustomFormattersAndFallbackInspection()
+        {
+            int originalMaxItems = UnityResultFormatter.MaxItems;
+            try
+            {
+                UnityResultFormatter.MaxItems = 3;
+                // Outer list takes 1 item for the wrapper; wrapper's Items array has 3 elements (total 4 > MaxItems=3)
+                var composite = new List<object> { new FallbackArrayWrapper() };
+                string formatted = UnityResultFormatter.FormatResult(composite, prettyPrint: false);
+                Assert.Contains("... (truncated: maximum item count reached)", formatted);
+            }
+            finally
+            {
+                UnityResultFormatter.MaxItems = originalMaxItems;
+            }
         }
 
         [Fact]

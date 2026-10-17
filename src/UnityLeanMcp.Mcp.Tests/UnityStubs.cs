@@ -11,9 +11,16 @@ namespace UnityEngine
         public static T? FromJson<T>(string json) => System.Text.Json.JsonSerializer.Deserialize<T>(json, Options);
     }
 
+    public enum HideFlags
+    {
+        None = 0,
+        HideAndDontSave = 61
+    }
+
     public class Object
     {
         public string name { get; set; } = string.Empty;
+        public HideFlags hideFlags { get; set; }
         public bool _isDestroyed { get; internal set; }
         public override string ToString() => string.IsNullOrEmpty(name) ? GetType().Name : name;
 
@@ -86,6 +93,17 @@ namespace UnityEngine
         }
     }
 
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class SerializeField : Attribute { }
+
+    public struct Vector2
+    {
+        public float x, y;
+        public Vector2(float x, float y) { this.x = x; this.y = y; }
+        public override string ToString() => $"({x.ToString("F2", CultureInfo.InvariantCulture)}, {y.ToString("F2", CultureInfo.InvariantCulture)})";
+        public string ToString(string format, IFormatProvider provider) => $"({x.ToString(format, provider)}, {y.ToString(format, provider)})";
+    }
+
     public struct Vector3
     {
         public float x, y, z;
@@ -94,11 +112,49 @@ namespace UnityEngine
         public string ToString(string format, IFormatProvider provider) => $"({x.ToString(format, provider)}, {y.ToString(format, provider)}, {z.ToString(format, provider)})";
     }
 
+    public struct Vector4
+    {
+        public float x, y, z, w;
+        public Vector4(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; }
+        public override string ToString() => $"({x.ToString("F2", CultureInfo.InvariantCulture)}, {y.ToString("F2", CultureInfo.InvariantCulture)}, {z.ToString("F2", CultureInfo.InvariantCulture)}, {w.ToString("F2", CultureInfo.InvariantCulture)})";
+        public string ToString(string format, IFormatProvider provider) => $"({x.ToString(format, provider)}, {y.ToString(format, provider)}, {z.ToString(format, provider)}, {w.ToString(format, provider)})";
+    }
+
+    public struct Vector2Int
+    {
+        public int x, y;
+        public Vector2Int(int x, int y) { this.x = x; this.y = y; }
+        public override string ToString() => $"({x}, {y})";
+    }
+
+    public struct Vector3Int
+    {
+        public int x, y, z;
+        public Vector3Int(int x, int y, int z) { this.x = x; this.y = y; this.z = z; }
+        public override string ToString() => $"({x}, {y}, {z})";
+    }
+
+    public struct Quaternion
+    {
+        public float x, y, z, w;
+        public Quaternion(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; }
+        public override string ToString() => $"({x.ToString("F2", CultureInfo.InvariantCulture)}, {y.ToString("F2", CultureInfo.InvariantCulture)}, {z.ToString("F2", CultureInfo.InvariantCulture)}, {w.ToString("F2", CultureInfo.InvariantCulture)})";
+        public string ToString(string format, IFormatProvider provider) => $"({x.ToString(format, provider)}, {y.ToString(format, provider)}, {z.ToString(format, provider)}, {w.ToString(format, provider)})";
+    }
+
     public struct Rect
     {
         public float x, y, width, height;
         public Rect(float x, float y, float width, float height) { this.x = x; this.y = y; this.width = width; this.height = height; }
         public override string ToString() => $"(x:{x.ToString("F2", CultureInfo.InvariantCulture)}, y:{y.ToString("F2", CultureInfo.InvariantCulture)}, w:{width.ToString("F2", CultureInfo.InvariantCulture)}, h:{height.ToString("F2", CultureInfo.InvariantCulture)})";
+        public string ToString(string format, IFormatProvider provider) => $"(x:{x.ToString(format, provider)}, y:{y.ToString(format, provider)}, width:{width.ToString(format, provider)}, height:{height.ToString(format, provider)})";
+    }
+
+    public struct RectInt
+    {
+        public int x, y, width, height;
+        public RectInt(int x, int y, int width, int height) { this.x = x; this.y = y; this.width = width; this.height = height; }
+        public override string ToString() => $"(x:{x}, y:{y}, width:{width}, height:{height})";
     }
 
     public struct Color
@@ -106,11 +162,63 @@ namespace UnityEngine
         public float r, g, b, a;
         public Color(float r, float g, float b, float a = 1f) { this.r = r; this.g = g; this.b = b; this.a = a; }
         public override string ToString() => $"RGBA({r.ToString("F3", CultureInfo.InvariantCulture)}, {g.ToString("F3", CultureInfo.InvariantCulture)}, {b.ToString("F3", CultureInfo.InvariantCulture)}, {a.ToString("F3", CultureInfo.InvariantCulture)})";
+        public string ToString(string format, IFormatProvider provider) => $"RGBA({r.ToString(format, provider)}, {g.ToString(format, provider)}, {b.ToString(format, provider)}, {a.ToString(format, provider)})";
+    }
+
+    public struct Color32
+    {
+        public byte r, g, b, a;
+        public Color32(byte r, byte g, byte b, byte a) { this.r = r; this.g = g; this.b = b; this.a = a; }
+    }
+
+    public struct Bounds
+    {
+        public Vector3 center, extents;
+        public Bounds(Vector3 center, Vector3 size)
+        {
+            this.center = center;
+            this.extents = new Vector3(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f);
+        }
+    }
+
+    public struct BoundsInt
+    {
+        public Vector3Int position, size;
+        public BoundsInt(Vector3Int position, Vector3Int size) { this.position = position; this.size = size; }
+    }
+
+    public struct Ray
+    {
+        public Vector3 origin, direction;
+        public Ray(Vector3 origin, Vector3 direction) { this.origin = origin; this.direction = direction; }
+    }
+
+    public struct Ray2D
+    {
+        public Vector2 origin, direction;
+        public Ray2D(Vector2 origin, Vector2 direction) { this.origin = origin; this.direction = direction; }
+    }
+
+    public struct Plane
+    {
+        public Vector3 normal;
+        public float distance;
+        public Plane(Vector3 normal, float distance) { this.normal = normal; this.distance = distance; }
     }
 
     public static class LayerMask
     {
         public static string LayerToName(int layer) => layer == 0 ? "Default" : $"Layer{layer}";
+    }
+
+    public class ScriptableObject : Object
+    {
+        public static T CreateInstance<T>() where T : ScriptableObject, new() => new T();
+    }
+
+    public static class Resources
+    {
+        public static T[] FindObjectsOfTypeAll<T>() where T : Object => Array.Empty<T>();
     }
 
     public class Transform : Component, System.Collections.IEnumerable
@@ -246,9 +354,50 @@ namespace UnityEngine
         }
     }
 
+    public enum LogType
+    {
+        Error,
+        Assert,
+        Warning,
+        Log,
+        Exception
+    }
+
+    public static class Application
+    {
+        public static string unityVersion { get; set; } = "6000.7.0f1";
+        public delegate void LogCallback(string condition, string stackTrace, LogType type);
+        public static event LogCallback? logMessageReceivedThreaded { add { } remove { } }
+    }
+
     public static class Debug
     {
+        public static void Log(object? message) { }
+        public static void LogError(object? message) { }
         public static void LogWarning(object? message) { }
+        public static void LogException(Exception? exception) { }
+    }
+}
+
+namespace UnityEngine.TestTools
+{
+    public struct CoveredSequencePoint
+    {
+        public System.Reflection.MethodBase? method;
+        public uint ilOffset;
+        public uint hitCount;
+        public string filename;
+        public uint line;
+        public uint column;
+    }
+
+    public static class Coverage
+    {
+        public static bool enabled { get; set; }
+        public static Func<System.Reflection.MethodBase, CoveredSequencePoint[]>? GetSequencePointsForFunc;
+        public static CoveredSequencePoint[] GetSequencePointsFor(System.Reflection.MethodBase method) =>
+            GetSequencePointsForFunc?.Invoke(method) ?? Array.Empty<CoveredSequencePoint>();
+        public static void ResetAll() { }
     }
 }
 
@@ -279,18 +428,35 @@ namespace UnityEditor
 {
     public class InitializeOnLoadAttribute : System.Attribute { }
     public class InitializeOnLoadMethodAttribute : System.Attribute { }
+    public static class AssemblyReloadEvents
+    {
+        public delegate void AssemblyReloadCallback();
+        public static event AssemblyReloadCallback? beforeAssemblyReload { add { } remove { } }
+    }
+    public static class EditorUtility
+    {
+        public static bool scriptCompilationFailed;
+    }
     public static class SessionState
     {
         private static readonly Dictionary<string, string> Values = new();
+        public static int SetStringCount { get; set; }
         public static string? GetString(string key, string? fallback) => Values.TryGetValue(key, out var value) ? value : fallback;
-        public static void SetString(string key, string value) => Values[key] = value;
+        public static void SetString(string key, string value)
+        {
+            SetStringCount++;
+            Values[key] = value;
+        }
         public static void EraseString(string key) => Values.Remove(key);
     }
     public class Editor { }
     public static class EditorApplication
     {
         public static bool isCompiling;
+        public static bool isUpdating;
         public static event Action? update;
+        public static event Action? projectChanged { add { } remove { } }
+        public static event Action? quitting { add { } remove { } }
         public static void Tick() => update?.Invoke();
         public static string applicationContentsPath { get; set; } = string.Empty;
     }
@@ -310,6 +476,13 @@ namespace UnityEditor
         public bool boolValue { get; set; }
         public float floatValue { get; set; }
         public string stringValue { get; set; } = string.Empty;
+        public UnityEngine.Color colorValue { get; set; }
+        public string[]? enumNames { get; set; }
+        public int enumValueIndex { get; set; }
+        public UnityEngine.Vector2 vector2Value { get; set; }
+        public UnityEngine.Vector3 vector3Value { get; set; }
+        public UnityEngine.Vector4 vector4Value { get; set; }
+        public UnityEngine.Rect rectValue { get; set; }
         public UnityEngine.Object? objectReferenceValue { get; set; }
         public bool isArray { get; set; }
         public int arraySize { get; set; }
@@ -333,6 +506,13 @@ namespace UnityEditor
                 boolValue = cur.boolValue;
                 floatValue = cur.floatValue;
                 stringValue = cur.stringValue;
+                colorValue = cur.colorValue;
+                enumNames = cur.enumNames;
+                enumValueIndex = cur.enumValueIndex;
+                vector2Value = cur.vector2Value;
+                vector3Value = cur.vector3Value;
+                vector4Value = cur.vector4Value;
+                rectValue = cur.rectValue;
                 objectReferenceValue = cur.objectReferenceValue;
                 isArray = cur.isArray;
                 arraySize = cur.arraySize;
@@ -342,10 +522,12 @@ namespace UnityEditor
         }
     }
 
-    public class SerializedObject
+    public class SerializedObject : IDisposable
     {
         public static readonly Dictionary<UnityEngine.Object, List<SerializedProperty>> CustomProperties = new();
+        public static int DisposeCount { get; set; }
         public UnityEngine.Object targetObject { get; }
+        public bool IsDisposed { get; private set; }
         public readonly List<SerializedProperty> Properties = new();
 
         public SerializedObject(UnityEngine.Object target)
@@ -362,6 +544,12 @@ namespace UnityEditor
             var iterator = new SerializedProperty();
             foreach (var p in Properties) iterator.AddChildProperty(p);
             return iterator;
+        }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            DisposeCount++;
         }
     }
 
@@ -445,10 +633,34 @@ namespace UnityEditor
             PlayerWithoutTestAssemblies
         }
 
+        public enum CompilerMessageType
+        {
+            Error,
+            Warning,
+            Info
+        }
+
+        public struct CompilerMessage
+        {
+            public string message;
+            public string file;
+            public int line;
+            public int column;
+            public CompilerMessageType type;
+        }
+
+        public enum CodeOptimization
+        {
+            None,
+            Debug,
+            Release
+        }
+
         public class Assembly
         {
             public string name { get; set; } = string.Empty;
             public string outputPath { get; set; } = string.Empty;
+            public string[] sourceFiles { get; set; } = System.Array.Empty<string>();
             public string[] compiledAssemblyReferences { get; set; } = System.Array.Empty<string>();
             public string[] allReferences { get; set; } = System.Array.Empty<string>();
         }
@@ -465,75 +677,261 @@ namespace UnityEditor
                 All = -1
             }
 
-            public static Assembly[] GetAssemblies(AssembliesType assembliesType) => System.Array.Empty<Assembly>();
+            public static CodeOptimization codeOptimization { get; set; } = CodeOptimization.Debug;
+            public static Func<Assembly[]>? GetAssembliesFunc;
+
+            public static event Action<object>? compilationStarted { add { } remove { } }
+            public static event Action<object>? compilationFinished { add { } remove { } }
+            public static event Action<string, CompilerMessage[]>? assemblyCompilationFinished { add { } remove { } }
+
+            public static Assembly[] GetAssemblies() => GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
+            public static Assembly[] GetAssemblies(AssembliesType assembliesType) => GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
             public static string[] GetPrecompiledAssemblyPaths(PrecompiledAssemblySources sources) => System.Array.Empty<string>();
             public static string? GetPrecompiledAssemblyPathFromAssemblyName(string assemblyName) => null;
+        }
+    }
+
+    namespace TestTools.TestRunner.Api
+    {
+        public enum TestMode
+        {
+            EditMode = 1,
+            PlayMode = 2
+        }
+
+        public enum TestStatus
+        {
+            Inconclusive,
+            Skipped,
+            Passed,
+            Failed
+        }
+
+        public class Filter
+        {
+            public TestMode testMode;
+            public string[]? testNames;
+            public string[]? groupNames;
+            public string[]? categoryNames;
+            public string[]? assemblyNames;
+        }
+
+        public class ExecutionSettings
+        {
+            public Filter[] filters;
+            public ExecutionSettings(params Filter[] filters) { this.filters = filters; }
+        }
+
+        public interface ITestAdaptor
+        {
+            string Name { get; }
+            string FullName { get; }
+            int TestCaseCount { get; }
+            bool HasChildren { get; }
+        }
+
+        public interface ITestResultAdaptor
+        {
+            ITestAdaptor? Test { get; }
+            string Name { get; }
+            string FullName { get; }
+            string ResultState { get; }
+            TestStatus TestStatus { get; }
+            double Duration { get; }
+            string Message { get; }
+            string StackTrace { get; }
+            int FailCount { get; }
+            int PassCount { get; }
+            int SkipCount { get; }
+            bool HasChildren { get; }
+            IEnumerable<ITestResultAdaptor>? Children { get; }
+        }
+
+        public interface ICallbacks
+        {
+            void RunStarted(ITestAdaptor testsToRun);
+            void RunFinished(ITestResultAdaptor result);
+            void TestStarted(ITestAdaptor test);
+            void TestFinished(ITestResultAdaptor result);
+        }
+
+        public interface IErrorCallbacks : ICallbacks
+        {
+            void OnError(string message);
+        }
+
+        public class TestRunnerApi : UnityEngine.ScriptableObject
+        {
+            public static bool ActiveStateKnown = true;
+            public static bool Active = false;
+            public static Action<ExecutionSettings>? OnExecute;
+            public static Action<string>? OnCancelTestRun;
+
+            public void RegisterCallbacks<T>(T callbacks) where T : ICallbacks { }
+            public string Execute(ExecutionSettings settings)
+            {
+                OnExecute?.Invoke(settings);
+                return Guid.NewGuid().ToString("N");
+            }
+            public static void CancelTestRun(string guid) => OnCancelTestRun?.Invoke(guid);
+            internal static object? IsRunActive() => ActiveStateKnown ? (object)Active : null;
         }
     }
 }
 
 namespace UnityLeanMcp
 {
-    public static class UnityResultFormatter
+    internal static class ProtocolCodec
     {
-        public const int DefaultMaxOutputCharacters = 64 * 1024;
-        public const int DefaultMaxOutputBytes = 64 * 1024;
-        public static string FormatSerializedPropertyValue(UnityEditor.SerializedProperty prop)
+        public static string EscapeLine(string? text) => UnityLeanMcp.Mcp.ProtocolCodec.EscapeLine(text) ?? string.Empty;
+        public static string UnescapeLine(string? text) => UnityLeanMcp.Mcp.ProtocolCodec.UnescapeLine(text) ?? string.Empty;
+    }
+
+    internal static class CommandHelper
+    {
+        public static Type? FindType(string name) => null;
+        public static bool IsAssetImportWorkerProcess() => false;
+        public static string ReadFileWithRetry(string path, int maxRetries = 3, int delayMs = 10) =>
+            System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : string.Empty;
+        public static bool DeleteFileWithRetry(string path, int maxRetries = 3, int delayMs = 10)
         {
-            return prop.propertyType switch
+            if (System.IO.File.Exists(path))
             {
-                UnityEditor.SerializedPropertyType.Integer => prop.intValue.ToString(),
-                UnityEditor.SerializedPropertyType.Boolean => prop.boolValue ? "true" : "false",
-                UnityEditor.SerializedPropertyType.Float => prop.floatValue.ToString(CultureInfo.InvariantCulture),
-                UnityEditor.SerializedPropertyType.String => $"\"{prop.stringValue}\"",
-                _ => prop.propertyType.ToString()
+                System.IO.File.Delete(path);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    internal static class UnityLeanMcpServer
+    {
+        public static bool IsPlayModeActive { get; internal set; }
+        public static bool IsPlayModeChanging { get; internal set; }
+    }
+
+    [Serializable]
+    public class ConsoleLogEntry
+    {
+        public string type = "";
+        public string message = "";
+        public string stackTrace = "";
+    }
+
+    internal static class OperationExecutionEngine
+    {
+        public static System.Threading.CancellationTokenSource RegisterActiveOperation(string operationId, bool isCancelable) =>
+            new System.Threading.CancellationTokenSource();
+
+        public static bool TryCancel(string operationId) => false;
+
+        public static void FinishOperation(
+            string operationId,
+            string operationKind,
+            string resultFilePath,
+            bool success,
+            string message,
+            double duration,
+            string? payload,
+            List<ConsoleLogEntry>? logs = null,
+            bool interrupted = false)
+        {
+            if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
+            {
+                return;
+            }
+
+            var runResult = new UnityOperationResult
+            {
+                operationId = operationId,
+                success = success,
+                interrupted = interrupted,
+                message = message,
+                resultState = interrupted ? OperationStatus.Interrupted : (success ? OperationStatus.Completed : "Failed")
             };
+            UnityCommandGate.PublishResult(operationKind, operationId, resultFilePath, UnityEngine.JsonUtility.ToJson(runResult, true));
         }
 
-        public static bool IsMutatingComponentProperty(string propName)
+        public static void Execute(
+            string operationId,
+            string operationKind,
+            string resultFilePath,
+            bool isVoid,
+            Func<System.Threading.CancellationToken, object> invoker,
+            bool canCancel = true)
         {
-            if (string.IsNullOrEmpty(propName)) return false;
+        }
 
-            switch (propName.ToLowerInvariant())
-            {
-                case "material":
-                case "materials":
-                case "mesh":
-                case "physicmaterial":
-                case "trailmaterial":
-                case "trailmaterials":
-                case "profile":
-                case "materialtemplate":
-                case "coefficients":
-                    return true;
-                default:
-                    return false;
-            }
+        public static void MarkInterrupted(string operationKind, string resultFilePath, string message, string? targetOperationId = null)
+        {
         }
     }
 
     internal static class UnityLeanMcpPaths
     {
+        public static void EnsureInitialized() { }
+        public static string TempDir => System.IO.Path.Combine(ProjectRoot, "Temp");
         public static string GetResultFilePath(string kind, string id) => System.IO.Path.Combine(ProjectRoot, kind + "_" + id + ".json");
+        public static string GetTestResultsFile(string id) => GetResultFilePath("test", id);
+        public static string GetEvalResultFile(string id) => GetResultFilePath("eval", id);
         public static string GetRefreshResultFile(string id) => GetResultFilePath("refresh", id);
         public static string TestResultsFile => System.IO.Path.Combine(ProjectRoot, "tests.json");
+        public static string TestRunningFile => System.IO.Path.Combine(ProjectRoot, "test_running.json");
+        public static string TestCancellationFile => System.IO.Path.Combine(ProjectRoot, "test_cancel.txt");
         public static string RefreshResultFile => System.IO.Path.Combine(ProjectRoot, "refresh.json");
+        public static string DiagnosticsFile => System.IO.Path.Combine(ProjectRoot, "Temp", "unity_compile_diagnostics.txt");
         public static string LogFile => System.IO.Path.Combine(ProjectRoot, "Temp", "unity_lean_mcp_worker.log");
         public static string ProjectRoot { get; set; } = System.IO.Directory.GetCurrentDirectory();
     }
 
     internal static class OperationKinds
     {
-        public const string Eval = "eval", Coverage = "coverage", Test = "test", Refresh = "refresh", Recompile = "recompile";
+        public const string Eval = "eval", Test = "test", Refresh = "refresh", Recompile = "recompile";
     }
 
-    internal static class RunTestsHandler
+    internal static class OperationLifecycleRegistry
     {
-        public static bool ActiveStateKnown = true;
-        public static bool Active = false;
-        public static bool TryGetTestRunnerActiveState(out bool active) { active = Active; return ActiveStateKnown; }
-        public static void CleanupTestRun(string id) { }
-        public static void RestoreCoverage(string id) { }
+        public static Func<string, string, OperationCancelResult>? CancelFunc;
+        public static OperationCancelResult Cancel(string operationKind, string operationId) =>
+            CancelFunc?.Invoke(operationKind, operationId) ?? OperationCancelResult.NotCancelable;
+    }
+
+    internal sealed class CancelledRunIdSet
+    {
+        public void Add(string id)
+        {
+            if (!string.IsNullOrEmpty(id))
+            {
+                WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, id);
+            }
+        }
+
+        public void Clear()
+        {
+            try
+            {
+                if (System.IO.File.Exists(UnityLeanMcpPaths.TestCancellationFile))
+                {
+                    System.IO.File.Delete(UnityLeanMcpPaths.TestCancellationFile);
+                }
+            }
+            catch { }
+        }
+    }
+
+    internal partial class RunTestsHandler
+    {
+        public static bool ActiveStateKnown
+        {
+            get => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.ActiveStateKnown;
+            set => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.ActiveStateKnown = value;
+        }
+        public static bool Active
+        {
+            get => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.Active;
+            set => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.Active = value;
+        }
+        public static readonly CancelledRunIdSet CancelledRunIds = new();
     }
 
     internal static class UnityLeanMcpOperationStore
@@ -542,25 +940,143 @@ namespace UnityLeanMcp
         {
             var result = UnityCommandGate.TryBegin(kind, id, status, out _);
             var snapshot = UnityCommandGate.ReadSnapshot();
-            existing = snapshot == null ? null : new UnityLeanMcpOperationState { kind = snapshot.Kind, operationId = snapshot.OperationId };
+            existing = snapshot == null ? null : new UnityLeanMcpOperationState { kind = snapshot.Kind, operationId = snapshot.OperationId, status = snapshot.Status };
             return (BeginOperationResult)result;
         }
+        public static UnityLeanMcpOperationState? Read()
+        {
+            var snapshot = UnityCommandGate.ReadSnapshot();
+            return snapshot == null ? null : new UnityLeanMcpOperationState { kind = snapshot.Kind, operationId = snapshot.OperationId, status = snapshot.Status };
+        }
+        public static WorkerOperationStateSnapshot? ReadThreadSafeSnapshot()
+        {
+            var snapshot = UnityCommandGate.ReadSnapshot();
+            return snapshot == null ? null : new WorkerOperationStateSnapshot(snapshot.OperationId, snapshot.Kind, snapshot.Status, "", "");
+        }
+        public static bool IsOwnedBy(string id, string kind) => UnityCommandGate.IsOwnedBy(id, kind);
+        public static void Complete(string id) => UnityCommandGate.Complete(id);
         public static void Update(string id, string status) => UnityCommandGate.Update(id, status);
         public static Action<string, string, string>? Write;
-        public static void WriteAtomic(string path, string json, string id, int attempts = 5) => Write!(path, json, id);
+        public static void WriteAtomic(string path, string json, string id, int attempts = 5)
+        {
+            if (Write != null)
+            {
+                Write(path, json, id);
+                return;
+            }
+            string? dir = System.IO.Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.WriteAllText(path, json);
+        }
         public static bool TryWriteStaticHistory(string path, string json, string id) => true;
     }
 
     internal enum BeginOperationResult { Started, AlreadyStarted, Busy, Invalid }
-    internal sealed class UnityLeanMcpOperationState { public string kind = ""; public string operationId = ""; }
-    internal enum CommandExecutionTarget { EditModeOnly }
-    internal interface ICommandHandler { void Handle(string payload, System.IO.StreamWriter writer); }
-    internal static class OperationStatus { public const string Requested = "Requested", Refreshing = "Refreshing", Recompiling = "Recompiling"; }
-    internal sealed class UnityRefreshResult { public string operationId = ""; public bool success; public string message = ""; }
-    internal static class UnityLeanMcpCompilationTracker
+    internal sealed class UnityLeanMcpOperationState { public string kind = ""; public string operationId = ""; public string status = ""; }
+    internal enum CommandExecutionTarget { WorkerThread, MainThread, EditModeOnly }
+    internal interface ICommandHandler
     {
-        public static bool RefreshPending, CompilationRequested;
-        public static void ClearCapturedDiagnostics() { }
-        public static void ObserveOperationUntilSettled() { }
+        CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.EditModeOnly;
+        bool IsMutating => false;
+        bool RequiresCompilationSettled => false;
+        void Handle(string payload, System.IO.StreamWriter writer);
+    }
+    internal static class OperationStatus
+    {
+        public const string Queued = "Queued", Running = "Running", Executing = "Executing", Compiling = "Compiling",
+            Refreshing = "Refreshing", Recompiling = "Recompiling", Cancelling = "Cancelling", Requested = "Requested",
+            WaitingForUnity = "WaitingForUnity", Reloading = "Reloading", ShuttingDown = "ShuttingDown",
+            Interrupted = "Interrupted", Cancelled = "Cancelled", Completed = "Completed";
+    }
+    internal sealed class UnityRefreshResult { public string operationId = ""; public bool success; public bool interrupted; public string message = ""; }
+    internal sealed class UnityOperationResult
+    {
+        public string operationId = "";
+        public string runId = "";
+        public bool success;
+        public bool interrupted;
+        public string resultState = "";
+        public string message = "";
+    }
+
+    [Serializable]
+    public class FailedTestInfo
+    {
+        public string name = "";
+        public string fullName = "";
+        public string message = "";
+        public string stackTrace = "";
+        public double duration;
+    }
+
+    [Serializable]
+    public class RunTestsArgs
+    {
+        public string mode = "";
+        public string[]? testNames;
+        public string[]? groupNames;
+        public string[]? categoryNames;
+        public string[]? assemblyNames;
+        public bool failedOnly;
+        public bool coverage;
+    }
+
+    [Serializable]
+    public class UnityTestRunState
+    {
+        public string runId = "";
+        public string mode = "";
+        public string[]? testNames;
+        public string[]? groupNames;
+        public string[]? categoryNames;
+        public string[]? assemblyNames;
+        public string status = "";
+        public string jobGuid = "";
+        public string startedUtc = "";
+        public int totalTests;
+        public int completedTests;
+        public int passCount;
+        public int failCount;
+        public int skipCount;
+        public string currentTestName = "";
+    }
+
+    [Serializable]
+    public class UnityTestRunResult
+    {
+        public string runId = "";
+        public bool success;
+        public int failCount;
+        public int passCount;
+        public int skipCount;
+        public string message = "";
+        public string resultState = "";
+        public List<FailedTestInfo> failedTests = new();
+
+        public string operationId => runId;
+        public bool interrupted =>
+            string.Equals(resultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(resultState, "Cancelled", StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Serializable]
+    public class GetCoverageArgs
+    {
+        public string[]? paths;
+    }
+
+    [Serializable]
+    public class CoverageFileReport
+    {
+        public string path = "";
+        public int totalPoints;
+        public int coveredPoints;
+        public int[] uncoveredLines = Array.Empty<int>();
+    }
+
+    [Serializable]
+    public class CoverageResponsePayload
+    {
+        public List<CoverageFileReport> files = new();
     }
 }

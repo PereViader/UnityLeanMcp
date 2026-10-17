@@ -65,7 +65,7 @@ namespace UnityLeanMcp
             if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
             {
                 string diagnosticsPath = UnityLeanMcpPaths.DiagnosticsFile;
-                if (File.Exists(diagnosticsPath) && new FileInfo(diagnosticsPath).Length > 0)
+                if (HasNonEmptyDiagnosticsFile(diagnosticsPath))
                 {
                     return "COMPILATION_ERROR";
                 }
@@ -95,6 +95,34 @@ namespace UnityLeanMcp
             }
 
             return "READY";
+        }
+
+        internal static Func<string, long> DiagnosticsFileLengthProvider { get; set; }
+
+        internal static bool HasNonEmptyDiagnosticsFile(string diagnosticsPath)
+        {
+            if (string.IsNullOrEmpty(diagnosticsPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!File.Exists(diagnosticsPath))
+                {
+                    return false;
+                }
+
+                var lengthProvider = DiagnosticsFileLengthProvider;
+                long length = lengthProvider != null
+                    ? lengthProvider(diagnosticsPath)
+                    : new FileInfo(diagnosticsPath).Length;
+                return length > 0;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
     }
 }

@@ -77,22 +77,22 @@ namespace UnityLeanMcp
 
         public void OnError(string message)
         {
-            FinalizeTestRun(false, m_FailedTests.Count, 0, 0, string.IsNullOrEmpty(message) ? "Test run failed with error." : message, "Failed");
+            FinalizeTestRun(false, m_FailedTests.Count, m_PassCount, m_SkipCount, string.IsNullOrEmpty(message) ? "Test run failed with error." : message, "Failed");
         }
 
         public void OnRunCancelled(string reason = "Test run was cancelled or interrupted.")
         {
-            FinalizeTestRun(false, m_FailedTests.Count, 0, 0, reason, "Cancelled");
+            FinalizeTestRun(false, m_FailedTests.Count, m_PassCount, m_SkipCount, reason, "Cancelled");
         }
 
         public void OnRunInterrupted(string reason)
         {
-            FinalizeTestRun(false, m_FailedTests.Count, 0, 0, reason, "Interrupted");
+            FinalizeTestRun(false, m_FailedTests.Count, m_PassCount, m_SkipCount, reason, "Interrupted");
         }
 
         public void OnInfrastructureFailure(string reason)
         {
-            FinalizeTestRun(false, m_FailedTests.Count, 0, 0, reason, "InfrastructureFailure");
+            FinalizeTestRun(false, m_FailedTests.Count, m_PassCount, m_SkipCount, reason, "InfrastructureFailure");
         }
 
         public void RunFinished(ITestResultAdaptor result)
@@ -106,7 +106,9 @@ namespace UnityLeanMcp
 
                 string resultState = result?.ResultState ?? "";
                 var runState = RunTestsHandler.ReadRunningState();
-                bool wasCancellationRequested = runState != null && runState.status == OperationStatus.Cancelling;
+                string runId = m_RunId ?? runState?.runId;
+                bool wasCancellationRequested = (runState != null && runState.status == OperationStatus.Cancelling) ||
+                                                RunTestsHandler.IsCancellationRequested(runId);
                 bool isCancelled = resultState == "Cancelled" ||
                                    resultState.IndexOf("Cancel", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                    wasCancellationRequested;
@@ -148,10 +150,33 @@ namespace UnityLeanMcp
 
         private void CollectFailures(ITestResultAdaptor result)
         {
+            if (result == null)
+            {
+                return;
+            }
+
             if (result.HasChildren)
             {
-                foreach (var child in result.Children)
-                    CollectFailures(child);
+                int failuresBefore = m_FailedTests.Count;
+                if (result.Children != null)
+                {
+                    foreach (var child in result.Children)
+                        CollectFailures(child);
+                }
+
+                if (m_FailedTests.Count == failuresBefore &&
+                    result.TestStatus == TestStatus.Failed &&
+                    !string.IsNullOrWhiteSpace(result.Message))
+                {
+                    m_FailedTests.Add(new FailedTestInfo
+                    {
+                        name = result.Name,
+                        fullName = result.FullName,
+                        message = result.Message,
+                        stackTrace = result.StackTrace,
+                        duration = result.Duration
+                    });
+                }
             }
             else if (result.TestStatus == TestStatus.Failed)
             {
@@ -239,7 +264,7 @@ namespace UnityLeanMcp
 
         public void TestFinished(ITestResultAdaptor result)
         {
-            if (result == null || result.HasChildren)
+            if (result == null || result.HasChildren || string.IsNullOrEmpty(m_RunId))
             {
                 return;
             }
@@ -259,10 +284,7 @@ namespace UnityLeanMcp
                 m_SkipCount++;
             }
 
-            if (!string.IsNullOrEmpty(m_RunId))
-            {
-                RunTestsHandler.UpdateTestRunProgress(m_RunId, m_TotalTests, m_CompletedTests, m_PassCount, m_FailCount, m_SkipCount, m_CurrentTestName);
-            }
+            RunTestsHandler.UpdateTestRunProgress(m_RunId, m_TotalTests, m_CompletedTests, m_PassCount, m_FailCount, m_SkipCount, m_CurrentTestName);
         }
     }
 }

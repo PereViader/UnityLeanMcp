@@ -747,6 +747,46 @@ public class DecomposedComponentsTests
         Assert.Contains("// Preceding header comment", methodBody);
     }
 
+    private sealed class StubSyntaxRoot
+    {
+        public System.Collections.IEnumerable DescendantNodes() => Array.Empty<object>();
+    }
+
+    private sealed class StubSyntaxTree
+    {
+        public object GetRoot() => new StubSyntaxRoot();
+    }
+
+    private static object StubParseText(string text) => new StubSyntaxTree();
+
+    [Fact]
+    public void RoslynCompilerHelper_ExtractUsingDirectives_WhenAstFindsZeroUsings_DoesNotFallThroughToFallbackRegex()
+    {
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+        var initField = typeof(UnityLeanMcp.RoslynCompilerHelper).GetField("s_Initialized", flags)!;
+        var supportedField = typeof(UnityLeanMcp.RoslynCompilerHelper).GetField("s_IsSupported", flags)!;
+        var parseField = typeof(UnityLeanMcp.RoslynCompilerHelper).GetField("s_ParseTextMethod", flags)!;
+
+        try
+        {
+            UnityLeanMcp.RoslynCompilerHelper.ResetState();
+            initField.SetValue(null, true);
+            supportedField.SetValue(null, true);
+            parseField.SetValue(null, typeof(DecomposedComponentsTests).GetMethod(nameof(StubParseText), flags));
+
+            string source = "string code = @\"\nusing System.IO;\n\";\nreturn code;";
+            bool found = UnityLeanMcp.RoslynCompilerHelper.ExtractUsingDirectives(source, out var usings, out var methodBody);
+
+            Assert.False(found);
+            Assert.Empty(usings);
+            Assert.Equal(source, methodBody);
+        }
+        finally
+        {
+            UnityLeanMcp.RoslynCompilerHelper.ResetState();
+        }
+    }
+
     [Fact]
     public async Task RoslynCompilerHelper_EnsureInitialized_RetriesAfterFailureAndSerializesConcurrentCallers()
     {

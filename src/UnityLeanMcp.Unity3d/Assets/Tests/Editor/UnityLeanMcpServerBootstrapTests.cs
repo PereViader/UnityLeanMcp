@@ -175,6 +175,54 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
+        public void EditModeAdmissionRejectsKindMismatchForSameOperationId()
+        {
+            var snapshotField = typeof(UnityCommandGate).GetField("s_Snapshot", BindingFlags.NonPublic | BindingFlags.Static);
+            var execute = typeof(UnityLeanMcpServer).GetMethod("ExecuteMainThreadCommand", BindingFlags.NonPublic | BindingFlags.Static);
+            var original = snapshotField.GetValue(null);
+            var handler = new RecompileHandler();
+            using var stream = new System.IO.MemoryStream();
+            using var writer = new System.IO.StreamWriter(stream) { AutoFlush = true };
+            try
+            {
+                snapshotField.SetValue(null, new ActiveOperationSnapshot("refresh", "same-op-id"));
+                execute.Invoke(null, new object[] { handler, "same-op-id", writer });
+                string response = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+                Assert.That(response, Does.Contain("BUSY refresh same-op-id"));
+            }
+            finally
+            {
+                snapshotField.SetValue(null, original);
+            }
+        }
+
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        public void ExecuteMainThreadCommandSkipsExecutionWhenShuttingDownOrReloading(bool shuttingDown, bool reloading)
+        {
+            var shutdownField = typeof(UnityLeanMcpServer).GetField("_shutdownRequested", BindingFlags.NonPublic | BindingFlags.Static);
+            var reloadingField = typeof(UnityLeanMcpServer).GetField("_isReloading", BindingFlags.NonPublic | BindingFlags.Static);
+            var execute = typeof(UnityLeanMcpServer).GetMethod("ExecuteMainThreadCommand", BindingFlags.NonPublic | BindingFlags.Static);
+            bool originalShutdown = (bool)shutdownField.GetValue(null);
+            bool originalReloading = (bool)reloadingField.GetValue(null);
+            var handler = new EditModeProbeHandler();
+            using var stream = new System.IO.MemoryStream();
+            using var writer = new System.IO.StreamWriter(stream) { AutoFlush = true };
+            try
+            {
+                shutdownField.SetValue(null, shuttingDown);
+                reloadingField.SetValue(null, reloading);
+                execute.Invoke(null, new object[] { handler, "owner", writer });
+                Assert.That(handler.CallCount, Is.EqualTo(0));
+            }
+            finally
+            {
+                shutdownField.SetValue(null, originalShutdown);
+                reloadingField.SetValue(null, originalReloading);
+            }
+        }
+
+        [Test]
         public void RefreshDiagnosticsCaptureOnlyErrorsWithinTheOwningOperation()
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
@@ -451,6 +499,91 @@ namespace UnityLeanMcpTests
                 snapshot.SetValue(null, originalSnapshot);
                 scoped.SetValue(null, originalScoped);
                 UnityEditor.SessionState.SetString("UnityLeanMcp_RefreshDiagnostics", originalSession);
+                if (string.IsNullOrEmpty(originalActiveOp))
+                    UnityEditor.SessionState.EraseString("UnityLeanMcp_ActiveOp");
+                else
+                    UnityEditor.SessionState.SetString("UnityLeanMcp_ActiveOp", originalActiveOp);
+            }
+        }
+
+        [Test]
+        public void FormatDiagnostics_WhenLineOrColumnOverflowsInt32_FallsBackToZeroWithoutThrowing()
+        {
+            string overflowCompilerMsg = "Assets/Scripts/Test.cs(99999999999999999999,88888888888888888888): error CS1002: ; expected";
+            string formattedCompiler = UnityLeanMcpCompilationTracker.FormatCompilerDiagnostic(overflowCompilerMsg, "", 0, 0, true);
+            Assert.That(formattedCompiler, Is.EqualTo("Assets/Scripts/Test.cs: error CS1002: ; expected"));
+
+            string formattedLeadingOp = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(overflowCompilerMsg, "", true);
+            Assert.That(formattedLeadingOp, Is.EqualTo("Assets/Scripts/Test.cs: error CS1002: ; expected"));
+
+            string overflowShaderMsg = "Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(99999999999999999999,88888888888888888888)";
+            string formattedShaderOp = UnityLeanMcpCompilationTracker.FormatOperationDiagnostic(overflowShaderMsg, "", true);
+            Assert.That(formattedShaderOp, Is.EqualTo("Assets/Shaders/Water.shader: error Shader error in 'Custom/Water': undeclared identifier 'foo' at Assets/Shaders/Water.shader(99999999999999999999,88888888888888888888)"));
+        }
+
+        [Test]
+        public void CaptureOperationError_BoundsScopedDiagnosticsAtMaxCount()
+        {
+            var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
+            var scoped = typeof(UnityLeanMcpCompilationTracker).GetField("s_ScopedDiagnostics", flags);
+            var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
+            object originalSnapshot = snapshot.GetValue(null);
+            object originalScoped = scoped.GetValue(null);
+            string originalSession = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
+            string opId = Guid.NewGuid().ToString("N");
+
+            try
+            {
+                snapshot.SetValue(null, new ActiveOperationSnapshot("refresh", opId, OperationStatus.Refreshing));
+                scoped.SetValue(null, new ScopedDiagnostics { operationId = opId });
+
+                int total = UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount + 50;
+                for (int i = 0; i < total; i++)
+                {
+                    UnityLeanMcpCompilationTracker.CaptureOperationError("Flooded postprocessor error " + i, "", UnityEngine.LogType.Error);
+                }
+
+                var captured = (System.Collections.Generic.List<string>)read.Invoke(null, null);
+                Assert.That(captured.Count, Is.EqualTo(UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount));
+            }
+            finally
+            {
+                snapshot.SetValue(null, originalSnapshot);
+                scoped.SetValue(null, originalScoped);
+                UnityEditor.SessionState.SetString("UnityLeanMcp_RefreshDiagnostics", originalSession);
+            }
+        }
+
+        [Test]
+        public void ObserveOperationUntilSettled_SkipsRedundantUpdateWhenAlreadyWaitingForUnity()
+        {
+            var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var snapshotField = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
+            object originalSnapshot = snapshotField.GetValue(null);
+            string originalActiveOp = UnityEditor.SessionState.GetString("UnityLeanMcp_ActiveOp", "");
+            bool originalRefreshPending = UnityLeanMcpCompilationTracker.RefreshPending;
+            string opId = Guid.NewGuid().ToString("N");
+
+            try
+            {
+                var initial = new ActiveOperationSnapshot("refresh", opId, OperationStatus.Refreshing);
+                UnityEditor.SessionState.SetString("UnityLeanMcp_ActiveOp", UnityEngine.JsonUtility.ToJson(initial));
+                snapshotField.SetValue(null, initial);
+                UnityLeanMcpCompilationTracker.RefreshPending = true;
+
+                UnityLeanMcpCompilationTracker.ObserveOperationUntilSettled();
+                var waitingSnapshot = UnityCommandGate.ReadSnapshot();
+                Assert.That(waitingSnapshot, Is.Not.Null);
+                Assert.That(waitingSnapshot.Status, Is.EqualTo(OperationStatus.WaitingForUnity));
+
+                UnityLeanMcpCompilationTracker.ObserveOperationUntilSettled();
+                Assert.That(UnityCommandGate.ReadSnapshot(), Is.SameAs(waitingSnapshot));
+            }
+            finally
+            {
+                UnityLeanMcpCompilationTracker.RefreshPending = originalRefreshPending;
+                snapshotField.SetValue(null, originalSnapshot);
                 if (string.IsNullOrEmpty(originalActiveOp))
                     UnityEditor.SessionState.EraseString("UnityLeanMcp_ActiveOp");
                 else

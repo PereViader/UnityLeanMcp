@@ -31,9 +31,17 @@ namespace UnityLeanMcp
 
         public static bool IsRunning => _isRunning;
         private static volatile bool s_IsPlayModeActive;
-        public static bool IsPlayModeActive => s_IsPlayModeActive;
+        public static bool IsPlayModeActive
+        {
+            get => s_IsPlayModeActive;
+            internal set => s_IsPlayModeActive = value;
+        }
         private static volatile bool s_IsPlayModeChanging;
-        public static bool IsPlayModeChanging => s_IsPlayModeChanging;
+        public static bool IsPlayModeChanging
+        {
+            get => s_IsPlayModeChanging;
+            internal set => s_IsPlayModeChanging = value;
+        }
 
         private static void OnPlayModeStateChanged(PlayModeStateChange change)
         {
@@ -154,7 +162,6 @@ namespace UnityLeanMcp
 
                 UnityLeanMcpPaths.EnsureInitialized();
                 UnityCommandGate.InitializeMainThread();
-                UnityLeanMcpOperationStore.EnsureInitialized();
                 UnityLeanMcpCompilationTracker.EnsureInitialized();
                 UnityLeanMcpDispatcher.EnsureInitialized();
                 RoslynCompilerHelper.EnsureInitialized();
@@ -196,13 +203,12 @@ namespace UnityLeanMcp
         private static void RecoverOperationsOnDomainLoad()
         {
             var operation = UnityLeanMcpOperationStore.Read();
-            if (operation == null)
+            if (operation == null || UnityCommandGate.HasPendingResult(operation.operationId))
             {
                 return;
             }
 
-            bool isRestart = operation.editorSessionId != UnityLeanMcpOperationStore.EditorSessionId;
-            OperationLifecycleRegistry.RecoverOnDomainLoad(operation, isRestart);
+            OperationLifecycleRegistry.RecoverOnDomainLoad(operation);
         }
 
         private static void StartServer()
@@ -232,7 +238,10 @@ namespace UnityLeanMcp
             s_IsPlayModeActive = false;
             s_IsPlayModeChanging = false;
             var operation = UnityLeanMcpOperationStore.Read();
-            if (operation != null)
+            if (operation != null &&
+                operation.status != OperationStatus.Requested &&
+                operation.status != OperationStatus.Cancelling &&
+                operation.status != OperationStatus.Interrupted)
             {
                 UnityLeanMcpOperationStore.Update(operation.operationId, OperationStatus.Reloading);
             }
@@ -264,6 +273,8 @@ namespace UnityLeanMcp
                 serverThread = _serverThread;
                 listener = _tcpListener;
             }
+
+            UnityLeanMcpDispatcher.Clear();
 
             try
             {
@@ -322,9 +333,14 @@ namespace UnityLeanMcp
 
                 int port = ((IPEndPoint) listener.LocalEndpoint).Port;
 
-                while (_isRunning && !WritePortFile(port))
-                    Thread.Sleep(100);
-                if (!_isRunning) return;
+                while (!IsShuttingDown() && !WritePortFile(port))
+                {
+                    if (s_ShutdownEvent.WaitOne(100))
+                    {
+                        break;
+                    }
+                }
+                if (IsShuttingDown()) return;
                 WorkerDiagnosticsLogger.Info(
                     UnityLeanMcpPaths.LogFile,
                     $"Socket server started on 127.0.0.1:{port}");
@@ -346,7 +362,28 @@ namespace UnityLeanMcp
                         break;
                     }
 
-                    ThreadPool.QueueUserWorkItem(state => ProcessClient((TcpClient)state), client);
+                    s_ActiveClients.TryAdd(client, 0);
+                    if (IsShuttingDown())
+                    {
+                        try { client.Close(); } catch { }
+                        s_ActiveClients.TryRemove(client, out _);
+                        break;
+                    }
+
+                    try
+                    {
+                        if (!ThreadPool.QueueUserWorkItem(state => ProcessClient((TcpClient)state), client))
+                        {
+                            try { client.Close(); } catch { }
+                            s_ActiveClients.TryRemove(client, out _);
+                        }
+                    }
+                    catch
+                    {
+                        try { client.Close(); } catch { }
+                        s_ActiveClients.TryRemove(client, out _);
+                        throw;
+                    }
                 }
             }
             catch(ThreadAbortException) when (IsShuttingDown())
@@ -427,8 +464,30 @@ namespace UnityLeanMcp
             }
         }
 
+        private static string GetHandlerOperationKind(ICommandHandler handler)
+        {
+            if (handler is CompilationCommandHandlerBase compilationHandler)
+            {
+                return compilationHandler.Kind;
+            }
+            if (handler is RunTestsHandler)
+            {
+                return OperationKinds.Test;
+            }
+            if (handler is EvalHandler)
+            {
+                return OperationKinds.Eval;
+            }
+            return null;
+        }
+
         private static void ExecuteMainThreadCommand(ICommandHandler handler, string payload, StreamWriter writer)
         {
+            if (_shutdownRequested || _isReloading)
+            {
+                return;
+            }
+
             if (handler.ExecutionTarget == CommandExecutionTarget.EditModeOnly)
             {
                 // Worker preflight can become stale while waiting in the dispatcher.
@@ -436,7 +495,9 @@ namespace UnityLeanMcp
                 var active = UnityCommandGate.ReadSnapshot();
                 if (active != null)
                 {
-                    if (active.OperationId == ExtractOperationId(payload))
+                    string expectedKind = GetHandlerOperationKind(handler);
+                    if (active.OperationId == ExtractOperationId(payload) &&
+                        (expectedKind == null || string.Equals(active.Kind, expectedKind, StringComparison.OrdinalIgnoreCase)))
                     {
                         handler.Handle(payload, writer);
                         return;
@@ -472,14 +533,13 @@ namespace UnityLeanMcp
         private static void ProcessClient(TcpClient client)
         {
             s_ActiveClients.TryAdd(client, 0);
-            if (IsShuttingDown())
-            {
-                try { client.Close(); } catch { }
-                s_ActiveClients.TryRemove(client, out _);
-                return;
-            }
             try
             {
+                if (IsShuttingDown())
+                {
+                    return;
+                }
+
                 client.ReceiveTimeout = 5000;
                 using NetworkStream stream = client.GetStream();
                 using StreamReader reader = new(stream, Encoding.UTF8);
@@ -524,7 +584,10 @@ namespace UnityLeanMcp
                         if (activeOp != null)
                         {
                             string requestOpId = ExtractOperationId(payload);
-                            if (string.IsNullOrEmpty(requestOpId) || activeOp.OperationId != requestOpId)
+                            string expectedKind = GetHandlerOperationKind(handler);
+                            if (string.IsNullOrEmpty(requestOpId) ||
+                                activeOp.OperationId != requestOpId ||
+                                (expectedKind != null && !string.Equals(activeOp.Kind, expectedKind, StringComparison.OrdinalIgnoreCase)))
                             {
                                 writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
                                 return;
@@ -545,7 +608,7 @@ namespace UnityLeanMcp
                     {
                         if (UnityLeanMcpCompilationTracker.IsCompiling ||
                             UnityLeanMcpCompilationTracker.RefreshPending ||
-                            UnityLeanMcpCompilationTracker.RefreshRequired)
+                            (UnityLeanMcpCompilationTracker.RefreshRequired && !(UnityLeanMcpServer.IsPlayModeActive && handler is EvalHandler)))
                         {
                             writer.WriteLine("BUSY compile");
                             return;
@@ -559,34 +622,78 @@ namespace UnityLeanMcp
                     }
                     else
                     {
-                        using (var finishedEvent = new ManualResetEvent(false))
+                        var finishedEvent = new ManualResetEvent(false);
+                        object completionLock = new object();
+                        bool waiterAbandoned = false;
+                        bool callbackCompleted = false;
+                        Exception dispatchException = null;
+
+                        UnityLeanMcpDispatcher.Enqueue(() =>
                         {
-                            WaitHandle[] requestWaitHandles = { finishedEvent, s_ShutdownEvent };
-                            Exception dispatchException = null;
-                            UnityLeanMcpDispatcher.Enqueue(() =>
+                            try
                             {
-                                try
+                                lock (completionLock)
                                 {
-                                    ExecuteMainThreadCommand(handler, payload, writer);
+                                    if (waiterAbandoned || IsShuttingDown())
+                                    {
+                                        return;
+                                    }
                                 }
-                                catch (Exception ex)
-                                {
-                                    dispatchException = ex;
-                                }
-                                finally
-                                {
-                                    finishedEvent.Set();
-                                }
-                            });
-                            int completedIndex = WaitHandle.WaitAny(requestWaitHandles);
-                            if (completedIndex == 1 || s_ShutdownEvent.WaitOne(0) || IsShuttingDown())
-                            {
-                                return;
+
+                                ExecuteMainThreadCommand(handler, payload, writer);
                             }
-                            if (dispatchException != null)
+                            catch (Exception ex)
                             {
-                                throw dispatchException;
+                                dispatchException = ex;
                             }
+                            finally
+                            {
+                                bool disposeNow = false;
+                                lock (completionLock)
+                                {
+                                    callbackCompleted = true;
+                                    if (waiterAbandoned)
+                                    {
+                                        disposeNow = true;
+                                    }
+                                    else
+                                    {
+                                        try { finishedEvent.Set(); } catch (ObjectDisposedException) { }
+                                    }
+                                }
+                                if (disposeNow)
+                                {
+                                    finishedEvent.Dispose();
+                                }
+                            }
+                        });
+
+                        WaitHandle[] requestWaitHandles = { finishedEvent, s_ShutdownEvent };
+                        int completedIndex = WaitHandle.WaitAny(requestWaitHandles);
+                        bool disposeOnWaiter = false;
+                        lock (completionLock)
+                        {
+                            if (callbackCompleted)
+                            {
+                                disposeOnWaiter = true;
+                            }
+                            else
+                            {
+                                waiterAbandoned = true;
+                            }
+                        }
+                        if (disposeOnWaiter)
+                        {
+                            finishedEvent.Dispose();
+                        }
+
+                        if (completedIndex == 1 || !callbackCompleted || s_ShutdownEvent.WaitOne(0) || IsShuttingDown())
+                        {
+                            return;
+                        }
+                        if (dispatchException != null)
+                        {
+                            throw dispatchException;
                         }
                     }
                 }

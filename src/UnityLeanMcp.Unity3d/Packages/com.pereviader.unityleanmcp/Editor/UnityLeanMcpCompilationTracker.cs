@@ -49,6 +49,8 @@ namespace UnityLeanMcp
             @"^(?!(?:warning|info)\b)(?:(?:[a-zA-Z]:[\\/])?[^:\r\n]+(?:\(\d+(?:,\s*\d+)?\)|:\d+(?::\d+)?)?:\s*)?error(?::|\s|$)",
             System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
+        internal const int MaxScopedDiagnosticsCount = 200;
+
         internal static void CaptureOperationError(string message, string stackTrace, LogType type)
         {
             if (type != LogType.Error && type != LogType.Exception && type != LogType.Assert) return;
@@ -62,6 +64,8 @@ namespace UnityLeanMcp
             {
                 if (s_ScopedDiagnostics.operationId != active.OperationId)
                     s_ScopedDiagnostics = new ScopedDiagnostics { operationId = active.OperationId };
+                if (s_ScopedDiagnostics.messages.Count >= MaxScopedDiagnosticsCount)
+                    return;
                 if (!s_ScopedDiagnostics.messages.Contains(formatted))
                 {
                     s_ScopedDiagnostics.messages.Add(formatted);
@@ -102,10 +106,26 @@ namespace UnityLeanMcp
         private static string s_ObservedOperationId;
         private static int s_SettledUpdateCount;
 
-        public static bool IsCompiling => s_IsCompiling;
-        public static bool IsUpdating => s_IsUpdating;
-        public static bool ScriptCompilationFailed => s_ScriptCompilationFailed;
-        public static bool RefreshRequired => s_RefreshRequired;
+        public static bool IsCompiling
+        {
+            get => s_IsCompiling;
+            internal set => s_IsCompiling = value;
+        }
+        public static bool IsUpdating
+        {
+            get => s_IsUpdating;
+            internal set => s_IsUpdating = value;
+        }
+        public static bool ScriptCompilationFailed
+        {
+            get => s_ScriptCompilationFailed;
+            internal set => s_ScriptCompilationFailed = value;
+        }
+        public static bool RefreshRequired
+        {
+            get => s_RefreshRequired;
+            internal set => s_RefreshRequired = value;
+        }
 
         public static bool RefreshPending
         {
@@ -186,7 +206,6 @@ namespace UnityLeanMcp
         {
             s_MainThreadId = Thread.CurrentThread.ManagedThreadId;
             UnityLeanMcpPaths.EnsureInitialized();
-            UnityLeanMcpOperationStore.EnsureInitialized();
             EnsureLogReflectionCached();
             string scopedJson = SessionState.GetString(ScopedDiagnosticsKey, "");
             if (!string.IsNullOrEmpty(scopedJson))
@@ -201,8 +220,7 @@ namespace UnityLeanMcp
             UpdateCompilationState();
             var operation = UnityLeanMcpOperationStore.Read();
             bool resumingCompilation = operation != null &&
-                (operation.kind == OperationKinds.Refresh || operation.kind == OperationKinds.Recompile) &&
-                operation.editorSessionId == UnityLeanMcpOperationStore.EditorSessionId;
+                (operation.kind == OperationKinds.Refresh || operation.kind == OperationKinds.Recompile);
             if (!resumingCompilation)
             {
                 WriteActiveErrorsToFile();
@@ -353,8 +371,14 @@ namespace UnityLeanMcp
             if (leadingMatch.Success)
             {
                 file = leadingMatch.Groups["file"].Value;
-                if (leadingMatch.Groups["line"].Success) line = int.Parse(leadingMatch.Groups["line"].Value);
-                if (leadingMatch.Groups["col"].Success) column = int.Parse(leadingMatch.Groups["col"].Value);
+                if (leadingMatch.Groups["line"].Success)
+                {
+                    line = int.TryParse(leadingMatch.Groups["line"].Value, out int parsedLine) ? parsedLine : 0;
+                }
+                if (leadingMatch.Groups["col"].Success)
+                {
+                    column = int.TryParse(leadingMatch.Groups["col"].Value, out int parsedCol) ? parsedCol : 0;
+                }
                 msg = leadingMatch.Groups["rest"].Value;
             }
 
@@ -415,8 +439,14 @@ namespace UnityLeanMcp
             if (leadingMatch.Success)
             {
                 file = leadingMatch.Groups["file"].Value;
-                if (leadingMatch.Groups["line"].Success) line = int.Parse(leadingMatch.Groups["line"].Value);
-                if (leadingMatch.Groups["col"].Success) column = int.Parse(leadingMatch.Groups["col"].Value);
+                if (leadingMatch.Groups["line"].Success)
+                {
+                    line = int.TryParse(leadingMatch.Groups["line"].Value, out int parsedLine) ? parsedLine : 0;
+                }
+                if (leadingMatch.Groups["col"].Success)
+                {
+                    column = int.TryParse(leadingMatch.Groups["col"].Value, out int parsedCol) ? parsedCol : 0;
+                }
                 msg = leadingMatch.Groups["rest"].Value;
             }
 
@@ -429,8 +459,14 @@ namespace UnityLeanMcp
                     {
                         file = shaderMatch.Groups["file"].Value;
                     }
-                    if (shaderMatch.Groups["line"].Success) line = int.Parse(shaderMatch.Groups["line"].Value);
-                    if (shaderMatch.Groups["col"].Success) column = int.Parse(shaderMatch.Groups["col"].Value);
+                    if (shaderMatch.Groups["line"].Success)
+                    {
+                        line = int.TryParse(shaderMatch.Groups["line"].Value, out int parsedLine) ? parsedLine : 0;
+                    }
+                    if (shaderMatch.Groups["col"].Success)
+                    {
+                        column = int.TryParse(shaderMatch.Groups["col"].Value, out int parsedCol) ? parsedCol : 0;
+                    }
                 }
             }
 
@@ -520,8 +556,9 @@ namespace UnityLeanMcp
 
         /// <summary>
         /// Completes refresh/recompile ownership only after Unity has reported a
-        /// settled Editor state on two separate update ticks. This observer is
-        /// reconstructed after a domain reload from the durable journal.
+        /// settled Editor state across consecutive idle update ticks. This observer
+        /// resumes after a domain reload from the active operation restored by
+        /// <see cref="UnityCommandGate"/> from <see cref="SessionState"/>.
         /// </summary>
         internal static void ObserveOperationUntilSettled()
         {
@@ -549,7 +586,10 @@ namespace UnityLeanMcp
             if (s_RefreshPending || s_CompilationRequested || EditorApplication.isCompiling || EditorApplication.isUpdating)
             {
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
-                UnityCommandGate.Update(snap.OperationId, OperationStatus.WaitingForUnity);
+                if (snap.Status != OperationStatus.WaitingForUnity)
+                {
+                    UnityCommandGate.Update(snap.OperationId, OperationStatus.WaitingForUnity);
+                }
                 return;
             }
 

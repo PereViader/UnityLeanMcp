@@ -799,44 +799,46 @@ namespace UnityLeanMcp
             // 1. Inspect serialized properties using SerializedObject
             try
             {
-                var so = new SerializedObject(comp);
-                var sp = so.GetIterator();
-                bool enterChildren = true;
-
-                while (sp.NextVisible(enterChildren))
+                using (var so = new SerializedObject(comp))
                 {
-                    enterChildren = false;
+                    var sp = so.GetIterator();
+                    bool enterChildren = true;
 
-                    if (sp.name == "m_Script")
+                    while (sp.NextVisible(enterChildren))
                     {
-                        continue;
-                    }
+                        enterChildren = false;
 
-                    if (count >= maxItems)
-                    {
-                        sb.AppendLine($"{prefix}{ItemTruncationMarker}");
-                        return;
-                    }
+                        if (sp.name == "m_Script")
+                        {
+                            continue;
+                        }
 
-                    seenProperties.Add(sp.name);
-                    string rawName = sp.name;
-                    if (rawName.StartsWith("m_", StringComparison.OrdinalIgnoreCase) && rawName.Length > 2)
-                    {
-                        seenProperties.Add(rawName.Substring(2));
-                    }
-                    else if (rawName.StartsWith("_", StringComparison.OrdinalIgnoreCase) && rawName.Length > 1)
-                    {
-                        seenProperties.Add(rawName.Substring(1));
-                    }
-                    if (!string.IsNullOrEmpty(sp.displayName))
-                    {
-                        seenProperties.Add(sp.displayName);
-                    }
+                        if (count >= maxItems)
+                        {
+                            sb.AppendLine($"{prefix}{ItemTruncationMarker}");
+                            return;
+                        }
 
-                    count++;
+                        seenProperties.Add(sp.name);
+                        string rawName = sp.name;
+                        if (rawName.StartsWith("m_", StringComparison.OrdinalIgnoreCase) && rawName.Length > 2)
+                        {
+                            seenProperties.Add(rawName.Substring(2));
+                        }
+                        else if (rawName.StartsWith("_", StringComparison.OrdinalIgnoreCase) && rawName.Length > 1)
+                        {
+                            seenProperties.Add(rawName.Substring(1));
+                        }
+                        if (!string.IsNullOrEmpty(sp.displayName))
+                        {
+                            seenProperties.Add(sp.displayName);
+                        }
 
-                    string valStr = FormatSerializedPropertyWithAsset(sp);
-                    sb.AppendLine($"{prefix}{sp.displayName} ({sp.name}): {valStr}");
+                        count++;
+
+                        string valStr = FormatSerializedPropertyWithAsset(sp);
+                        sb.AppendLine($"{prefix}{sp.displayName} ({sp.name}): {valStr}");
+                    }
                 }
             }
             catch
@@ -943,24 +945,26 @@ namespace UnityLeanMcp
             int count = 0;
             try
             {
-                var so = new SerializedObject(uo);
-                var sp = so.GetIterator();
-                bool enterChildren = true;
-
-                while (sp.NextVisible(enterChildren))
+                using (var so = new SerializedObject(uo))
                 {
-                    enterChildren = false;
-                    if (sp.name == "m_Script") continue;
+                    var sp = so.GetIterator();
+                    bool enterChildren = true;
 
-                    if (count >= maxItems)
+                    while (sp.NextVisible(enterChildren))
                     {
-                        sb.AppendLine($"  {ItemTruncationMarker}");
-                        return;
-                    }
+                        enterChildren = false;
+                        if (sp.name == "m_Script") continue;
 
-                    count++;
-                    string valStr = FormatSerializedPropertyWithAsset(sp);
-                    sb.AppendLine($"  {sp.displayName} ({sp.name}): {valStr}");
+                        if (count >= maxItems)
+                        {
+                            sb.AppendLine($"  {ItemTruncationMarker}");
+                            return;
+                        }
+
+                        count++;
+                        string valStr = FormatSerializedPropertyWithAsset(sp);
+                        sb.AppendLine($"  {sp.displayName} ({sp.name}): {valStr}");
+                    }
                 }
             }
             catch
@@ -1204,7 +1208,7 @@ namespace UnityLeanMcp
                 case "profile":
                 case "materialtemplate":
                 case "coefficients":
-                    return true;
+                    return isComponent;
 
                 // Component-specific legacy shortcuts and metadata:
                 case "rigidbody":
@@ -2007,13 +2011,28 @@ namespace UnityLeanMcp
             }
 
             int markerBytes = Encoding.UTF8.GetByteCount(marker);
+            int maxPrefixBytes = maxBytes - markerBytes;
             int prefixLength = Math.Min(value.Length, maxCharacters - marker.Length);
-
-            while (prefixLength > 0 &&
-                   (Encoding.UTF8.GetByteCount(value, 0, prefixLength) + markerBytes > maxBytes ||
-                    (prefixLength < value.Length && char.IsHighSurrogate(value[prefixLength - 1]))))
+            if (prefixLength > 0 && prefixLength < value.Length && char.IsHighSurrogate(value[prefixLength - 1]))
             {
                 prefixLength--;
+            }
+
+            int currentBytes = prefixLength > 0 ? Encoding.UTF8.GetByteCount(value, 0, prefixLength) : 0;
+            while (prefixLength > 0 && currentBytes > maxPrefixBytes)
+            {
+                int step = prefixLength >= 2 &&
+                           char.IsHighSurrogate(value[prefixLength - 2]) &&
+                           char.IsLowSurrogate(value[prefixLength - 1])
+                    ? 2
+                    : 1;
+                prefixLength -= step;
+                currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, step);
+                if (prefixLength > 0 && char.IsHighSurrogate(value[prefixLength - 1]))
+                {
+                    prefixLength--;
+                    currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, 1);
+                }
             }
 
             return value.Substring(0, prefixLength) + marker;
