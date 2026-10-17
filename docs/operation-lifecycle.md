@@ -31,14 +31,15 @@ Backing-work completion and result delivery are separate phases. Restore tempora
 
 ### Result files and polling
 
-Runtime IPC, markers, diagnostics, and logs belong under the Unity project's `Temp/` directory. Do not rely on directory cleanup at a particular Editor lifecycle event.
+Runtime IPC, diagnostics, and logs belong under the Unity project's `Temp/` directory. Do not rely on directory cleanup at a particular Editor lifecycle event.
 
 - Refresh and recompile share `unity_refresh_<operationId>.json`; eval and tests use `unity_eval_<operationId>.json` and `unity_test_<operationId>.json`.
-- Correlated files are authoritative for operation completion. The poller normally deletes them after consumption; this bounds their retry/deduplication lifetime and is not indefinite exactly-once delivery.
+- Correlated files are authoritative for operation completion. The poller normally deletes them after consumption; this bounds their retry/deduplication lifetime and is not indefinite exactly-once delivery. Disk files in `Temp/` are strictly reserved for terminal outcomes and static completion history.
+- Transient running state and test progress belong in memory (`s_CachedRunState` / `SessionState`), not on disk. Do not write per-test progress files (`unity_test_running.txt`) or cancellation marker files; `POLL_TESTS` returns running progress directly over the socket connection. This eliminates disk contention, main-thread I/O churn, and zombie running states across Editor crashes.
 - Static `unity_refresh_result.json` and `unity_test_results.json` are best-effort history, including failed-test reruns. They cannot prove that a new operation completed and are preserved by default.
 - Writers stage content in the destination directory and publish with move-overwrite. Editor code uses the native platform helper for Unity's API surface. Unique operation IDs avoid cross-operation collisions, but retries may encounter an existing destination.
 - Shared-history publication makes one best-effort attempt after the correlated result is published. History contention must not block operation completion.
-- Polling checks the correlated result before active state and rechecks before declaring unexpected idle. Running markers and ownership are progress evidence, not terminal outcomes.
+- Polling checks the correlated result before active state and rechecks before declaring unexpected idle. Active ownership is progress evidence, not terminal outcomes.
 - Bare `POLL_REFRESH` probes availability, returning `"PLAYMODE"` when the Editor is in PlayMode, `"BUSY playmode"` while transitioning in or out of PlayMode, and otherwise `"READY"` when idle; `POLL_REFRESH <operationId>` polls a specific operation. Unknown correlated IDs can return `IDLE`. Neither generic `READY` nor a foreign compilation outcome substitutes for a requested refresh's result.
 - Use successful project-bound socket replies as liveness evidence; inspect processes when communication fails. Internal status requires an explicit ready response, not merely an earlier successful `PING`.
 
@@ -46,7 +47,7 @@ Runtime IPC, markers, diagnostics, and logs belong under the Unity project's `Te
 
 `CANCEL_OPERATION <operationId>` targets only the requested operation. Dispatch must also handle cancellation between command send and initial acknowledgement, using an uncancelled token for the out-of-band cancellation request before propagating caller cancellation. Retain cancellation responsibility across ambiguous acknowledgement retries; transfer it to the poller after dispatch. Retry transport failures until a specific cancellation response, matching terminal result, or Editor exit establishes the outcome.
 
-For tests, the worker persists cancellation intent and the main thread calls `TestRunnerApi`. Acceptance does not mean completion. Preserve ownership and the running marker until `RunFinished` or a known inactive runner state; an indefinitely cancelling runner remains busy. Persist intent and job identity so reload recovery can resume cancellation.
+For tests, cancellation intent is updated in gate snapshot status and the main thread calls `TestRunnerApi`. Acceptance does not mean completion. Preserve active ownership until `RunFinished` or a known inactive runner state; an indefinitely cancelling runner remains busy. Persist intent and job identity in `SessionState` so reload recovery can resume cancellation.
 
 ### Main-thread and worker boundaries
 
