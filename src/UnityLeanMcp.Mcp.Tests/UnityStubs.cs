@@ -836,7 +836,7 @@ namespace UnityLeanMcp
             List<ConsoleLogEntry>? logs = null,
             bool interrupted = false)
         {
-            if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
+            if (!UnityCommandGate.IsOwnedBy(operationId, operationKind))
             {
                 return;
             }
@@ -889,13 +889,6 @@ namespace UnityLeanMcp
         public const string Eval = "eval", Test = "test", Refresh = "refresh", Recompile = "recompile";
     }
 
-    internal static class OperationLifecycleRegistry
-    {
-        public static Func<string, string, OperationCancelResult>? CancelFunc;
-        public static OperationCancelResult Cancel(string operationKind, string operationId) =>
-            CancelFunc?.Invoke(operationKind, operationId) ?? OperationCancelResult.NotCancelable;
-    }
-
     internal sealed class CancelledRunIdSet
     {
         public void Add(string id)
@@ -932,43 +925,6 @@ namespace UnityLeanMcp
             set => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.Active = value;
         }
         public static readonly CancelledRunIdSet CancelledRunIds = new();
-    }
-
-    internal static class UnityLeanMcpOperationStore
-    {
-        public static BeginOperationResult TryBegin(string id, string kind, string status, out UnityLeanMcpOperationState? existing)
-        {
-            var result = UnityCommandGate.TryBegin(kind, id, status, out _);
-            var snapshot = UnityCommandGate.ReadSnapshot();
-            existing = snapshot == null ? null : new UnityLeanMcpOperationState { kind = snapshot.Kind, operationId = snapshot.OperationId, status = snapshot.Status };
-            return (BeginOperationResult)result;
-        }
-        public static UnityLeanMcpOperationState? Read()
-        {
-            var snapshot = UnityCommandGate.ReadSnapshot();
-            return snapshot == null ? null : new UnityLeanMcpOperationState { kind = snapshot.Kind, operationId = snapshot.OperationId, status = snapshot.Status };
-        }
-        public static WorkerOperationStateSnapshot? ReadThreadSafeSnapshot()
-        {
-            var snapshot = UnityCommandGate.ReadSnapshot();
-            return snapshot == null ? null : new WorkerOperationStateSnapshot(snapshot.OperationId, snapshot.Kind, snapshot.Status, "", "");
-        }
-        public static bool IsOwnedBy(string id, string kind) => UnityCommandGate.IsOwnedBy(id, kind);
-        public static void Complete(string id) => UnityCommandGate.Complete(id);
-        public static void Update(string id, string status) => UnityCommandGate.Update(id, status);
-        public static Action<string, string, string>? Write;
-        public static void WriteAtomic(string path, string json, string id, int attempts = 5)
-        {
-            if (Write != null)
-            {
-                Write(path, json, id);
-                return;
-            }
-            string? dir = System.IO.Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
-            System.IO.File.WriteAllText(path, json);
-        }
-        public static bool TryWriteStaticHistory(string path, string json, string id) => true;
     }
 
     internal enum BeginOperationResult { Started, AlreadyStarted, Busy, Invalid }

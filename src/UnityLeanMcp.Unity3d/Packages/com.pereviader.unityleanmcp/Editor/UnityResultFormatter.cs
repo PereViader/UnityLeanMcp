@@ -350,136 +350,8 @@ namespace UnityLeanMcp
             Interlocked.Exchange(ref target, value);
         }
 
-        private sealed class FormatterEntry
-        {
-            public IUnityTypeFormatter Formatter { get; }
-            public int Order { get; }
-
-            public FormatterEntry(IUnityTypeFormatter formatter, int order)
-            {
-                Formatter = formatter;
-                Order = order;
-            }
-        }
-
-        private static readonly object s_Lock = new object();
-        private static readonly List<FormatterEntry> s_Entries = new List<FormatterEntry>();
-        private static volatile IUnityTypeFormatter[] s_SortedFormattersSnapshot;
-        private static bool s_DefaultFormattersRegistered;
-        private static int s_OrderCounter;
-
         public static void EnsureInitialized()
         {
-            EnsureDefaultFormatters();
-        }
-
-        public static void RegisterFormatter(IUnityTypeFormatter formatter)
-        {
-            if (formatter == null)
-            {
-                throw new ArgumentNullException(nameof(formatter));
-            }
-
-            lock (s_Lock)
-            {
-                EnsureDefaultFormattersLocked();
-                s_Entries.RemoveAll(e => e.Formatter.Equals(formatter));
-                s_Entries.Add(new FormatterEntry(formatter, ++s_OrderCounter));
-                SortEntriesLocked();
-            }
-        }
-
-        public static bool UnregisterFormatter(IUnityTypeFormatter formatter)
-        {
-            if (formatter == null)
-            {
-                return false;
-            }
-
-            lock (s_Lock)
-            {
-                EnsureDefaultFormattersLocked();
-                int removed = s_Entries.RemoveAll(e => e.Formatter.Equals(formatter));
-                if (removed > 0)
-                {
-                    SortEntriesLocked();
-                    return true;
-                }
-                return false;
-            }
-        }
-
-        public static bool UnregisterFormatter<T>() where T : IUnityTypeFormatter
-        {
-            lock (s_Lock)
-            {
-                EnsureDefaultFormattersLocked();
-                int removed = s_Entries.RemoveAll(e => e.Formatter is T);
-                if (removed > 0)
-                {
-                    SortEntriesLocked();
-                    return true;
-                }
-                return false;
-            }
-        }
-
-        public static void ResetToDefaults()
-        {
-            lock (s_Lock)
-            {
-                s_Entries.Clear();
-                Volatile.Write(ref s_DefaultFormattersRegistered, false);
-                EnsureDefaultFormattersLocked();
-            }
-        }
-
-        public static IReadOnlyList<IUnityTypeFormatter> Formatters
-        {
-            get
-            {
-                EnsureDefaultFormatters();
-                return s_SortedFormattersSnapshot;
-            }
-        }
-
-        private static void EnsureDefaultFormatters()
-        {
-            if (Volatile.Read(ref s_DefaultFormattersRegistered)) return;
-            lock (s_Lock)
-            {
-                EnsureDefaultFormattersLocked();
-            }
-        }
-
-        private static void EnsureDefaultFormattersLocked()
-        {
-            if (Volatile.Read(ref s_DefaultFormattersRegistered)) return;
-
-            s_Entries.Add(new FormatterEntry(new TransformFormatter(110), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new GameObjectFormatter(100), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new ComponentFormatter(90), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new ScriptableObjectFormatter(80), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new SceneFormatter(70), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new SerializedObjectFormatter(60), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new SerializedPropertyFormatter(50), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new AnonymousTypeFormatter(45), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new EnumerableFormatter(40), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new UnityMathFormatter(35), ++s_OrderCounter));
-            s_Entries.Add(new FormatterEntry(new JsonUtilityFallbackFormatter(-1000), ++s_OrderCounter));
-
-            SortEntriesLocked();
-            Volatile.Write(ref s_DefaultFormattersRegistered, true);
-        }
-
-        private static void SortEntriesLocked()
-        {
-            s_Entries.Sort((a, b) =>
-            {
-                int cmp = b.Formatter.Priority.CompareTo(a.Formatter.Priority);
-                return cmp != 0 ? cmp : a.Order.CompareTo(b.Order);
-            });
-            s_SortedFormattersSnapshot = s_Entries.Select(e => e.Formatter).ToArray();
         }
 
         public static string FormatResult(object result, bool isVoidStatement = false, bool prettyPrint = true)
@@ -542,38 +414,67 @@ namespace UnityLeanMcp
                 return LimitOutput($"null ({result.GetType().Name})", context);
             }
 
-            EnsureDefaultFormatters();
-            var formatters = s_SortedFormattersSnapshot;
-            for (int i = 0; i < formatters.Length; i++)
+            if (result is Transform t)
             {
-                var formatter = formatters[i];
-                try
-                {
-                    if (formatter.CanFormat(result))
-                    {
-                        if (formatter is JsonUtilityFallbackFormatter)
-                        {
-                            GraphGuardResult graphResult = context.InspectChildren(result, depth, prettyPrint);
-                            if (graphResult != GraphGuardResult.Safe)
-                            {
-                                return LimitOutput(GetGraphGuardMarker(graphResult), context);
-                            }
-                        }
+                return LimitOutput(FormatTransform(t), context);
+            }
 
-                        string formatted = formatter.Format(
-                            result,
-                            child => FormatChild(child, prettyPrint, context, depth),
-                            prettyPrint);
-                        if (formatted != null)
-                        {
-                            return LimitOutput(formatted, context);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"UnityLeanMcp: Formatter {formatter.GetType().Name} failed: {ex.Message}");
-                }
+            if (result is GameObject go)
+            {
+                return LimitOutput(FormatGameObject(go), context);
+            }
+
+            if (result is Component comp)
+            {
+                return LimitOutput(FormatComponent(comp), context);
+            }
+
+            if (result is ScriptableObject so)
+            {
+                return LimitOutput(FormatScriptableObject(so), context);
+            }
+
+            if (result is Scene scene)
+            {
+                return LimitOutput(FormatScene(scene), context);
+            }
+
+            if (result is SerializedObject serializedObj)
+            {
+                return LimitOutput(FormatSerializedObject(serializedObj), context);
+            }
+
+            if (result is SerializedProperty prop)
+            {
+                return LimitOutput(FormatSerializedProperty(prop), context);
+            }
+
+            if (IsAnonymousType(result))
+            {
+                return LimitOutput(FormatAnonymousType(result, child => FormatChild(child, prettyPrint, context, depth), prettyPrint), context);
+            }
+
+            if (result is IEnumerable enumerable && !(result is string))
+            {
+                return LimitOutput(FormatEnumerable(enumerable, child => FormatChild(child, prettyPrint, context, depth), prettyPrint), context);
+            }
+
+            string mathFormatted = FormatUnityMath(result);
+            if (mathFormatted != null)
+            {
+                return LimitOutput(mathFormatted, context);
+            }
+
+            GraphGuardResult graphResult = context.InspectChildren(result, depth, prettyPrint);
+            if (graphResult != GraphGuardResult.Safe)
+            {
+                return LimitOutput(GetGraphGuardMarker(graphResult), context);
+            }
+
+            string json = FormatJsonUtilityFallback(result, prettyPrint);
+            if (json != null)
+            {
+                return LimitOutput(json, context);
             }
 
             return LimitOutput(result.ToString(), context);
@@ -732,239 +633,75 @@ namespace UnityLeanMcp
                 return null;
             }
         }
-    }
 
-    public class TransformFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public TransformFormatter(int priority = 110)
+        private static string FormatTransform(Transform t)
         {
-            Priority = priority;
+            if (t == null) return "null (Transform)";
+            string pos = t.localPosition.ToString("F2", CultureInfo.InvariantCulture);
+            string rot = t.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
+            return $"Transform \"{t.name}\" [children: {t.childCount}, localPos: {pos}, localRot: {rot}]";
         }
 
-        public bool CanFormat(object value) => value is Transform;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
+        private static string FormatGameObject(GameObject go)
         {
-            if (value is Transform t)
+            if (go == null) return "null (GameObject)";
+            var compNames = go.GetComponents<Component>()
+                .Where(c => c != null)
+                .Select(c => c.GetType().Name);
+
+            return $"{go.name} (GameObject) [active: {go.activeSelf}, tag: \"{go.tag}\", layer: {go.layer}, components: {string.Join(", ", compNames)}]";
+        }
+
+        private static string FormatComponent(Component comp)
+        {
+            if (comp == null) return "null (Component)";
+            string goName = comp.gameObject != null ? comp.gameObject.name : "null";
+            return $"{comp.GetType().Name} (Component on \"{goName}\")";
+        }
+
+        private static string FormatScriptableObject(ScriptableObject so)
+        {
+            if (so == null) return $"null ({so?.GetType().Name ?? "ScriptableObject"})";
+            return $"{so.GetType().Name} (ScriptableObject) [name: \"{so.name}\", assetPath: \"{AssetDatabase.GetAssetPath(so)}\"]";
+        }
+
+        private static string FormatScene(Scene scene)
+        {
+            return $"Scene \"{scene.name}\" [path: \"{scene.path}\", isLoaded: {scene.isLoaded}, isDirty: {scene.isDirty}, rootCount: {scene.rootCount}]";
+        }
+
+        private static string FormatSerializedObject(SerializedObject serializedObj)
+        {
+            try
             {
-                if (t == null) return "null (Transform)";
-                string pos = t.localPosition.ToString("F2", CultureInfo.InvariantCulture);
-                string rot = t.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
-                return $"Transform \"{t.name}\" [children: {t.childCount}, localPos: {pos}, localRot: {rot}]";
+                var target = serializedObj.targetObject;
+                return $"SerializedObject on \"{target?.name}\" ({target?.GetType().Name})";
             }
-            return null;
-        }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class GameObjectFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public GameObjectFormatter(int priority = 100)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value is GameObject;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is GameObject go)
+            catch
             {
-                if (go == null) return "null (GameObject)";
-                var compNames = go.GetComponents<Component>()
-                    .Where(c => c != null)
-                    .Select(c => c.GetType().Name);
-
-                return $"{go.name} (GameObject) [active: {go.activeSelf}, tag: \"{go.tag}\", layer: {go.layer}, components: {string.Join(", ", compNames)}]";
+                return "SerializedObject (targetObject disposed or inaccessible)";
             }
-            return null;
         }
 
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class ComponentFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public ComponentFormatter(int priority = 90)
+        private static string FormatSerializedProperty(SerializedProperty prop)
         {
-            Priority = priority;
+            string propVal = FormatSerializedPropertyValue(prop);
+            return propVal != null
+                ? $"SerializedProperty \"{prop.propertyPath}\" ({prop.propertyType}) = {propVal}"
+                : $"SerializedProperty \"{prop.propertyPath}\" ({prop.propertyType})";
         }
 
-        public bool CanFormat(object value) => value is Component;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is Component comp)
-            {
-                if (comp == null) return "null (Component)";
-                string goName = comp.gameObject != null ? comp.gameObject.name : "null";
-                return $"{comp.GetType().Name} (Component on \"{goName}\")";
-            }
-            return null;
-        }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class ScriptableObjectFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public ScriptableObjectFormatter(int priority = 80)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value is ScriptableObject;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is ScriptableObject so)
-            {
-                if (so == null) return $"null ({value?.GetType().Name ?? "ScriptableObject"})";
-                return $"{so.GetType().Name} (ScriptableObject) [name: \"{so.name}\", assetPath: \"{AssetDatabase.GetAssetPath(so)}\"]";
-            }
-            return null;
-        }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class SceneFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public SceneFormatter(int priority = 70)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value is Scene;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is Scene scene)
-            {
-                return $"Scene \"{scene.name}\" [path: \"{scene.path}\", isLoaded: {scene.isLoaded}, isDirty: {scene.isDirty}, rootCount: {scene.rootCount}]";
-            }
-            return null;
-        }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class SerializedObjectFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public SerializedObjectFormatter(int priority = 60)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value is SerializedObject;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is SerializedObject serializedObj)
-            {
-                try
-                {
-                    var target = serializedObj.targetObject;
-                    return $"SerializedObject on \"{target?.name}\" ({target?.GetType().Name})";
-                }
-                catch
-                {
-                    return "SerializedObject (targetObject disposed or inaccessible)";
-                }
-            }
-            return null;
-        }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class SerializedPropertyFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public SerializedPropertyFormatter(int priority = 50)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value is SerializedProperty;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is SerializedProperty prop)
-            {
-                string propVal = UnityResultFormatter.FormatSerializedPropertyValue(prop);
-                return propVal != null
-                    ? $"SerializedProperty \"{prop.propertyPath}\" ({prop.propertyType}) = {propVal}"
-                    : $"SerializedProperty \"{prop.propertyPath}\" ({prop.propertyType})";
-            }
-            return null;
-        }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class AnonymousTypeFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public AnonymousTypeFormatter(int priority = 45)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value)
+        internal static bool IsAnonymousType(object value)
         {
             if (value == null) return false;
             var type = value.GetType();
             return type.IsSealed &&
                    type.Namespace == null &&
                    type.Name.Contains("AnonymousType") &&
-                   type.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false);
+                   type.IsDefined(typeof(CompilerGeneratedAttribute), false);
         }
 
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
+        private static string FormatAnonymousType(object value, Func<object, string> formatChild, bool prettyPrint)
         {
             var type = value.GetType();
             var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
@@ -988,7 +725,7 @@ namespace UnityLeanMcp
                     var prop = validProps[i];
                     object propVal = null;
                     try { propVal = prop.GetValue(value, null); } catch (Exception ex) { propVal = $"<error: {ex.Message}>"; }
-                    string childStr = formatChild != null ? formatChild(propVal) : UnityResultFormatter.FormatResult(propVal, false, prettyPrint);
+                    string childStr = formatChild != null ? formatChild(propVal) : FormatResult(propVal, false, prettyPrint);
                     sb.Append("  ").Append(prop.Name).Append(" = ").Append(childStr);
                     if (i < validProps.Count - 1) sb.Append(",");
                     sb.AppendLine();
@@ -1003,7 +740,7 @@ namespace UnityLeanMcp
                     var prop = validProps[i];
                     object propVal = null;
                     try { propVal = prop.GetValue(value, null); } catch (Exception ex) { propVal = $"<error: {ex.Message}>"; }
-                    string childStr = formatChild != null ? formatChild(propVal) : UnityResultFormatter.FormatResult(propVal, false, prettyPrint);
+                    string childStr = formatChild != null ? formatChild(propVal) : FormatResult(propVal, false, prettyPrint);
                     sb.Append(prop.Name).Append(" = ").Append(childStr);
                     if (i < validProps.Count - 1) sb.Append(", ");
                 }
@@ -1012,88 +749,31 @@ namespace UnityLeanMcp
             return sb.ToString();
         }
 
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class EnumerableFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public EnumerableFormatter(int priority = 40)
+        private static string FormatEnumerable(IEnumerable enumerable, Func<object, string> childFormatter, bool prettyPrint)
         {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value is IEnumerable && !(value is string);
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
-        {
-            if (value is IEnumerable enumerable && !(value is string))
+            var items = new List<string>();
+            int count = 0;
+            Func<object, string> formatter = childFormatter ?? (child => FormatResult(child, false, prettyPrint));
+            foreach (var item in enumerable)
             {
-                var items = new List<string>();
-                int count = 0;
-                Func<object, string> childFormatter = formatChild ?? (child => UnityResultFormatter.FormatResult(child, false, prettyPrint));
-                foreach (var item in enumerable)
+                count++;
+                if (count > MaxItems)
                 {
-                    count++;
-                    if (count > UnityResultFormatter.MaxItems)
-                    {
-                        items.Add(UnityResultFormatter.ItemTruncationMarker);
-                        break;
-                    }
-
-                    string formattedItem = childFormatter(item);
-                    items.Add(formattedItem);
-                    if (formattedItem == UnityResultFormatter.ItemTruncationMarker)
-                    {
-                        break;
-                    }
+                    items.Add(ItemTruncationMarker);
+                    break;
                 }
-                return "[" + string.Join(", ", items) + "]";
+
+                string formattedItem = formatter(item);
+                items.Add(formattedItem);
+                if (formattedItem == ItemTruncationMarker)
+                {
+                    break;
+                }
             }
-            return null;
+            return "[" + string.Join(", ", items) + "]";
         }
 
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class UnityMathFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public UnityMathFormatter(int priority = 35)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value)
-        {
-            return value is Vector2
-                || value is Vector3
-                || value is Vector4
-                || value is Vector2Int
-                || value is Vector3Int
-                || value is Quaternion
-                || value is Color
-                || value is Color32
-                || value is Bounds
-                || value is BoundsInt
-                || value is Rect
-                || value is RectInt
-                || value is Ray
-                || value is Ray2D
-                || value is Plane;
-        }
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
+        private static string FormatUnityMath(object value)
         {
             switch (value)
             {
@@ -1132,25 +812,7 @@ namespace UnityLeanMcp
             }
         }
 
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
-    }
-
-    public class JsonUtilityFallbackFormatter : IUnityTypeFormatter
-    {
-        public int Priority { get; }
-
-        public JsonUtilityFallbackFormatter(int priority = -1000)
-        {
-            Priority = priority;
-        }
-
-        public bool CanFormat(object value) => value != null;
-
-        public string Format(object value, Func<object, string> formatChild, bool prettyPrint = true)
+        private static string FormatJsonUtilityFallback(object value, bool prettyPrint)
         {
             try
             {
@@ -1165,11 +827,5 @@ namespace UnityLeanMcp
             }
             return null;
         }
-
-        public override bool Equals(object obj) =>
-            obj != null && obj.GetType() == GetType() && ((IUnityTypeFormatter)obj).Priority == Priority;
-
-        public override int GetHashCode() =>
-            (GetType().GetHashCode() * 397) ^ Priority.GetHashCode();
     }
 }

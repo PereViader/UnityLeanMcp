@@ -31,7 +31,7 @@ namespace UnityLeanMcp
 
         public void Handle(string payload, StreamWriter writer)
         {
-            var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            var activeOp = UnityCommandGate.ReadSnapshot();
             if (activeOp != null)
             {
                 writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");

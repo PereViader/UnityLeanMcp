@@ -51,18 +51,18 @@ namespace UnityLeanMcp
             }
 
             string rawCode = ProtocolCodec.UnescapeLine(requestParts[1].Trim());
-            var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKinds.Eval, OperationStatus.Compiling, out var existing);
-            if (begin == BeginOperationResult.Invalid)
+            var begin = UnityCommandGate.TryBegin(OperationKinds.Eval, operationId, OperationStatus.Compiling, out var busyReason);
+            if (begin == BeginGateResult.Invalid)
             {
                 writer.WriteLine("ERROR: Missing or invalid operation id");
                 return;
             }
-            if (begin == BeginOperationResult.Busy)
+            if (begin == BeginGateResult.Busy)
             {
-                writer.WriteLine($"BUSY {existing.kind} {existing.operationId}");
+                writer.WriteLine($"BUSY {busyReason}");
                 return;
             }
-            if (begin == BeginOperationResult.AlreadyStarted)
+            if (begin == BeginGateResult.AlreadyStarted)
             {
                 writer.WriteLine("RUNNING");
                 return;
@@ -116,7 +116,7 @@ namespace UnityLeanMcp
                 runningSent = true;
 
                 // Execute compiled assembly under async harness
-                UnityLeanMcpOperationStore.Update(operationId, OperationStatus.Executing);
+                UnityCommandGate.Update(operationId, OperationStatus.Executing);
 
                 OperationExecutionEngine.Execute(
                     operationId: operationId,
@@ -208,8 +208,8 @@ namespace UnityLeanMcp
 
         public static void MarkInterrupted(string message, string targetOperationId = null)
         {
-            var operation = UnityLeanMcpOperationStore.Read();
-            string opId = targetOperationId ?? operation?.operationId;
+            var operation = UnityCommandGate.ReadSnapshot();
+            string opId = targetOperationId ?? operation?.OperationId;
             string resultFilePath = UnityLeanMcpPaths.GetEvalResultFile(opId);
             OperationExecutionEngine.MarkInterrupted(OperationKinds.Eval, resultFilePath, message, targetOperationId);
         }

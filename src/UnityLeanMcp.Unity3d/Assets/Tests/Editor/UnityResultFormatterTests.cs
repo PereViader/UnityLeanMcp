@@ -147,15 +147,6 @@ namespace UnityLeanMcpTests
             Assert.That(formatted, Is.EqualTo("[(1.00, 2.00, 3.00), (4.00, 5.00, 6.00)]"));
         }
 
-        [Test]
-        public void DefaultFormatters_ContainsUnityMathFormatterWithPriority35()
-        {
-            UnityResultFormatter.ResetToDefaults();
-            var formatters = UnityResultFormatter.Formatters;
-            var mathFormatter = formatters.OfType<UnityMathFormatter>().FirstOrDefault();
-            Assert.That(mathFormatter, Is.Not.Null);
-            Assert.That(mathFormatter.Priority, Is.EqualTo(35));
-        }
 
         [Test]
         public void FormatResult_OversizedString_RespectsCharacterAndByteLimits()
@@ -239,12 +230,11 @@ namespace UnityLeanMcpTests
         [Test]
         public void AnonymousTypeFormatter_CanFormat_ReturnsFalseForComponent()
         {
-            var formatter = new AnonymousTypeFormatter();
             var go = new GameObject("Temp");
             try
             {
                 var comp = go.transform;
-                Assert.That(formatter.CanFormat(comp), Is.False);
+                Assert.That(UnityResultFormatter.IsAnonymousType(comp), Is.False);
             }
             finally
             {

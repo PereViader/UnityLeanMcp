@@ -12,8 +12,6 @@ namespace UnityLeanMcp
 
         private static void ExitUnity()
         {
-            var operation = UnityLeanMcpOperationStore.Read();
-            OperationLifecycleRegistry.NotifyQuitting(operation);
             UnityLeanMcpServer.StopServer();
             EditorApplication.Exit(0);
         }

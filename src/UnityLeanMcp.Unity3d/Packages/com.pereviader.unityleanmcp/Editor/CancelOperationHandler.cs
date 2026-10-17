@@ -3,6 +3,13 @@ using System.IO;
 
 namespace UnityLeanMcp
 {
+    internal enum OperationCancelResult
+    {
+        Cancelled,
+        NotCancelable,
+        NotFound
+    }
+
     internal class CancelOperationHandler : ICommandHandler
     {
         public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.WorkerThread;
@@ -25,7 +32,7 @@ namespace UnityLeanMcp
                 return;
             }
 
-            var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            var operation = UnityCommandGate.ReadSnapshot();
             if (operation == null)
             {
                 if (IsTerminalInterruptedResult(operationId))
@@ -47,7 +54,9 @@ namespace UnityLeanMcp
                 return;
             }
 
-            OperationCancelResult result = OperationLifecycleRegistry.Cancel(operation.Kind, operationId);
+            OperationCancelResult result = CancelRouteHook != null
+                ? CancelRouteHook(operation.Kind, operationId)
+                : RouteCancellation(operation.Kind, operationId);
             if ((result == OperationCancelResult.NotFound || result == OperationCancelResult.NotCancelable) &&
                 IsTerminalInterruptedResult(operationId))
             {
@@ -68,6 +77,19 @@ namespace UnityLeanMcp
                     break;
             }
             writer.Flush();
+        }
+
+#nullable enable
+        internal static Func<string, string, OperationCancelResult>? CancelRouteHook;
+#nullable restore
+
+        private static OperationCancelResult RouteCancellation(string kind, string operationId)
+        {
+            if (string.Equals(kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
+                return RunTestsHandler.CancelActiveTestRun(operationId);
+            if (string.Equals(kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
+                return OperationExecutionEngine.TryCancel(operationId) ? OperationCancelResult.Cancelled : OperationCancelResult.NotCancelable;
+            return OperationCancelResult.NotCancelable;
         }
 
         private static bool IsTerminalInterruptedResult(string operationId)

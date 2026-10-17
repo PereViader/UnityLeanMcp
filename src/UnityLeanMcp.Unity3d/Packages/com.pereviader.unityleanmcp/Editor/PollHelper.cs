@@ -103,8 +103,8 @@ namespace UnityLeanMcp
                 }
             }
 
-            // 3. Fallback to operation store for busy vs idle state
-            var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            // 3. Fallback to command gate for busy vs idle state
+            var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null)
             {
                 if (!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)

@@ -72,13 +72,13 @@ namespace UnityLeanMcp
 
         public static void MarkInterrupted(string operationKind, string resultFilePath, string message, string targetOperationId = null)
         {
-            var operation = UnityLeanMcpOperationStore.Read();
-            string opId = targetOperationId ?? operation?.operationId;
+            var operation = UnityCommandGate.ReadSnapshot();
+            string opId = targetOperationId ?? operation?.OperationId;
             if (string.IsNullOrEmpty(opId))
             {
                 return;
             }
-            if (operation != null && operation.kind != operationKind && targetOperationId == null)
+            if (operation != null && operation.Kind != operationKind && targetOperationId == null)
             {
                 return;
             }
@@ -343,7 +343,7 @@ namespace UnityLeanMcp
         {
             try
             {
-                if (!UnityLeanMcpOperationStore.IsOwnedBy(operationId, operationKind))
+                if (!UnityCommandGate.IsOwnedBy(operationId, operationKind))
                 {
                     return;
                 }

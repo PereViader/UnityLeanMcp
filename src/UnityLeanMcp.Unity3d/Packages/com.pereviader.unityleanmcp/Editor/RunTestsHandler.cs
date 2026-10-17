@@ -68,7 +68,7 @@ namespace UnityLeanMcp
 
         private static bool TryUpdateRunningState(string runId, Action<UnityTestRunState> update, string actionDesc)
         {
-            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
                 return false;
 
             var state = ReadRunningState();
@@ -83,7 +83,7 @@ namespace UnityLeanMcp
 
             try
             {
-                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
+                UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
                 return true;
             }
             catch (Exception ex)
@@ -249,19 +249,19 @@ namespace UnityLeanMcp
                 }
             }
 
-            var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKinds.Test, OperationStatus.Queued, out var existing);
-            if (begin == BeginOperationResult.Invalid)
+            var begin = UnityCommandGate.TryBegin(OperationKinds.Test, operationId, OperationStatus.Queued, out var busyReason);
+            if (begin == BeginGateResult.Invalid)
             {
                 writer.WriteLine("ERROR: Missing or invalid operation id");
                 return;
             }
-            if (begin == BeginOperationResult.Busy)
+            if (begin == BeginGateResult.Busy)
             {
-                writer.WriteLine($"BUSY {existing.kind} {existing.operationId}");
+                writer.WriteLine($"BUSY {busyReason}");
                 return;
             }
 
-            if (begin == BeginOperationResult.AlreadyStarted)
+            if (begin == BeginGateResult.AlreadyStarted)
             {
                 writer.WriteLine("RUNNING");
                 writer.Flush();
@@ -270,7 +270,6 @@ namespace UnityLeanMcp
 
             try
             {
-                PrepareCancellationRequest(operationId);
                 List<string> failedTests = null;
                 if (testArgs.failedOnly)
                 {
@@ -310,7 +309,7 @@ namespace UnityLeanMcp
                 {
                     writer.WriteLine("ERROR: Could not persist test run state.");
                     writer.Flush();
-                    UnityLeanMcpOperationStore.Complete(operationId);
+                    UnityCommandGate.Complete(operationId);
                     return;
                 }
 
@@ -437,7 +436,7 @@ namespace UnityLeanMcp
 
         private static string WriteTestRunningState(string runId, TestMode mode, RunTestsArgs args)
         {
-            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
             {
                 return null;
             }
@@ -470,7 +469,7 @@ namespace UnityLeanMcp
                 {
                     s_CachedRunState = state;
                 }
-                UnityLeanMcpOperationStore.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
+                UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
                 return runId;
             }
             catch (Exception ex)
@@ -509,7 +508,7 @@ namespace UnityLeanMcp
                 };
 
                 UpdateTestRunStatus(runId, OperationStatus.Running);
-                UnityLeanMcpOperationStore.Update(runId, OperationStatus.Executing);
+                UnityCommandGate.Update(runId, OperationStatus.Executing);
                 s_Callbacks.BindRun(runId);
 
                 var settings = new ExecutionSettings(filter);
@@ -602,22 +601,30 @@ namespace UnityLeanMcp
 
         internal static void UpdateTestRunProgress(string runId, int totalTests, int completedTests, int passCount, int failCount, int skipCount, string currentTestName, string status = null)
         {
-            TryUpdateRunningState(runId, s =>
+            if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
+                return;
+
+            lock (s_RunStateLock)
             {
+                var state = s_CachedRunState ?? ReadRunningState();
+                if (state == null || state.runId != runId)
+                    return;
+
                 if (!string.IsNullOrEmpty(status))
                 {
-                    s.status = status;
+                    state.status = status;
                 }
-                s.totalTests = totalTests;
-                s.completedTests = completedTests;
-                s.passCount = passCount;
-                s.failCount = failCount;
-                s.skipCount = skipCount;
+                state.totalTests = totalTests;
+                state.completedTests = completedTests;
+                state.passCount = passCount;
+                state.failCount = failCount;
+                state.skipCount = skipCount;
                 if (currentTestName != null)
                 {
-                    s.currentTestName = currentTestName;
+                    state.currentTestName = currentTestName;
                 }
-            }, "update test run progress");
+                s_CachedRunState = state;
+            }
         }
 
 
@@ -625,7 +632,7 @@ namespace UnityLeanMcp
         {
             var state = ReadRunningState();
             string runId = targetRunId ?? state?.runId;
-            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
             {
                 return;
             }
@@ -653,7 +660,7 @@ namespace UnityLeanMcp
         {
             var state = ReadRunningState();
             if (state == null || state.runId != operationId ||
-                !UnityLeanMcpOperationStore.IsOwnedBy(operationId, OperationKinds.Test))
+                !UnityCommandGate.IsOwnedBy(operationId, OperationKinds.Test))
             {
                 return;
             }
@@ -661,7 +668,7 @@ namespace UnityLeanMcp
             if (state.status != OperationStatus.Cancelling)
             {
                 UpdateTestRunStatus(operationId, OperationStatus.Cancelling);
-                UnityLeanMcpOperationStore.Update(operationId, OperationStatus.Cancelling);
+                UnityCommandGate.Update(operationId, OperationStatus.Cancelling);
             }
 
             BeginCancellationMonitoring(operationId);
@@ -693,7 +700,7 @@ namespace UnityLeanMcp
                 return OperationCancelResult.NotFound;
             }
 
-            var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            var operation = UnityCommandGate.ReadSnapshot();
             var runningState = ReadThreadSafeSnapshot();
 
             // 1. If neither operation store nor running state is active
@@ -725,10 +732,7 @@ namespace UnityLeanMcp
 
             string activeRunId = operationId;
 
-            if (!WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, activeRunId))
-            {
-                return OperationCancelResult.NotCancelable;
-            }
+            UnityCommandGate.Update(activeRunId, OperationStatus.Cancelling);
 
             // The action performs all Unity API and state-transition work on
             // the main thread via the dispatcher.
@@ -740,7 +744,7 @@ namespace UnityLeanMcp
         {
             var state = ReadRunningState();
             string runId = targetRunId ?? state?.runId;
-            if (string.IsNullOrEmpty(runId) || !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+            if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
             {
                 return;
             }
@@ -798,26 +802,11 @@ namespace UnityLeanMcp
             StopCancellationMonitoring(runId);
             DeleteRunningStateIfOwned(runId);
             ClearCachedRunState();
-            UnityLeanMcpOperationStore.Complete(runId);
+            UnityCommandGate.Complete(runId);
             s_CurrentTestJobGuid = null;
             if (s_Callbacks != null)
             {
                 s_Callbacks.Reset();
-            }
-        }
-
-        private static void PrepareCancellationRequest(string runId)
-        {
-            string path = UnityLeanMcpPaths.TestCancellationFile;
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            string requestedRunId = WorkerThreadSnapshots.ReadFileWithRetry(path)?.Trim();
-            if (!string.IsNullOrEmpty(requestedRunId) && requestedRunId != runId)
-            {
-                try { File.Delete(path); } catch { }
             }
         }
 
@@ -834,9 +823,21 @@ namespace UnityLeanMcp
                 return true;
             }
 
+            lock (s_RunStateLock)
+            {
+                if (s_CachedRunState != null && s_CachedRunState.runId == runId && s_CachedRunState.status == OperationStatus.Cancelling)
+                {
+                    return true;
+                }
+            }
+
             var state = ReadRunningState();
-            return (state != null && state.runId == runId && state.status == OperationStatus.Cancelling) ||
-                WorkerThreadSnapshots.TryReadTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId);
+            if (state != null && state.runId == runId && state.status == OperationStatus.Cancelling)
+            {
+                return true;
+            }
+
+            return WorkerThreadSnapshots.TryReadTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId);
         }
 
         private static void UpdateTestRunJobGuid(string runId, string jobGuid)
@@ -868,7 +869,7 @@ namespace UnityLeanMcp
 
             var state = ReadRunningState();
             if (state == null || state.runId != runId ||
-                !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+                !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
             {
                 StopCancellationMonitoring(runId);
                 return;

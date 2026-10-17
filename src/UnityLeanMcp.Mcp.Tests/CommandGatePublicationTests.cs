@@ -19,8 +19,8 @@ public sealed class CommandGatePublicationTests : IDisposable
         RunTestsHandler.ActiveStateKnown = true;
         RunTestsHandler.Active = false;
         RunTestsHandler.CancelledRunIds.Clear();
-        OperationLifecycleRegistry.CancelFunc = null;
-        UnityLeanMcpOperationStore.Write = null;
+        CancelOperationHandler.CancelRouteHook = null;
+        UnityCommandGate.WriteAtomicHook = null;
         UnityLeanMcpDispatcher.Clear();
     }
 
@@ -47,7 +47,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     public void RequestedCompilationReloadPublishesInterruptionInsteadOfRemainingOwned(string kind)
     {
         string? published = null;
-        UnityLeanMcpOperationStore.Write = (_, json, _) => published = json;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(kind, "not-started", "Requested", out _));
         typeof(UnityCommandGate).GetField("s_Snapshot", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
 
@@ -77,7 +77,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     public void FailedPublicationWritesWarningToProjectDiagnosticsLog()
     {
         string operationId = Guid.NewGuid().ToString("N");
-        UnityLeanMcpOperationStore.Write = (_, _, _) => throw new IOException("locked result");
+        UnityCommandGate.WriteAtomicHook = (_, _, _) => throw new IOException("locked result");
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin("eval", operationId, "running", out _));
 
         UnityCommandGate.PublishResult("eval", operationId, Path.Combine(_root, "result.json"), "completed payload");
@@ -95,7 +95,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     {
         string path = Path.Combine(_root, "result.json");
         int attempts = 0;
-        UnityLeanMcpOperationStore.Write = (_, _, _) => { attempts++; throw new IOException("locked"); };
+        UnityCommandGate.WriteAtomicHook = (_, _, _) => { attempts++; throw new IOException("locked"); };
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin("eval", "owner", "running", out _));
         UnityCommandGate.PublishResult("eval", "owner", path, "completed payload");
         Assert.Equal(BeginGateResult.Busy, UnityCommandGate.TryBegin("eval", "next", "running", out _));
@@ -107,7 +107,7 @@ public sealed class CommandGatePublicationTests : IDisposable
         typeof(UnityCommandGate).GetField("s_Snapshot", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
         UnityCommandGate.InitializeMainThread();
         Assert.True(UnityCommandGate.IsOwnedBy("owner", "eval"));
-        UnityLeanMcpOperationStore.Write = (p, json, _) => File.WriteAllText(p, json);
+        UnityCommandGate.WriteAtomicHook = (p, json, _) => File.WriteAllText(p, json);
         EditorApplication.Tick();
         Assert.Equal("completed payload", File.ReadAllText(path));
         Assert.Null(UnityCommandGate.ReadSnapshot());
@@ -118,7 +118,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     public void ReloadWaitsForTestFrameworkInitializerToRestoreRunningJobs()
     {
         string? published = null;
-        UnityLeanMcpOperationStore.Write = (_, json, _) => published = json;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
         UnityCommandGate.TryBegin("test", "resuming-run", "running", out _);
 
         // IsRunActive reports false until the framework's load initializer
@@ -138,7 +138,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     public void ReloadPublishesInterruptionWhenFrameworkHasNoSurvivingRun()
     {
         string? published = null;
-        UnityLeanMcpOperationStore.Write = (_, json, _) => published = json;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
         UnityCommandGate.TryBegin("test", "lost-run", "running", out _);
         UnityCommandGate.InitializeMainThread();
         Assert.Null(published);
@@ -151,13 +151,13 @@ public sealed class CommandGatePublicationTests : IDisposable
     [Fact]
     public void ReloadDoesNotDeclareUnknownTestRunnerStateInterrupted()
     {
-        UnityLeanMcpOperationStore.Write = (_, _, _) => throw new InvalidOperationException("Must not publish");
+        UnityCommandGate.WriteAtomicHook = (_, _, _) => throw new InvalidOperationException("Must not publish");
         UnityCommandGate.TryBegin("test", "run", "running", out _);
         RunTestsHandler.ActiveStateKnown = false;
         UnityCommandGate.InitializeMainThread();
         Assert.True(UnityCommandGate.IsOwnedBy("run", "test"));
         string? published = null;
-        UnityLeanMcpOperationStore.Write = (_, json, _) => published = json;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
         RunTestsHandler.ActiveStateKnown = true;
         EditorApplication.Tick();
         Assert.Contains("Interrupted", published);
@@ -183,7 +183,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     {
         string path = Path.Combine(_root, "result_paced.json");
         int attempts = 0;
-        UnityLeanMcpOperationStore.Write = (_, _, _) => { attempts++; throw new IOException("locked"); };
+        UnityCommandGate.WriteAtomicHook = (_, _, _) => { attempts++; throw new IOException("locked"); };
         UnityCommandGate.RetryThrottleMs = 5000;
 
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin("eval", "paced_owner", "running", out _));
@@ -234,7 +234,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     public void ReloadPublishesCancelledWhenTestRunWasCancelledBeforeReload(bool viaCancellingStatus)
     {
         string? published = null;
-        UnityLeanMcpOperationStore.Write = (_, json, _) => published = json;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
         string initialStatus = viaCancellingStatus ? OperationStatus.Cancelling : OperationStatus.Running;
         if (!viaCancellingStatus)
         {
@@ -259,7 +259,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     {
         string? published = null;
         string? observedStatusDuringWrite = null;
-        UnityLeanMcpOperationStore.Write = (_, json, _) =>
+        UnityCommandGate.WriteAtomicHook = (_, json, _) =>
         {
             observedStatusDuringWrite = UnityCommandGate.ReadSnapshot()?.Status;
             published = json;
@@ -299,7 +299,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     public void CompleteClearsPendingResultUnderLockBeforeReleasingOwnership()
     {
         string path = Path.Combine(_root, "result_complete.json");
-        UnityLeanMcpOperationStore.Write = (_, _, _) => throw new IOException("locked");
+        UnityCommandGate.WriteAtomicHook = (_, _, _) => throw new IOException("locked");
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin("eval", "owner-complete", OperationStatus.Running, out _));
         UnityCommandGate.PublishResult("eval", "owner-complete", path, "{}");
         Assert.True(UnityCommandGate.HasPendingResult("owner-complete"));
@@ -490,7 +490,7 @@ public sealed class CommandGatePublicationTests : IDisposable
 
         // Case 1: Operation finishes as Cancelled during the race window -> returns CANCELLED
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, "op-race-cancelled", OperationStatus.Running, out _));
-        OperationLifecycleRegistry.CancelFunc = (_, id) =>
+        CancelOperationHandler.CancelRouteHook = (_, id) =>
         {
             File.WriteAllText(
                 UnityLeanMcpPaths.GetTestResultsFile(id),
@@ -508,7 +508,7 @@ public sealed class CommandGatePublicationTests : IDisposable
 
         // Case 2: Operation finishes as Passed (not interrupted/cancelled) during the race window -> returns expectedWhenNotInterrupted
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, "op-race-passed", OperationStatus.Running, out _));
-        OperationLifecycleRegistry.CancelFunc = (_, id) =>
+        CancelOperationHandler.CancelRouteHook = (_, id) =>
         {
             File.WriteAllText(
                 UnityLeanMcpPaths.GetTestResultsFile(id),
@@ -794,8 +794,8 @@ public sealed class CommandGatePublicationTests : IDisposable
         RunTestsHandler.ClearCachedRunState();
         UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = null;
         UnityEditor.Compilation.CompilationPipeline.GetAssembliesFunc = null;
-        OperationLifecycleRegistry.CancelFunc = null;
-        UnityLeanMcpOperationStore.Write = null;
+        CancelOperationHandler.CancelRouteHook = null;
+        UnityCommandGate.WriteAtomicHook = null;
         UnityLeanMcpDispatcher.Clear();
         PollRefreshHandler.DiagnosticsFileLengthProvider = null!;
         UnityLeanMcpServer.IsPlayModeActive = false;

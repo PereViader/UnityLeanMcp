@@ -60,9 +60,6 @@
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpDispatcher.cs" Link="UnityLeanMcpDispatcher.cs">
       <Nullable>disable</Nullable>
     </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\IOperationLifecycleHandler.cs" Link="IOperationLifecycleHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CancelOperationHandler.cs" Link="CancelOperationHandler.cs">
       <Nullable>disable</Nullable>
     </Compile>
@@ -76,9 +73,6 @@
       <Nullable>disable</Nullable>
     </Compile>
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\EvalHandler.cs" Link="EvalHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\IUnityTypeFormatter.cs" Link="IUnityTypeFormatter.cs">
       <Nullable>disable</Nullable>
     </Compile>
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityResultFormatter.cs" Link="UnityResultFormatter.cs">

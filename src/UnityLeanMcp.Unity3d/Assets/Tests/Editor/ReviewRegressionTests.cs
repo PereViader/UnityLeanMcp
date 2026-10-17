@@ -30,7 +30,7 @@ namespace UnityLeanMcpTests
                     LogAssert.ignoreFailingMessages = true;
                     OperationExecutionEngine.FinishOperation(scope.Id, OperationKinds.Eval,
                         resultPath, true, "completed", 1.5, "original-payload");
-                    Assert.That(UnityLeanMcpOperationStore.IsOwnedBy(scope.Id, OperationKinds.Eval), Is.True);
+                    Assert.That(UnityCommandGate.IsOwnedBy(scope.Id, OperationKinds.Eval), Is.True);
                     Assert.That(SessionState.GetString("UnityLeanMcp_PendingResult", ""), Does.Contain("original-payload"),
                         "Exact completion must be persisted before any filesystem operation can fail.");
                     File.Delete(blocker);
@@ -40,7 +40,7 @@ namespace UnityLeanMcpTests
                     var result = JsonUtility.FromJson<UnityOperationResult>(File.ReadAllText(resultPath));
                     Assert.That(result.success, Is.True);
                     Assert.That(result.payload, Is.EqualTo("original-payload"));
-                    Assert.That(UnityLeanMcpOperationStore.IsOwnedBy(scope.Id, OperationKinds.Eval), Is.False);
+                    Assert.That(UnityCommandGate.IsOwnedBy(scope.Id, OperationKinds.Eval), Is.False);
                 }
                 finally { LogAssert.ignoreFailingMessages = ignore; }
             }

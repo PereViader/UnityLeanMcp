@@ -29,7 +29,7 @@ namespace UnityLeanMcp
                 if (result.Interrupted) return $"INTERRUPTION {PollHelper.EscapeLine(result.Message)}";
                 return result.Success ? "READY" : "COMPILATION_ERROR";
             }
-            var operation = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+            var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null)
             {
                 if (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile)

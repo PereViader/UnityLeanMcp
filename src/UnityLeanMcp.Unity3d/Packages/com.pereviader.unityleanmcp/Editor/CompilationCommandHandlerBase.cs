@@ -25,16 +25,16 @@ namespace PereViader.UnityLeanMcp.Editor
                 return;
             }
 
-            var begin = UnityLeanMcpOperationStore.TryBegin(operationId, OperationKind, OperationStatus.Requested, out var existing);
-            if (begin == BeginOperationResult.Invalid)
+            var begin = UnityCommandGate.TryBegin(OperationKind, operationId, OperationStatus.Requested, out var busyReason);
+            if (begin == BeginGateResult.Invalid)
             {
                 writer.WriteLine("ERROR: Missing or invalid operation id");
                 return;
             }
 
-            if (begin == BeginOperationResult.Busy)
+            if (begin == BeginGateResult.Busy)
             {
-                writer.WriteLine($"BUSY {existing.kind} {existing.operationId}");
+                writer.WriteLine($"BUSY {busyReason}");
                 return;
             }
 
@@ -47,7 +47,7 @@ namespace PereViader.UnityLeanMcp.Editor
             catch (IOException) { }
             catch (ObjectDisposedException) { }
 
-            if (begin == BeginOperationResult.AlreadyStarted)
+            if (begin == BeginGateResult.AlreadyStarted)
             {
                 return;
             }
@@ -55,7 +55,7 @@ namespace PereViader.UnityLeanMcp.Editor
             UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
             UnityLeanMcpCompilationTracker.RefreshPending = true;
             UnityLeanMcpCompilationTracker.CompilationRequested = true;
-            UnityLeanMcpOperationStore.Update(operationId, OperationKind == OperationKinds.Refresh ? OperationStatus.Refreshing : OperationStatus.Recompiling);
+            UnityCommandGate.Update(operationId, OperationKind == OperationKinds.Refresh ? OperationStatus.Refreshing : OperationStatus.Recompiling);
 
             try
             {

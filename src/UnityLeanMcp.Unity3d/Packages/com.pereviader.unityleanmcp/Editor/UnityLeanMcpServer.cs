@@ -165,11 +165,8 @@ namespace UnityLeanMcp
                 UnityLeanMcpCompilationTracker.EnsureInitialized();
                 UnityLeanMcpDispatcher.EnsureInitialized();
                 RoslynCompilerHelper.EnsureInitialized();
-                OperationLifecycleRegistry.EnsureInitialized();
                 EnsureDefaultHandlers();
                 UnityResultFormatter.EnsureInitialized();
-
-                RecoverOperationsOnDomainLoad();
 
                 // Register callbacks for tests
                 RunTestsHandler.RegisterCallbacks();
@@ -200,17 +197,6 @@ namespace UnityLeanMcp
             }
         }
 
-        private static void RecoverOperationsOnDomainLoad()
-        {
-            var operation = UnityLeanMcpOperationStore.Read();
-            if (operation == null || UnityCommandGate.HasPendingResult(operation.operationId))
-            {
-                return;
-            }
-
-            OperationLifecycleRegistry.RecoverOnDomainLoad(operation);
-        }
-
         private static void StartServer()
         {
             lock (s_ServerLifecycleLock)
@@ -237,13 +223,13 @@ namespace UnityLeanMcp
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             s_IsPlayModeActive = false;
             s_IsPlayModeChanging = false;
-            var operation = UnityLeanMcpOperationStore.Read();
+            var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null &&
-                operation.status != OperationStatus.Requested &&
-                operation.status != OperationStatus.Cancelling &&
-                operation.status != OperationStatus.Interrupted)
+                operation.Status != OperationStatus.Requested &&
+                operation.Status != OperationStatus.Cancelling &&
+                operation.Status != OperationStatus.Interrupted)
             {
-                UnityLeanMcpOperationStore.Update(operation.operationId, OperationStatus.Reloading);
+                UnityCommandGate.Update(operation.OperationId, OperationStatus.Reloading);
             }
             UnityLeanMcpCompilationTracker.WriteActiveErrorsToFile();
             RunTestsHandler.MarkTransportInterruption(OperationStatus.Reloading);
@@ -255,9 +241,6 @@ namespace UnityLeanMcp
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             s_IsPlayModeActive = false;
             s_IsPlayModeChanging = false;
-            var operation = UnityLeanMcpOperationStore.Read();
-            OperationLifecycleRegistry.NotifyQuitting(operation);
-            // Lifecycle handlers release ownership only after publishing a durable result.
             StopServer();
         }
 
@@ -580,7 +563,7 @@ namespace UnityLeanMcp
                     // when an operation (e.g. eval) is executing synchronously on the main thread.
                     if (handler.IsMutating)
                     {
-                        var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+                        var activeOp = UnityCommandGate.ReadSnapshot();
                         if (activeOp != null)
                         {
                             string requestOpId = ExtractOperationId(payload);
@@ -596,7 +579,7 @@ namespace UnityLeanMcp
                     }
                     else if (handler.ExecutionTarget != CommandExecutionTarget.WorkerThread && !(handler is ExitHandler))
                     {
-                        var activeOp = UnityLeanMcpOperationStore.ReadThreadSafeSnapshot();
+                        var activeOp = UnityCommandGate.ReadSnapshot();
                         if (activeOp != null)
                         {
                             writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
@@ -771,7 +754,7 @@ namespace UnityLeanMcp
                 {
                     Directory.CreateDirectory(directory);
                 }
-                UnityLeanMcpOperationStore.WriteAtomic(path, port.ToString(), "port");
+                UnityCommandGate.WriteAtomic(path, port.ToString(), "port");
                 return true;
             }
             catch(Exception e)

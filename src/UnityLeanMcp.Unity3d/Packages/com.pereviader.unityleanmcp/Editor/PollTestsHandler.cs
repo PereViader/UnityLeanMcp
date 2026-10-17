@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using UnityEngine;
 
 namespace UnityLeanMcp
 {
@@ -11,36 +13,85 @@ namespace UnityLeanMcp
         public void Handle(string payload, StreamWriter writer)
         {
             string operationId = payload?.Trim();
-            PollHelper.PollOperationResult(
-                operationId,
-                UnityLeanMcpPaths.GetTestResultsFile(operationId),
-                UnityLeanMcpPaths.TestRunningFile,
-                writer,
-                (res, w) =>
+            string resultFilePath = UnityLeanMcpPaths.GetTestResultsFile(operationId);
+
+            if (!string.IsNullOrEmpty(resultFilePath) && File.Exists(resultFilePath))
+            {
+                try
                 {
-                    string skipStr = res.SkipCount > 0 ? $", {res.SkipCount} skipped" : "";
-                    if (res.Success)
+                    if (WorkerThreadSnapshots.TryReadOperationResult(resultFilePath, out var res))
                     {
-                        w.WriteLine($"SUCCESS {res.PassCount} passed{skipStr}");
+                        if (string.IsNullOrEmpty(operationId) || res.OperationId == operationId)
+                        {
+                            WriteTerminalResult(res, writer);
+                            return;
+                        }
                     }
-                    else if (res.Interrupted)
-                    {
-                        w.WriteLine($"INTERRUPTION {PollHelper.EscapeLine(res.Message)}");
-                    }
-                    else if (!string.IsNullOrEmpty(res.Message))
-                    {
-                        w.WriteLine($"FAILURE {PollHelper.EscapeLine(res.Message)}");
-                    }
-                    else
-                    {
-                        w.WriteLine($"FAILURE {res.FailCount} failed, {res.PassCount} passed{skipStr}");
-                    }
-                },
-                (runningPath, opId) =>
+                }
+                catch
                 {
-                    var running = RunTestsHandler.ReadThreadSafeSnapshot();
-                    return running != null && (string.IsNullOrEmpty(opId) || running.RunId == opId);
-                });
+                }
+            }
+
+            var runningState = RunTestsHandler.ReadRunningState();
+            if (runningState != null && (string.IsNullOrEmpty(operationId) || runningState.runId == operationId))
+            {
+                string json = JsonUtility.ToJson(runningState);
+                string escapedJson = ProtocolCodec.EscapeLine(json);
+                writer.WriteLine($"RUNNING {escapedJson}");
+                return;
+            }
+
+            var operation = UnityCommandGate.ReadSnapshot();
+            if (operation != null)
+            {
+                if (!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
+                {
+                    writer.WriteLine($"BUSY {operation.Kind} {operation.OperationId}");
+                }
+                else if (operation.Status == OperationStatus.Interrupted)
+                {
+                    writer.WriteLine("INTERRUPTION Unity editor restarted before the operation completed.");
+                }
+                else
+                {
+                    writer.WriteLine("RUNNING");
+                }
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(resultFilePath) && File.Exists(resultFilePath))
+            {
+                if (WorkerThreadSnapshots.TryReadOperationResult(resultFilePath, out var res) &&
+                    (string.IsNullOrEmpty(operationId) || res.OperationId == operationId))
+                {
+                    WriteTerminalResult(res, writer);
+                    return;
+                }
+            }
+
+            writer.WriteLine("IDLE");
+        }
+
+        private static void WriteTerminalResult(WorkerOperationResultSnapshot res, StreamWriter writer)
+        {
+            string skipStr = res.SkipCount > 0 ? $", {res.SkipCount} skipped" : "";
+            if (res.Success)
+            {
+                writer.WriteLine($"SUCCESS {res.PassCount} passed{skipStr}");
+            }
+            else if (res.Interrupted)
+            {
+                writer.WriteLine($"INTERRUPTION {PollHelper.EscapeLine(res.Message)}");
+            }
+            else if (!string.IsNullOrEmpty(res.Message))
+            {
+                writer.WriteLine($"FAILURE {PollHelper.EscapeLine(res.Message)}");
+            }
+            else
+            {
+                writer.WriteLine($"FAILURE {res.FailCount} failed, {res.PassCount} passed{skipStr}");
+            }
         }
     }
 }

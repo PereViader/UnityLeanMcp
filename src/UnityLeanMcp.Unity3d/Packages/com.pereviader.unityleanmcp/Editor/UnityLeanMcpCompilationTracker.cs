@@ -218,9 +218,9 @@ namespace UnityLeanMcp
             AssemblyReloadEvents.beforeAssemblyReload -= PersistScopedDiagnostics;
             AssemblyReloadEvents.beforeAssemblyReload += PersistScopedDiagnostics;
             UpdateCompilationState();
-            var operation = UnityLeanMcpOperationStore.Read();
+            var operation = UnityCommandGate.ReadSnapshot();
             bool resumingCompilation = operation != null &&
-                (operation.kind == OperationKinds.Refresh || operation.kind == OperationKinds.Recompile);
+                (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile);
             if (!resumingCompilation)
             {
                 WriteActiveErrorsToFile();
@@ -778,7 +778,7 @@ namespace UnityLeanMcp
             try
             {
                 string content = string.Join(Environment.NewLine, lines);
-                UnityLeanMcpOperationStore.WriteAtomic(errorsPath, content, Guid.NewGuid().ToString("N"));
+                UnityCommandGate.WriteAtomic(errorsPath, content, Guid.NewGuid().ToString("N"));
             }
             catch (Exception e)
             {

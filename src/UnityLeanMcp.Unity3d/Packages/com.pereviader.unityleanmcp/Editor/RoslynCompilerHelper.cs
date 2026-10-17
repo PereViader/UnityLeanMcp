@@ -679,10 +679,6 @@ namespace UnityLeanMcp
             return descMethod;
         }
 
-        private static readonly Regex s_UsingDirectiveRegex = new Regex(
-            @"^\s*(?:global\s+)?using\s+(?:static\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?[A-Za-z_][A-Za-z0-9_.]*(?:\s*<[^>]+>)?\s*;",
-            RegexOptions.Compiled);
-
         public static bool ExtractUsingDirectives(string sourceCode, out List<string> usings, out string methodBody)
         {
             usings = new List<string>();
@@ -761,53 +757,8 @@ namespace UnityLeanMcp
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"UnityLeanMcp: Roslyn AST using extraction failed, falling back: {ex}");
+                    Debug.LogWarning($"UnityLeanMcp: Roslyn AST using extraction failed: {ex}");
                 }
-            }
-
-            return ExtractUsingDirectivesFallback(sourceCode, out usings, out methodBody);
-        }
-
-        internal static bool ExtractUsingDirectivesFallback(string sourceCode, out List<string> usings, out string methodBody)
-        {
-            usings = new List<string>();
-            methodBody = sourceCode ?? "";
-
-            if (string.IsNullOrWhiteSpace(sourceCode)) return false;
-
-            var lines = sourceCode.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-            bool foundAny = false;
-
-            for (int i = 0; i < lines.Length; i++)
-            {
-                string line = lines[i];
-                while (true)
-                {
-                    var match = s_UsingDirectiveRegex.Match(line);
-                    if (!match.Success)
-                    {
-                        break;
-                    }
-
-                    usings.Add(match.Value.Trim());
-                    foundAny = true;
-
-                    var charArray = line.ToCharArray();
-                    int end = match.Index + match.Length;
-                    for (int c = match.Index; c < end; c++)
-                    {
-                        charArray[c] = ' ';
-                    }
-                    line = new string(charArray);
-                }
-                lines[i] = line;
-            }
-
-            if (foundAny)
-            {
-                string separator = sourceCode.Contains("\r\n") ? "\r\n" : "\n";
-                methodBody = string.Join(separator, lines);
-                return true;
             }
 
             return false;

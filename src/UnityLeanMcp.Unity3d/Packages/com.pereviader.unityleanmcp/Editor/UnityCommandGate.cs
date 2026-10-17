@@ -1,5 +1,7 @@
 using System;
 using System.Diagnostics;
+using System.IO;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 
@@ -311,15 +313,15 @@ namespace UnityLeanMcp
             {
                 if (pending.Kind == OperationKinds.Test) RunTestsHandler.RestoreCoverage(pending.OperationId);
                 System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pending.Path));
-                UnityLeanMcpOperationStore.WriteAtomic(pending.Path, pending.Json, pending.OperationId, attempts: 1);
+                WriteAtomic(pending.Path, pending.Json, pending.OperationId, attempts: 1);
                 if (pending.Kind == OperationKinds.Test)
                 {
-                    UnityLeanMcpOperationStore.TryWriteStaticHistory(UnityLeanMcpPaths.TestResultsFile, pending.Json, pending.OperationId);
+                    TryWriteStaticHistory(UnityLeanMcpPaths.TestResultsFile, pending.Json, pending.OperationId);
                     RunTestsHandler.CleanupTestRun(pending.OperationId);
                 }
                 else if (pending.Kind == OperationKinds.Refresh || pending.Kind == OperationKinds.Recompile)
                 {
-                    UnityLeanMcpOperationStore.TryWriteStaticHistory(UnityLeanMcpPaths.RefreshResultFile, pending.Json, pending.OperationId);
+                    TryWriteStaticHistory(UnityLeanMcpPaths.RefreshResultFile, pending.Json, pending.OperationId);
                 }
                 lock (s_Lock)
                 {
@@ -338,6 +340,75 @@ namespace UnityLeanMcp
                 WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile,
                     "Terminal result publication will retry for " + pending.Kind + " " + pending.OperationId + ": " + ex.Message);
             }
+        }
+
+#nullable enable
+        internal static Action<string, string, string>? WriteAtomicHook;
+#nullable restore
+
+        internal static void WriteAtomic(string path, string content, string operationId, int attempts = 5)
+        {
+            if (WriteAtomicHook != null)
+            {
+                WriteAtomicHook(path, content, operationId);
+                return;
+            }
+
+            string tempPath = path + "." + (operationId ?? Guid.NewGuid().ToString("N")) + ".tmp";
+            try
+            {
+                File.WriteAllText(tempPath, content, new UTF8Encoding(false));
+                Exception lastException = null;
+                for (int i = 0; i < attempts; i++)
+                {
+                    try
+                    {
+                        UnityLeanMcpStaticHistoryWriter.MoveWithOverwrite(tempPath, path);
+                        return;
+                    }
+                    catch (IOException ex)
+                    {
+                        lastException = ex;
+                        if (i < attempts - 1)
+                        {
+                            System.Threading.Thread.Sleep(10);
+                        }
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        lastException = ex;
+                        if (i < attempts - 1)
+                        {
+                            System.Threading.Thread.Sleep(10);
+                        }
+                    }
+                }
+
+                throw new IOException($"Failed to atomically write '{path}' after {attempts} attempts.", lastException);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Attempts to update a shared history snapshot without allowing
+        /// contention on that non-authoritative file to affect the durable
+        /// operation result.
+        /// </summary>
+        internal static bool TryWriteStaticHistory(string path, string content, string operationId)
+        {
+            if (UnityLeanMcpStaticHistoryWriter.TryWrite(path, content, out var failure))
+            {
+                return true;
+            }
+
+            UnityEngine.Debug.LogWarning($"UnityLeanMcp: Failed to update static history for operation '{operationId}': {failure.Message}");
+            return false;
         }
 
         private static void WriteInterruptedResult(string kind, string opId, string message)

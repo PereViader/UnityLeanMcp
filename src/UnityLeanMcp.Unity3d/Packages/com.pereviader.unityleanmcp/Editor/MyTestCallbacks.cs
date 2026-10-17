@@ -18,7 +18,7 @@ namespace UnityLeanMcp
         private int m_SkipCount = 0;
         private string m_CurrentTestName = "";
 
-        public bool IsRunning => m_IsRunning || File.Exists(UnityLeanMcpPaths.TestRunningFile);
+        public bool IsRunning => m_IsRunning || RunTestsHandler.ReadRunningState() != null;
 
         internal void Reset()
         {
@@ -51,7 +51,7 @@ namespace UnityLeanMcp
 
         public void RunStarted(ITestAdaptor testsToRun)
         {
-            if (string.IsNullOrEmpty(m_RunId) || !UnityLeanMcpOperationStore.IsOwnedBy(m_RunId, OperationKinds.Test))
+            if (string.IsNullOrEmpty(m_RunId) || !UnityCommandGate.IsOwnedBy(m_RunId, OperationKinds.Test))
             {
                 m_IsRunning = false;
                 return;
@@ -202,13 +202,13 @@ namespace UnityLeanMcp
                 string resultsPath = UnityLeanMcpPaths.GetTestResultsFile(runId);
 
                 if (state == null || string.IsNullOrEmpty(runId) || state.runId != runId ||
-                    !UnityLeanMcpOperationStore.IsOwnedBy(runId, OperationKinds.Test))
+                    !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
                 {
                     m_IsRunning = false;
                     return;
                 }
 
-                if (!m_IsRunning && !File.Exists(runningPath))
+                if (!m_IsRunning && RunTestsHandler.ReadRunningState() == null)
                 {
                     return;
                 }

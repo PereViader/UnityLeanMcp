@@ -566,6 +566,47 @@ public class UnityClient : IUnityClient
                 string? lastTestName = null;
                 string? lastStatus = null;
 
+                void ReportState(UnityTestRunState? runningState)
+                {
+                    if (runningState != null && progress != null)
+                    {
+                        if (runningState.CompletedTests != lastCompleted ||
+                            runningState.CurrentTestName != lastTestName ||
+                            runningState.Status != lastStatus)
+                        {
+                            lastCompleted = runningState.CompletedTests;
+                            lastTestName = runningState.CurrentTestName;
+                            lastStatus = runningState.Status;
+
+                            string msg;
+                            if (runningState.TotalTests > 0)
+                            {
+                                if (!string.IsNullOrEmpty(runningState.CurrentTestName))
+                                {
+                                    msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running {runningState.CurrentTestName} (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
+                                }
+                                else
+                                {
+                                    msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running tests... (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
+                                }
+                            }
+                            else
+                            {
+                                msg = !string.IsNullOrEmpty(runningState.CurrentTestName)
+                                    ? $"Running {runningState.CurrentTestName}..."
+                                    : "Running tests...";
+                            }
+
+                            progress.Report(new ProgressNotificationValue
+                            {
+                                Progress = runningState.CompletedTests,
+                                Total = runningState.TotalTests > 0 ? runningState.TotalTests : null,
+                                Message = msg
+                            });
+                        }
+                    }
+                }
+
                 var spec = new OperationPollingSpec<UnityTestRunResult>
                 {
                     OperationId = opId,
@@ -582,46 +623,33 @@ public class UnityClient : IUnityClient
                         ReportFinalProgress(progress, res);
                         return res;
                     },
+                    OnAfterPoll = (response, _) =>
+                    {
+                        if (!string.IsNullOrEmpty(response) && response.StartsWith("RUNNING ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string rawJson = response.Substring(8).Trim();
+                            if (!string.IsNullOrEmpty(rawJson))
+                            {
+                                try
+                                {
+                                    string unescaped = ProtocolCodec.UnescapeLine(rawJson);
+                                    var state = JsonSerializer.Deserialize<UnityTestRunState>(unescaped, s_RunArgsJsonOptions);
+                                    if (state != null && state.RunId == opId)
+                                    {
+                                        ReportState(state);
+                                    }
+                                }
+                                catch
+                                {
+                                }
+                            }
+                        }
+                        return Task.CompletedTask;
+                    },
                     OnPollTick = _ =>
                     {
                         var runningState = TryReadJsonFile<UnityTestRunState>(_pathResolver.TestRunningFile, s => s.RunId == opId);
-                        if (runningState != null && progress != null)
-                        {
-                            if (runningState.CompletedTests != lastCompleted ||
-                                runningState.CurrentTestName != lastTestName ||
-                                runningState.Status != lastStatus)
-                            {
-                                lastCompleted = runningState.CompletedTests;
-                                lastTestName = runningState.CurrentTestName;
-                                lastStatus = runningState.Status;
-
-                                string msg;
-                                if (runningState.TotalTests > 0)
-                                {
-                                    if (!string.IsNullOrEmpty(runningState.CurrentTestName))
-                                    {
-                                        msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running {runningState.CurrentTestName} (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
-                                    }
-                                    else
-                                    {
-                                        msg = $"[{runningState.CompletedTests}/{runningState.TotalTests}] Running tests... (Passed: {runningState.PassCount}, Failed: {runningState.FailCount})";
-                                    }
-                                }
-                                else
-                                {
-                                    msg = !string.IsNullOrEmpty(runningState.CurrentTestName)
-                                        ? $"Running {runningState.CurrentTestName}..."
-                                        : "Running tests...";
-                                }
-
-                                progress.Report(new ProgressNotificationValue
-                                {
-                                    Progress = runningState.CompletedTests,
-                                    Total = runningState.TotalTests > 0 ? runningState.TotalTests : null,
-                                    Message = msg
-                                });
-                            }
-                        }
+                        ReportState(runningState);
                         return Task.CompletedTask;
                     }
                 };
