@@ -784,7 +784,8 @@ namespace UnityLeanMcp
                 }
 
                 // Wrap in a probe method so all C# language versions parse statements into a method body
-                string probeSource = "class __Probe { async System.Threading.Tasks.Task<object> M() {\n" + cleanBody + "\n} }";
+                const string probeMethodName = "__UnityLeanMcp_TopLevelProbe";
+                string probeSource = "class __Probe { async System.Threading.Tasks.Task<object> " + probeMethodName + "() {\n" + cleanBody + "\n} }";
 
                 object syntaxTree = ParseSyntaxTree(probeSource);
                 if (syntaxTree == null) return false;
@@ -820,7 +821,7 @@ namespace UnityLeanMcp
                         {
                             var idProp = cur.GetType().GetProperty("Identifier");
                             var idVal = idProp != null ? idProp.GetValue(cur, null) : null;
-                            if (idVal != null && idVal.ToString() == "M")
+                            if (idVal != null && idVal.ToString() == probeMethodName)
                             {
                                 break;
                             }

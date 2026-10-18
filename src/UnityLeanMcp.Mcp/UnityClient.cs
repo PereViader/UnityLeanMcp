@@ -698,6 +698,14 @@ public class UnityClient : IUnityClient
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                var precheckResult = TryReadJsonFile<TResult>(resultFile, r => resultMatcher(r, opId));
+                if (precheckResult != null)
+                {
+                    try { File.Delete(resultFile); } catch { }
+                    onImmediateResult?.Invoke(precheckResult);
+                    return precheckResult;
+                }
+
                 if (!string.IsNullOrEmpty(initialProgressMessage))
                 {
                     progress?.Report(new ProgressNotificationValue

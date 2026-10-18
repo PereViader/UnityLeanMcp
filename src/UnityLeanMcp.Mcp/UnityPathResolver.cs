@@ -37,6 +37,6 @@ public class UnityPathResolver : IUnityPathResolver
             throw new ArgumentException("Project root cannot be null or empty.", nameof(projectRoot));
         }
 
-        ProjectRoot = Path.GetFullPath(projectRoot);
+        ProjectRoot = FileUnityProcessIdentityStore.ResolveRealPath(projectRoot);
     }
 }

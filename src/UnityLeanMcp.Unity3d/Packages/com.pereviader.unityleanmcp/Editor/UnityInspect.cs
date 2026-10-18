@@ -1201,6 +1201,8 @@ namespace UnityLeanMcp
                 // EditMode mutating properties that instantiate copies / leak assets:
                 case "material":
                 case "materials":
+                case "fontmaterial":
+                case "fontmaterials":
                 case "mesh":
                 case "physicmaterial":
                 case "trailmaterial":

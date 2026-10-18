@@ -616,6 +616,16 @@ public class UnityProcessManager : IUnityProcessManager
                 return true;
             }
 
+            try
+            {
+                string absoluteProjectPath = FileUnityProcessIdentityStore.ResolveRealPath(Path.GetFullPath(projectPathArg));
+                if (FileUnityProcessIdentityStore.PathsEqual(absoluteProjectPath, _pathResolver.ProjectRoot))
+                {
+                    return true;
+                }
+            }
+            catch { }
+
             if (processId.HasValue && (LinuxProcessCwdProvider != null || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
             {
                 string? procCwd = TryGetLinuxProcessCwd(processId.Value);

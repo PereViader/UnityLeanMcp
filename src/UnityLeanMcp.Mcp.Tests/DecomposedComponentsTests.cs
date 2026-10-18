@@ -217,6 +217,30 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public void ProjectCommandEnvelope_MatchesWhenSymlinksOrDifferentPathRepresentationsResolveToSameRealPath()
+    {
+        string canonical = Path.Combine(Path.GetTempPath(), "real_project_" + Guid.NewGuid().ToString("N"));
+        string symlink = Path.Combine(Path.GetTempPath(), "link_project_" + Guid.NewGuid().ToString("N"));
+
+        UnityLeanMcp.ProjectCommandEnvelope.CustomRealPathResolver = p =>
+        {
+            if (p.Contains("link_project_")) return canonical;
+            return p;
+        };
+
+        try
+        {
+            string line = UnityLeanMcp.ProjectCommandEnvelope.Encode(symlink, "PING");
+            Assert.True(UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line, canonical, out var command));
+            Assert.Equal("PING", command);
+        }
+        finally
+        {
+            UnityLeanMcp.ProjectCommandEnvelope.CustomRealPathResolver = null;
+        }
+    }
+
+    [Fact]
     public async Task UnitySocketTransport_SendCommandAsync_RethrowsCallerCancellation()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -562,6 +586,11 @@ public class DecomposedComponentsTests
     [InlineData("SUCCESS All tests passed", "All tests passed")]
     [InlineData("SUCCESS:All tests passed", "All tests passed")]
     [InlineData("SUCCESS", "")]
+    [InlineData("INTERRUPTION Test was cancelled", "Test was cancelled")]
+    [InlineData("INTERRUPTION: Test was cancelled", "Test was cancelled")]
+    [InlineData("INTERRUPTION", "")]
+    [InlineData("Compilation failed for some reason", "Compilation failed for some reason")]
+    [InlineData("Some random text with multiple words", "Some random text with multiple words")]
     public void UnityClient_StripStatusPrefix_StripsAllPrefixVariants(string input, string expected)
     {
         string actual = ProtocolCodec.StripStatusPrefix(input);

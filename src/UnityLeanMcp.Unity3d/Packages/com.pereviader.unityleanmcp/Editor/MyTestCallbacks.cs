@@ -135,11 +135,21 @@ namespace UnityLeanMcp
                     resultState = "Interrupted";
                 }
 
-                if (result != null)
+                if (result == null)
                 {
-                    m_FailedTests.Clear();
-                    CollectFailures(result);
+                    if (isCancelled)
+                    {
+                        FinalizeTestRun(false, 1, 0, 0, message, string.IsNullOrEmpty(resultState) ? "Cancelled" : resultState);
+                    }
+                    else
+                    {
+                        FinalizeTestRun(false, 1, 0, 0, "Test runner returned null test result.", "Failed");
+                    }
+                    return;
                 }
+
+                m_FailedTests.Clear();
+                CollectFailures(result);
                 FinalizeTestRun(success, failCount, passCount, skipCount, message, resultState);
             }
             catch (Exception ex)

@@ -1,11 +1,13 @@
 using System;
 using System.IO;
+using System.Threading;
 
 namespace UnityLeanMcp
 {
     internal enum OperationCancelResult
     {
         Cancelled,
+        Cancelling,
         NotCancelable,
         NotFound
     }
@@ -57,17 +59,33 @@ namespace UnityLeanMcp
             OperationCancelResult result = CancelRouteHook != null
                 ? CancelRouteHook(operation.Kind, operationId)
                 : RouteCancellation(operation.Kind, operationId);
-            if ((result == OperationCancelResult.NotFound || result == OperationCancelResult.NotCancelable) &&
-                IsTerminalInterruptedResult(operationId))
+
+            if (IsTerminalInterruptedResult(operationId) ||
+                result == OperationCancelResult.Cancelled ||
+                result == OperationCancelResult.Cancelling)
             {
-                result = OperationCancelResult.Cancelled;
+                var deadline = DateTime.UtcNow.AddSeconds(2.5);
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (IsTerminalInterruptedResult(operationId))
+                    {
+                        break;
+                    }
+                    var currentOp = UnityCommandGate.ReadSnapshot();
+                    if (currentOp == null || !string.Equals(currentOp.OperationId, operationId, StringComparison.Ordinal))
+                    {
+                        break;
+                    }
+                    Thread.Sleep(20);
+                }
+
+                writer.WriteLine("CANCELLED");
+                writer.Flush();
+                return;
             }
 
             switch (result)
             {
-                case OperationCancelResult.Cancelled:
-                    writer.WriteLine("CANCELLED");
-                    break;
                 case OperationCancelResult.NotFound:
                     writer.WriteLine("NO_OPERATION");
                     break;
@@ -88,11 +106,19 @@ namespace UnityLeanMcp
             if (string.Equals(kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
                 return RunTestsHandler.CancelActiveTestRun(operationId);
             if (string.Equals(kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
-                return OperationExecutionEngine.TryCancel(operationId) ? OperationCancelResult.Cancelled : OperationCancelResult.NotCancelable;
+            {
+                if (!OperationExecutionEngine.TryCancel(operationId))
+                {
+                    return OperationCancelResult.NotCancelable;
+                }
+                return IsTerminalInterruptedResult(operationId)
+                    ? OperationCancelResult.Cancelled
+                    : OperationCancelResult.Cancelling;
+            }
             return OperationCancelResult.NotCancelable;
         }
 
-        private static bool IsTerminalInterruptedResult(string operationId)
+        internal static bool IsTerminalInterruptedResult(string operationId)
         {
             return IsTerminalInterruptedResult(UnityLeanMcpPaths.GetTestResultsFile(operationId), operationId)
                 || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetEvalResultFile(operationId), operationId)

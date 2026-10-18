@@ -458,6 +458,7 @@ namespace UnityEditor
         public static event Action? projectChanged { add { } remove { } }
         public static event Action? quitting { add { } remove { } }
         public static void Tick() => update?.Invoke();
+        public static void QueuePlayerLoopUpdate() { }
         public static string applicationContentsPath { get; set; } = string.Empty;
     }
 

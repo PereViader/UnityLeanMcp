@@ -45,7 +45,7 @@ Runtime IPC, diagnostics, and logs belong under the Unity project's `Temp/` dire
 
 ### Cancellation
 
-`CANCEL_OPERATION <operationId>` targets only the requested operation. Dispatch must also handle cancellation between command send and initial acknowledgement, using an uncancelled token for the out-of-band cancellation request before propagating caller cancellation. Retain cancellation responsibility across ambiguous acknowledgement retries; transfer it to the poller after dispatch. Retry transport failures until a specific cancellation response, matching terminal result, or Editor exit establishes the outcome.
+`CANCEL_OPERATION <operationId>` targets only the requested operation. Dispatch must also handle cancellation between command send and initial acknowledgement, using an uncancelled token for the out-of-band cancellation request before propagating caller cancellation. Retain cancellation responsibility across ambiguous acknowledgement retries; transfer it to the poller after dispatch. The handler settles the backing work before returning `CANCELLED`. Retry transport failures until a specific cancellation response, matching terminal result, or Editor exit establishes the outcome.
 
 For tests, cancellation intent is updated in gate snapshot status and the main thread calls `TestRunnerApi`. Acceptance does not mean completion. Preserve active ownership until `RunFinished` or a known inactive runner state; an indefinitely cancelling runner remains busy. Persist intent and job identity in `SessionState` so reload recovery can resume cancellation.
 

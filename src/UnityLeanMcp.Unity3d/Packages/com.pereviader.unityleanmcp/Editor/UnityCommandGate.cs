@@ -311,7 +311,6 @@ namespace UnityLeanMcp
 
             try
             {
-                if (pending.Kind == OperationKinds.Test) RunTestsHandler.RestoreCoverage(pending.OperationId);
                 System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pending.Path));
                 WriteAtomic(pending.Path, pending.Json, pending.OperationId, attempts: 1);
                 if (pending.Kind == OperationKinds.Test)

@@ -16,6 +16,7 @@ internal static class McpOutputLimits
     public const int MaxFailureStackTraceCharacters = 12 * 1024;
     public const int MaxFailureSummaryMessageCharacters = 200;
     public const int MaxFailureSummaryCharacters = 16 * 1024;
+    public const int MaxFailureSummaryBytes = 16 * 1024;
 
     public const string LogEntryTruncationMarker = "... (truncated: log entry exceeded 4,096 characters)";
     public const string LogOutputTruncationMarker = "... (truncated: log output exceeded 32,768 characters)";

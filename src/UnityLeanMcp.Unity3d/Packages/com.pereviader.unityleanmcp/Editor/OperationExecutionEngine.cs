@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using UnityEditor;
 using UnityEngine;
 
 namespace UnityLeanMcp
@@ -216,17 +218,22 @@ namespace UnityLeanMcp
             {
                 if (!innerTask.IsCompleted)
                 {
-                    innerTask.ContinueWith(t => UnityLeanMcpDispatcher.Enqueue(() =>
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    innerTask.ContinueWith(t =>
                     {
-                        try
+                        UnityLeanMcpDispatcher.Enqueue(() =>
                         {
-                            UnwrapCompletedTask(t, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
-                        }
-                        catch (Exception ex)
-                        {
-                            FailWithException(ex, operationId, operationKind, resultFilePath, stopwatch, logCapture);
-                        }
-                    }), TaskScheduler.Default);
+                            try
+                            {
+                                EditorApplication.QueuePlayerLoopUpdate();
+                                UnwrapCompletedTask(t, operationId, operationKind, resultFilePath, isVoid, stopwatch, logCapture);
+                            }
+                            catch (Exception ex)
+                            {
+                                FailWithException(ex, operationId, operationKind, resultFilePath, stopwatch, logCapture);
+                            }
+                        });
+                    }, TaskScheduler.Default);
                     return;
                 }
 
@@ -427,17 +434,35 @@ namespace UnityLeanMcp
             DisposeCapture(logCapture);
 
             Exception current = exception;
-            if (current is TargetInvocationException tie && tie.InnerException != null)
+            while (current != null)
             {
-                current = tie.InnerException;
-            }
-            else if (current is AggregateException ae)
-            {
-                current = ae.InnerExceptions.Count == 1 ? ae.InnerExceptions[0] : ae;
-                if (current is TargetInvocationException nestedTie && nestedTie.InnerException != null)
+                if (current is TargetInvocationException tie && tie.InnerException != null)
                 {
-                    current = nestedTie.InnerException;
+                    current = tie.InnerException;
+                    continue;
                 }
+
+                if (current is AggregateException ae)
+                {
+                    var flattened = ae.Flatten();
+                    if (flattened.InnerExceptions.Count == 1)
+                    {
+                        current = flattened.InnerExceptions[0];
+                        continue;
+                    }
+
+                    var cancelEx = flattened.InnerExceptions.FirstOrDefault(e => e is OperationCanceledException);
+                    if (cancelEx != null)
+                    {
+                        current = cancelEx;
+                        break;
+                    }
+
+                    current = flattened;
+                    break;
+                }
+
+                break;
             }
 
             if (current is OperationCanceledException oce)

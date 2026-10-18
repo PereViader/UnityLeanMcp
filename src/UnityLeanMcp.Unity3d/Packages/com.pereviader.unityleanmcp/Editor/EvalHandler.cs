@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -64,7 +65,14 @@ namespace UnityLeanMcp
             }
             if (begin == BeginGateResult.AlreadyStarted)
             {
-                writer.WriteLine("RUNNING");
+                try
+                {
+                    writer.WriteLine("RUNNING");
+                    writer.Flush();
+                }
+                catch (Exception ex) when (ex is IOException || ex is SocketException)
+                {
+                }
                 return;
             }
 
@@ -111,8 +119,14 @@ namespace UnityLeanMcp
                 }
 
                 // Acknowledge execution start to client immediately
-                writer.WriteLine("RUNNING");
-                writer.Flush();
+                try
+                {
+                    writer.WriteLine("RUNNING");
+                    writer.Flush();
+                }
+                catch (Exception ex) when (ex is IOException || ex is SocketException)
+                {
+                }
                 runningSent = true;
 
                 // Execute compiled assembly under async harness

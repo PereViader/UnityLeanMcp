@@ -21,6 +21,11 @@ namespace UnityLeanMcp
         public static void Enqueue(Action action)
         {
             s_Queue.Enqueue(action);
+            try
+            {
+                EditorApplication.QueuePlayerLoopUpdate();
+            }
+            catch { }
         }
 
         public static void Clear()
@@ -32,8 +37,10 @@ namespace UnityLeanMcp
 
         public static void Update()
         {
+            bool any = false;
             while (s_Queue.TryDequeue(out var action))
             {
+                any = true;
                 try
                 {
                     action();
@@ -42,6 +49,14 @@ namespace UnityLeanMcp
                 {
                     Debug.LogException(e);
                 }
+            }
+            if (any)
+            {
+                try
+                {
+                    EditorApplication.QueuePlayerLoopUpdate();
+                }
+                catch { }
             }
         }
     }

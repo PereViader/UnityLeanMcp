@@ -138,7 +138,7 @@ public static class ProtocolCodec
     }
 
     /// <summary>
-    /// Strips protocol status prefixes (ERROR:, FAILURE:, SUCCESS:, or word followed by space)
+    /// Strips protocol status prefixes (ERROR, FAILURE, SUCCESS, INTERRUPTION followed by ':' or ' ')
     /// from response strings.
     /// </summary>
     public static string StripStatusPrefix(string? text)
@@ -149,32 +149,23 @@ public static class ProtocolCodec
         }
 
         string trimmed = text.Trim();
-        if (trimmed.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+        string[] prefixes = { "ERROR", "FAILURE", "SUCCESS", "INTERRUPTION" };
+        foreach (var prefix in prefixes)
         {
-            return trimmed[6..].Trim();
-        }
+            if (trimmed.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
 
-        if (trimmed.StartsWith("FAILURE:", StringComparison.OrdinalIgnoreCase))
-        {
-            return trimmed[8..].Trim();
-        }
+            if (trimmed.StartsWith(prefix + ":", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed[(prefix.Length + 1)..].Trim();
+            }
 
-        if (trimmed.StartsWith("SUCCESS:", StringComparison.OrdinalIgnoreCase))
-        {
-            return trimmed[8..].Trim();
-        }
-
-        int spaceIdx = trimmed.IndexOf(' ');
-        if (spaceIdx > 0)
-        {
-            return trimmed[(spaceIdx + 1)..].Trim();
-        }
-
-        if (trimmed.Equals("ERROR", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("FAILURE", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
-        {
-            return string.Empty;
+            if (trimmed.StartsWith(prefix + " ", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed[(prefix.Length + 1)..].Trim();
+            }
         }
 
         return trimmed;

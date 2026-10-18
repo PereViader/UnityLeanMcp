@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using UnityEditor;
@@ -263,8 +264,14 @@ namespace UnityLeanMcp
 
             if (begin == BeginGateResult.AlreadyStarted)
             {
-                writer.WriteLine("RUNNING");
-                writer.Flush();
+                try
+                {
+                    writer.WriteLine("RUNNING");
+                    writer.Flush();
+                }
+                catch (Exception ex) when (ex is IOException || ex is SocketException)
+                {
+                }
                 return;
             }
 
@@ -295,8 +302,14 @@ namespace UnityLeanMcp
                             failedTests = new List<FailedTestInfo>()
                         };
                         UnityCommandGate.PublishResult(OperationKinds.Test, operationId, UnityLeanMcpPaths.GetTestResultsFile(operationId), JsonUtility.ToJson(emptyResult, true));
-                        writer.WriteLine("RUNNING");
-                        writer.Flush();
+                        try
+                        {
+                            writer.WriteLine("RUNNING");
+                            writer.Flush();
+                        }
+                        catch (Exception ex) when (ex is IOException || ex is SocketException)
+                        {
+                        }
                         return;
                     }
                 }
@@ -328,8 +341,14 @@ namespace UnityLeanMcp
                     }
                 }
 
-                writer.WriteLine("RUNNING");
-                writer.Flush();
+                try
+                {
+                    writer.WriteLine("RUNNING");
+                    writer.Flush();
+                }
+                catch (Exception ex) when (ex is IOException || ex is SocketException)
+                {
+                }
 
                 RunTests(mode, testArgs, runId, failedTests?.ToArray());
             }
@@ -737,7 +756,9 @@ namespace UnityLeanMcp
             // The action performs all Unity API and state-transition work on
             // the main thread via the dispatcher.
             UnityLeanMcpDispatcher.Enqueue(() => CancelActiveTestRunOnMainThread(activeRunId));
-            return OperationCancelResult.Cancelled;
+            return CancelOperationHandler.IsTerminalInterruptedResult(activeRunId)
+                ? OperationCancelResult.Cancelled
+                : OperationCancelResult.Cancelling;
         }
 
         internal static void WriteCancelledResult(string targetRunId = null)

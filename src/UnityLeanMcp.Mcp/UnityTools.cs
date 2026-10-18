@@ -678,15 +678,25 @@ public class UnityTools
         int summaryCount = Math.Min(failedTests.Count, maxTotalFailures);
         int summaryFailureCount = Math.Max(0, summaryCount - detailedCount);
         int availableFailureCharacters = Math.Max(0, McpOutputLimits.MaxFormattedOutputCharacters - output.Length);
+        int availableFailureBytes = Math.Max(0, McpOutputLimits.MaxFormattedOutputBytes - output.Utf8ByteLength);
+
         int summaryBudget = summaryFailureCount > 0
             ? Math.Min(McpOutputLimits.MaxFailureSummaryCharacters, availableFailureCharacters)
             : 0;
+        int summaryByteBudget = summaryFailureCount > 0
+            ? Math.Min(McpOutputLimits.MaxFailureSummaryBytes, availableFailureBytes)
+            : 0;
+
         int detailBudget = Math.Max(0, availableFailureCharacters - summaryBudget);
+        int detailByteBudget = Math.Max(0, availableFailureBytes - summaryByteBudget);
+
         var detailedOutput = new BoundedTextBuilder(
             detailBudget,
+            detailByteBudget,
             McpOutputLimits.DetailedFailureOutputTruncationMarker);
         var summaryOutput = new BoundedTextBuilder(
             summaryBudget,
+            summaryByteBudget,
             McpOutputLimits.FailureSummaryOutputTruncationMarker);
 
         for (int i = 0; i < detailedCount; i++)

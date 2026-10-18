@@ -282,6 +282,12 @@ namespace UnityLeanMcp
                         characters += character < ' ' && character != '\t' && character != '\n' && character != '\r' ? 6 : 2;
                         bytes += character < ' ' && character != '\t' && character != '\n' && character != '\r' ? 6 : 2;
                     }
+                    else if (char.IsHighSurrogate(character) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                    {
+                        characters += 2;
+                        bytes += Encoding.UTF8.GetByteCount(value, i, 2);
+                        i++;
+                    }
                     else
                     {
                         characters++;
@@ -543,12 +549,11 @@ namespace UnityLeanMcp
                     ? 2
                     : 1;
                 prefixLength -= step;
-                currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, step);
                 if (prefixLength > 0 && char.IsHighSurrogate(value[prefixLength - 1]))
                 {
                     prefixLength--;
-                    currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, 1);
                 }
+                currentBytes = prefixLength > 0 ? Encoding.UTF8.GetByteCount(value, 0, prefixLength) : 0;
             }
 
             return value.Substring(0, prefixLength) + marker;

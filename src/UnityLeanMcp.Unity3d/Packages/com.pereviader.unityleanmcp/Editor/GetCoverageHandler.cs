@@ -182,8 +182,33 @@ namespace UnityLeanMcp
 
             foreach (var asm in allAssemblies)
             {
-                if (asm.sourceFiles == null)
+                if (asm.sourceFiles == null || asm.sourceFiles.Length == 0)
                     continue;
+
+                bool allPackageCache = true;
+                foreach (var srcFile in asm.sourceFiles)
+                {
+                    if (string.IsNullOrEmpty(srcFile))
+                        continue;
+
+                    if (!normalizedPathCache.TryGetValue(srcFile, out string normSrc))
+                    {
+                        normSrc = NormalizePathRelativeToProject(srcFile, projectRoot);
+                        normalizedPathCache[srcFile] = normSrc;
+                    }
+
+                    if (!normSrc.StartsWith("PackageCache/", StringComparison.OrdinalIgnoreCase) &&
+                        !normSrc.StartsWith("Library/PackageCache/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        allPackageCache = false;
+                        break;
+                    }
+                }
+
+                if (allPackageCache)
+                {
+                    continue;
+                }
 
                 foreach (var srcFile in asm.sourceFiles)
                 {

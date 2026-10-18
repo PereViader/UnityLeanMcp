@@ -19,6 +19,8 @@ namespace UnityLeanMcp
     public static class UnityLeanMcpServer
     {
         private const int AnyAvailablePort = 0;
+        internal const string ActivePortSessionKey = "UnityLeanMcp_ActivePort";
+        private static int s_PreferredPort = AnyAvailablePort;
 
         private static TcpListener _tcpListener;
         private static Thread _serverThread;
@@ -168,6 +170,12 @@ namespace UnityLeanMcp
                 EnsureDefaultHandlers();
                 UnityResultFormatter.EnsureInitialized();
 
+                try
+                {
+                    s_PreferredPort = SessionState.GetInt(ActivePortSessionKey, AnyAvailablePort);
+                }
+                catch { }
+
                 // Register callbacks for tests
                 RunTestsHandler.RegisterCallbacks();
 
@@ -287,7 +295,16 @@ namespace UnityLeanMcp
 
             // This runs only after the server thread has exited, preventing
             // a racing startup path from recreating the endpoint metadata.
-            DeletePortFile();
+            if (!_isReloading)
+            {
+                DeletePortFile();
+                s_PreferredPort = AnyAvailablePort;
+                try
+                {
+                    SessionState.EraseInt(ActivePortSessionKey);
+                }
+                catch { }
+            }
 
             WorkerDiagnosticsLogger.Info(UnityLeanMcpPaths.LogFile, "Socket server stopped.");
         }
@@ -297,7 +314,7 @@ namespace UnityLeanMcp
             TcpListener listener = null;
             try
             {
-                int stickyPort = ReadPortFile();
+                int stickyPort = s_PreferredPort > AnyAvailablePort ? s_PreferredPort : ReadPortFile();
                 if (IsShuttingDown())
                 {
                     return;
@@ -315,6 +332,15 @@ namespace UnityLeanMcp
                 }
 
                 int port = ((IPEndPoint) listener.LocalEndpoint).Port;
+                s_PreferredPort = port;
+                UnityLeanMcpDispatcher.Enqueue(() =>
+                {
+                    try
+                    {
+                        SessionState.SetInt(ActivePortSessionKey, port);
+                    }
+                    catch { }
+                });
 
                 while (!IsShuttingDown() && !WritePortFile(port))
                 {
@@ -605,78 +631,65 @@ namespace UnityLeanMcp
                     }
                     else
                     {
-                        var finishedEvent = new ManualResetEvent(false);
+                        var finishedEvent = new ManualResetEventSlim(false);
                         object completionLock = new object();
-                        bool waiterAbandoned = false;
-                        bool callbackCompleted = false;
+                        bool isDisposed = false;
                         Exception dispatchException = null;
 
-                        UnityLeanMcpDispatcher.Enqueue(() =>
+                        try
                         {
-                            try
+                            UnityLeanMcpDispatcher.Enqueue(() =>
                             {
-                                lock (completionLock)
+                                try
                                 {
-                                    if (waiterAbandoned || IsShuttingDown())
+                                    lock (completionLock)
                                     {
-                                        return;
+                                        if (isDisposed || IsShuttingDown())
+                                        {
+                                            return;
+                                        }
                                     }
-                                }
 
-                                ExecuteMainThreadCommand(handler, payload, writer);
-                            }
-                            catch (Exception ex)
-                            {
-                                dispatchException = ex;
-                            }
-                            finally
-                            {
-                                bool disposeNow = false;
-                                lock (completionLock)
+                                    ExecuteMainThreadCommand(handler, payload, writer);
+                                }
+                                catch (Exception ex)
                                 {
-                                    callbackCompleted = true;
-                                    if (waiterAbandoned)
+                                    dispatchException = ex;
+                                }
+                                finally
+                                {
+                                    lock (completionLock)
                                     {
-                                        disposeNow = true;
-                                    }
-                                    else
-                                    {
-                                        try { finishedEvent.Set(); } catch (ObjectDisposedException) { }
+                                        if (!isDisposed)
+                                        {
+                                            try { finishedEvent.Set(); } catch (ObjectDisposedException) { }
+                                        }
                                     }
                                 }
-                                if (disposeNow)
+                            });
+
+                            WaitHandle[] requestWaitHandles = { finishedEvent.WaitHandle, s_ShutdownEvent };
+                            int completedIndex = WaitHandle.WaitAny(requestWaitHandles);
+
+                            if (completedIndex == 1 || s_ShutdownEvent.WaitOne(0) || IsShuttingDown())
+                            {
+                                return;
+                            }
+                            if (dispatchException != null)
+                            {
+                                throw dispatchException;
+                            }
+                        }
+                        finally
+                        {
+                            lock (completionLock)
+                            {
+                                if (!isDisposed)
                                 {
+                                    isDisposed = true;
                                     finishedEvent.Dispose();
                                 }
                             }
-                        });
-
-                        WaitHandle[] requestWaitHandles = { finishedEvent, s_ShutdownEvent };
-                        int completedIndex = WaitHandle.WaitAny(requestWaitHandles);
-                        bool disposeOnWaiter = false;
-                        lock (completionLock)
-                        {
-                            if (callbackCompleted)
-                            {
-                                disposeOnWaiter = true;
-                            }
-                            else
-                            {
-                                waiterAbandoned = true;
-                            }
-                        }
-                        if (disposeOnWaiter)
-                        {
-                            finishedEvent.Dispose();
-                        }
-
-                        if (completedIndex == 1 || !callbackCompleted || s_ShutdownEvent.WaitOne(0) || IsShuttingDown())
-                        {
-                            return;
-                        }
-                        if (dispatchException != null)
-                        {
-                            throw dispatchException;
                         }
                     }
                 }
