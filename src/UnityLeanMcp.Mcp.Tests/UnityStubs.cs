@@ -405,6 +405,8 @@ namespace UnityEngine.SceneManagement
 {
     public struct Scene
     {
+        public int handle { get; set; }
+        public bool IsValid() => !string.IsNullOrEmpty(name);
         public string name { get; set; }
         public string path { get; set; }
         public bool isLoaded { get; set; }

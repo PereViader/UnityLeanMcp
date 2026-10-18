@@ -1487,6 +1487,166 @@ namespace UnityLeanMcp.Mcp.Tests
             UnityEngine.Object.FindObjectsOfTypeFunc = null;
         }
 
+        [Fact]
+        public void Find_MatchesSubstringsAndWildcards_RespectsInactiveFlag()
+        {
+            var rootGo = new GameObject("PlayerCharacter");
+            rootGo.activeSelf = true;
+
+            var childGo = new GameObject("PlayerWeapon");
+            childGo.activeSelf = true;
+            rootGo.transform.AddChild(childGo.transform);
+
+            var enemyGo = new GameObject("EnemyBoss");
+            enemyGo.activeSelf = true;
+
+            var hiddenGo = new GameObject("SecretSpawner");
+            hiddenGo.activeSelf = false;
+
+            var scene = new Scene
+            {
+                name = "TestScene",
+                isLoaded = true,
+                RootObjects = new List<GameObject> { rootGo, enemyGo, hiddenGo }
+            };
+            SceneManager.Scenes.Add(scene);
+
+            // Substring search
+            string playerMatches = Inspect.Find("Player");
+            Assert.Contains("GameObjects matching 'Player' (2):", playerMatches);
+            Assert.Contains("PlayerCharacter", playerMatches);
+            Assert.Contains("PlayerWeapon", playerMatches);
+            Assert.DoesNotContain("EnemyBoss", playerMatches);
+
+            // Wildcard search with inactive exclusion
+            string spawnerExcluded = Inspect.Find("*Spawner*", includeInactive: false);
+            Assert.Contains("(No GameObjects found matching '*Spawner*' in loaded scenes)", spawnerExcluded);
+
+            // Wildcard search with inactive inclusion
+            string spawnerIncluded = Inspect.Find("*Spawner*", includeInactive: true);
+            Assert.Contains("SecretSpawner", spawnerIncluded);
+            Assert.Contains("inactive", spawnerIncluded);
+
+            // Non-matching query
+            string noMatches = Inspect.Find("NonExistentNameXYZ");
+            Assert.Contains("(No GameObjects found matching 'NonExistentNameXYZ' in loaded scenes)", noMatches);
+        }
+
+        [Fact]
+        public void MissingScripts_WhenNoMissingScripts_ReturnsCleanMessage()
+        {
+            var go = new GameObject("ValidObject");
+            go.AddComponent<Collider>();
+
+            var scene = new Scene
+            {
+                name = "CleanScene",
+                isLoaded = true,
+                RootObjects = new List<GameObject> { go }
+            };
+            SceneManager.Scenes.Add(scene);
+
+            string result = Inspect.MissingScripts();
+            Assert.Equal("(No missing MonoBehaviour scripts found in loaded scenes)", result);
+        }
+
+        [Fact]
+        public void MissingScripts_WhenMissingScriptsExist_ReportsGameObjectAndComponentIndices()
+        {
+            var go = new GameObject("BrokenObject");
+            go.AddComponent<Collider>();
+            go.AddRawComponent(null); // Missing script
+
+            var scene = new Scene
+            {
+                name = "BrokenScene",
+                isLoaded = true,
+                RootObjects = new List<GameObject> { go }
+            };
+            SceneManager.Scenes.Add(scene);
+
+            string result = Inspect.MissingScripts();
+            Assert.Contains("Missing MonoBehaviour scripts found (1 missing across 1 GameObjects):", result);
+            Assert.Contains("BrokenObject", result);
+            Assert.Contains("component index [2]", result);
+            Assert.Contains("BrokenScene", result);
+        }
+
+        [Fact]
+        public void SceneState_MultipleScenes_ReportsActiveDirtyAndLoadedSummary()
+        {
+            var mainScene = new Scene
+            {
+                handle = 1,
+                name = "MainScene",
+                path = "Assets/Scenes/Main.unity",
+                isLoaded = true,
+                isDirty = true,
+                RootObjects = new List<GameObject> { new GameObject("RootA"), new GameObject("RootB") }
+            };
+
+            var uiScene = new Scene
+            {
+                handle = 2,
+                name = "UIScene",
+                path = "Assets/Scenes/UI.unity",
+                isLoaded = true,
+                isDirty = false,
+                RootObjects = new List<GameObject> { new GameObject("Canvas") }
+            };
+
+            SceneManager.Scenes.Add(mainScene);
+            SceneManager.Scenes.Add(uiScene);
+
+            string result = Inspect.SceneState();
+
+            Assert.Contains("Active Scene: \"MainScene\"", result);
+            Assert.Contains("Path: Assets/Scenes/Main.unity", result);
+            Assert.Contains("Root GameObjects: 2", result);
+            Assert.Contains("Is Dirty: true", result);
+            Assert.Contains("Is Loaded: true", result);
+
+            Assert.Contains("Loaded Scenes (2):", result);
+            Assert.Contains("1. \"MainScene\" [Active] (roots: 2, dirty, path: Assets/Scenes/Main.unity)", result);
+            Assert.Contains("2. \"UIScene\" (roots: 1, path: Assets/Scenes/UI.unity)", result);
+        }
+
+        [Fact]
+        public void Tests_DiscoversTestsInLoadedAppDomain_AndFilters()
+        {
+            // All tests
+            string allTests = Inspect.Tests();
+            Assert.Contains("Available Tests", allTests);
+            Assert.Contains("• UnityLeanMcp.", allTests);
+
+            // Filter matching this test class
+            string filtered = Inspect.Tests("UnityInspectUnitTests");
+            Assert.Contains("Available Tests", filtered);
+            Assert.Contains("UnityInspectUnitTests", filtered);
+            Assert.Contains("Tests_DiscoversTestsInLoadedAppDomain", filtered);
+
+            // Filter matching nothing
+            string none = Inspect.Tests("NonExistentPattern_ZXY_987");
+            Assert.Contains("(No tests found matching filter 'NonExistentPattern_ZXY_987')", none);
+        }
+
+        [Fact]
+        public void Help_ContainsCategorizedSections()
+        {
+            string help = Inspect.Help();
+
+            Assert.Contains("Scene & Hierarchy:", help);
+            Assert.Contains("Objects & Components:", help);
+            Assert.Contains("Assets & Prefabs:", help);
+            Assert.Contains("Editor & Tests:", help);
+            Assert.Contains("Utilities:", help);
+
+            Assert.Contains("• string Find(string namePattern", help);
+            Assert.Contains("• string MissingScripts(", help);
+            Assert.Contains("• string SceneState()", help);
+            Assert.Contains("• string Tests(string filter = null", help);
+        }
+
         #endregion
     }
 }

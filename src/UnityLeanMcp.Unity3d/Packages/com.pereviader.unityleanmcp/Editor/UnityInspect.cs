@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -461,6 +462,357 @@ namespace UnityLeanMcp
             {
                 visited.Remove(current);
             }
+        }
+
+        /// <summary>
+        /// Finds GameObjects matching a wildcard or substring pattern in loaded active scenes.
+        /// </summary>
+        public static string Find(string namePattern, bool includeInactive = true, int maxItems = DefaultMaxItems)
+        {
+            maxItems = Math.Max(1, maxItems);
+            int sceneCount = 0;
+            try
+            {
+                sceneCount = SceneManager.sceneCount;
+            }
+            catch { }
+
+            if (sceneCount == 0)
+            {
+                return "(No scenes currently loaded)";
+            }
+
+            string pattern = namePattern?.Trim() ?? "";
+            bool isWildcard = pattern.Contains('*') || pattern.Contains('?');
+            Regex wildcardRegex = null;
+            if (isWildcard)
+            {
+                string regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+                wildcardRegex = new Regex(regexPattern, RegexOptions.IgnoreCase);
+            }
+
+            bool Matches(string name)
+            {
+                if (string.IsNullOrEmpty(pattern) || pattern == "*")
+                    return true;
+                if (string.IsNullOrEmpty(name))
+                    return false;
+                if (wildcardRegex != null)
+                    return wildcardRegex.IsMatch(name);
+                return name.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            var matches = new List<string>();
+            bool itemLimitReached = false;
+
+            for (int s = 0; s < sceneCount; s++)
+            {
+                Scene scene;
+                try
+                {
+                    scene = SceneManager.GetSceneAt(s);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!scene.isLoaded)
+                    continue;
+
+                GameObject[] rootObjects = null;
+                try
+                {
+                    rootObjects = scene.GetRootGameObjects();
+                }
+                catch { }
+
+                if (rootObjects == null || rootObjects.Length == 0)
+                    continue;
+
+                var queue = new Queue<Transform>();
+                for (int i = 0; i < rootObjects.Length; i++)
+                {
+                    var rootGo = rootObjects[i];
+                    if (rootGo != null && rootGo.transform != null)
+                    {
+                        queue.Enqueue(rootGo.transform);
+                    }
+                }
+
+                var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (current == null || !visited.Add(current))
+                        continue;
+
+                    GameObject go = null;
+                    try { go = current.gameObject; } catch { }
+                    if (go == null)
+                        continue;
+
+                    bool active = false;
+                    try { active = go.activeInHierarchy; } catch { }
+
+                    if (!includeInactive && !active)
+                    {
+                        continue;
+                    }
+
+                    string goName = null;
+                    try { goName = go.name; } catch { }
+
+                    if (Matches(goName))
+                    {
+                        if (matches.Count >= maxItems)
+                        {
+                            itemLimitReached = true;
+                            break;
+                        }
+
+                        string path = GetHierarchyPath(current);
+                        string status = active ? "active" : "inactive";
+                        matches.Add($"  • {goName} (path: \"{path}\", scene: \"{scene.name}\", {status})");
+                    }
+
+                    int childCount = 0;
+                    try { childCount = current.childCount; } catch { }
+                    for (int c = 0; c < childCount; c++)
+                    {
+                        Transform child = null;
+                        try { child = current.GetChild(c); } catch { }
+                        if (child != null)
+                        {
+                            queue.Enqueue(child);
+                        }
+                    }
+                }
+
+                if (itemLimitReached)
+                    break;
+            }
+
+            if (matches.Count == 0)
+            {
+                return string.IsNullOrEmpty(pattern)
+                    ? "(No GameObjects found in loaded scenes)"
+                    : $"(No GameObjects found matching '{pattern}' in loaded scenes)";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"GameObjects matching '{pattern}' ({matches.Count}):");
+            for (int i = 0; i < matches.Count; i++)
+            {
+                sb.AppendLine(matches[i]);
+            }
+
+            if (itemLimitReached)
+            {
+                sb.AppendLine(ItemTruncationMarker);
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Scans active scenes for GameObjects with missing MonoBehaviour components (Component == null).
+        /// </summary>
+        public static string MissingScripts(int maxItems = DefaultMaxItems)
+        {
+            maxItems = Math.Max(1, maxItems);
+            int sceneCount = 0;
+            try
+            {
+                sceneCount = SceneManager.sceneCount;
+            }
+            catch { }
+
+            if (sceneCount == 0)
+            {
+                return "(No scenes currently loaded)";
+            }
+
+            var missingEntries = new List<string>();
+            int totalMissingCount = 0;
+            bool itemLimitReached = false;
+
+            for (int s = 0; s < sceneCount; s++)
+            {
+                Scene scene;
+                try
+                {
+                    scene = SceneManager.GetSceneAt(s);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!scene.isLoaded)
+                    continue;
+
+                GameObject[] rootObjects = null;
+                try
+                {
+                    rootObjects = scene.GetRootGameObjects();
+                }
+                catch { }
+
+                if (rootObjects == null || rootObjects.Length == 0)
+                    continue;
+
+                var queue = new Queue<Transform>();
+                for (int i = 0; i < rootObjects.Length; i++)
+                {
+                    var rootGo = rootObjects[i];
+                    if (rootGo != null && rootGo.transform != null)
+                    {
+                        queue.Enqueue(rootGo.transform);
+                    }
+                }
+
+                var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
+                while (queue.Count > 0)
+                {
+                    var current = queue.Dequeue();
+                    if (current == null || !visited.Add(current))
+                        continue;
+
+                    GameObject go = null;
+                    try { go = current.gameObject; } catch { }
+                    if (go == null)
+                        continue;
+
+                    Component[] components = null;
+                    try
+                    {
+                        components = go.GetComponents<Component>();
+                    }
+                    catch { }
+
+                    if (components != null)
+                    {
+                        var missingIndices = new List<int>();
+                        for (int c = 0; c < components.Length; c++)
+                        {
+                            var comp = components[c];
+                            if (ReferenceEquals(comp, null) || comp == null)
+                            {
+                                missingIndices.Add(c);
+                            }
+                        }
+
+                        if (missingIndices.Count > 0)
+                        {
+                            totalMissingCount += missingIndices.Count;
+                            if (missingEntries.Count < maxItems)
+                            {
+                                string path = GetHierarchyPath(current);
+                                string indicesStr = string.Join(", ", missingIndices);
+                                string scriptWord = missingIndices.Count == 1 ? "missing script" : "missing scripts";
+                                missingEntries.Add($"  • {go.name} (path: \"{path}\", scene: \"{scene.name}\"): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]");
+                            }
+                            else
+                            {
+                                itemLimitReached = true;
+                            }
+                        }
+                    }
+
+                    int childCount = 0;
+                    try { childCount = current.childCount; } catch { }
+                    for (int c = 0; c < childCount; c++)
+                    {
+                        Transform child = null;
+                        try { child = current.GetChild(c); } catch { }
+                        if (child != null)
+                        {
+                            queue.Enqueue(child);
+                        }
+                    }
+                }
+            }
+
+            if (missingEntries.Count == 0)
+            {
+                return "(No missing MonoBehaviour scripts found in loaded scenes)";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Missing MonoBehaviour scripts found ({totalMissingCount} missing across {missingEntries.Count} GameObjects):");
+            for (int i = 0; i < missingEntries.Count; i++)
+            {
+                sb.AppendLine(missingEntries[i]);
+            }
+
+            if (itemLimitReached)
+            {
+                sb.AppendLine(ItemTruncationMarker);
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Returns active scene name, path, root GameObject count, isDirty state, and loaded scenes summary.
+        /// </summary>
+        public static string SceneState()
+        {
+            int sceneCount = 0;
+            try
+            {
+                sceneCount = SceneManager.sceneCount;
+            }
+            catch { }
+
+            if (sceneCount == 0)
+            {
+                return "(No scenes currently loaded)";
+            }
+
+            Scene activeScene = default;
+            try
+            {
+                activeScene = SceneManager.GetActiveScene();
+            }
+            catch { }
+
+            var sb = new StringBuilder();
+            string activeName = !string.IsNullOrEmpty(activeScene.name) ? activeScene.name : "(Untitled)";
+            string activePath = !string.IsNullOrEmpty(activeScene.path) ? activeScene.path : "(Unsaved)";
+
+            sb.AppendLine($"Active Scene: \"{activeName}\"");
+            sb.AppendLine($"  Path: {activePath}");
+            sb.AppendLine($"  Root GameObjects: {activeScene.rootCount}");
+            sb.AppendLine($"  Is Dirty: {(activeScene.isDirty ? "true" : "false")}");
+            sb.AppendLine($"  Is Loaded: {(activeScene.isLoaded ? "true" : "false")}");
+            sb.AppendLine();
+            sb.AppendLine($"Loaded Scenes ({sceneCount}):");
+
+            for (int i = 0; i < sceneCount; i++)
+            {
+                Scene s;
+                try
+                {
+                    s = SceneManager.GetSceneAt(i);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                string sName = !string.IsNullOrEmpty(s.name) ? s.name : "(Untitled)";
+                string sPath = !string.IsNullOrEmpty(s.path) ? s.path : "(Unsaved)";
+                bool isActive = activeScene.IsValid() && s.handle == activeScene.handle;
+                string activeMarker = isActive ? " [Active]" : "";
+                string dirtyMarker = s.isDirty ? ", dirty" : "";
+                string loadedMarker = s.isLoaded ? "" : ", not loaded";
+
+                sb.AppendLine($"  {i + 1}. \"{sName}\"{activeMarker} (roots: {s.rootCount}{dirtyMarker}{loadedMarker}, path: {sPath})");
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
         }
 
         #endregion
@@ -1916,17 +2268,192 @@ namespace UnityLeanMcp
             return LimitOutput(sb.ToString().TrimEnd());
         }
 
+        /// <summary>
+        /// Lists available tests in the loaded AppDomain via reflection without running them.
+        /// </summary>
+        public static string Tests(string filter = null, int maxItems = DefaultMaxItems)
+        {
+            maxItems = Math.Max(1, maxItems);
+            string cleanFilter = filter?.Trim();
+            bool hasFilter = !string.IsNullOrWhiteSpace(cleanFilter);
+            bool isWildcard = hasFilter && (cleanFilter.Contains('*') || cleanFilter.Contains('?'));
+            Regex wildcardRegex = null;
+            if (isWildcard)
+            {
+                string regexPattern = "^" + Regex.Escape(cleanFilter).Replace("\\*", ".*").Replace("\\?", ".") + "$";
+                wildcardRegex = new Regex(regexPattern, RegexOptions.IgnoreCase);
+            }
+
+            bool MatchesFilter(string testName)
+            {
+                if (!hasFilter || cleanFilter == "*")
+                    return true;
+                if (string.IsNullOrEmpty(testName))
+                    return false;
+                if (wildcardRegex != null)
+                    return wildcardRegex.IsMatch(testName);
+                return testName.IndexOf(cleanFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            var discoveredTests = new List<string>();
+            Assembly[] assemblies = null;
+            try
+            {
+                assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            }
+            catch
+            {
+                return "(Unable to retrieve loaded assemblies from AppDomain)";
+            }
+
+            if (assemblies == null || assemblies.Length == 0)
+            {
+                return "(No assemblies loaded in AppDomain)";
+            }
+
+            foreach (var asm in assemblies)
+            {
+                if (asm == null || asm.IsDynamic)
+                    continue;
+
+                string asmName = asm.GetName().Name ?? "";
+                if (asmName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+                    asmName.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase) ||
+                    asmName.StartsWith("mscorlib", StringComparison.OrdinalIgnoreCase) ||
+                    asmName.StartsWith("Mono.", StringComparison.OrdinalIgnoreCase) ||
+                    asmName.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Type[] types = null;
+                try
+                {
+                    types = asm.GetTypes();
+                }
+                catch (ReflectionTypeLoadException ex)
+                {
+                    types = ex.Types?.Where(t => t != null).ToArray();
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (types == null)
+                    continue;
+
+                foreach (var t in types)
+                {
+                    if (t == null || !t.IsClass || t.IsAbstract)
+                        continue;
+
+                    MethodInfo[] methods = null;
+                    try
+                    {
+                        methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (methods == null)
+                        continue;
+
+                    foreach (var m in methods)
+                    {
+                        if (m == null)
+                            continue;
+
+                        object[] attrs = null;
+                        try
+                        {
+                            attrs = m.GetCustomAttributes(inherit: false);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (attrs == null || attrs.Length == 0)
+                            continue;
+
+                        bool isTest = false;
+                        for (int a = 0; a < attrs.Length; a++)
+                        {
+                            var attr = attrs[a];
+                            if (attr == null)
+                                continue;
+                            string attrName = attr.GetType().Name;
+                            if (attrName == "TestAttribute" ||
+                                attrName == "UnityTestAttribute" ||
+                                attrName == "TestCaseAttribute" ||
+                                attrName == "TheoryAttribute" ||
+                                attrName == "FactAttribute")
+                            {
+                                isTest = true;
+                                break;
+                            }
+                        }
+
+                        if (isTest)
+                        {
+                            string fullName = $"{t.FullName}.{m.Name}";
+                            if (MatchesFilter(fullName))
+                            {
+                                discoveredTests.Add(fullName);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (discoveredTests.Count == 0)
+            {
+                return hasFilter
+                    ? $"(No tests found matching filter '{cleanFilter}')"
+                    : "(No tests found in loaded assemblies)";
+            }
+
+            discoveredTests.Sort(StringComparer.OrdinalIgnoreCase);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Available Tests ({discoveredTests.Count}):");
+            int countToReport = Math.Min(discoveredTests.Count, maxItems);
+            for (int i = 0; i < countToReport; i++)
+            {
+                sb.AppendLine($"  • {discoveredTests[i]}");
+            }
+
+            if (discoveredTests.Count > maxItems)
+            {
+                sb.AppendLine(ItemTruncationMarker);
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
         #endregion
 
         #region Help
 
         /// <summary>
-        /// Returns a compact cheatsheet of all available Inspect helper methods and signatures.
+        /// Returns a compact, categorized reference of all available Inspect helper methods and signatures.
         /// </summary>
         public static string Help()
         {
             var sb = new StringBuilder();
             sb.AppendLine("UnityLeanMcp Inspection Helpers (UnityLeanMcp.Inspect):");
+
+            var categories = new Dictionary<string, List<MethodInfo>>(StringComparer.Ordinal)
+            {
+                ["Scene & Hierarchy"] = new List<MethodInfo>(),
+                ["Objects & Components"] = new List<MethodInfo>(),
+                ["Assets & Prefabs"] = new List<MethodInfo>(),
+                ["Editor & Tests"] = new List<MethodInfo>(),
+                ["Utilities"] = new List<MethodInfo>()
+            };
 
             var methods = typeof(Inspect).GetMethods(BindingFlags.Public | BindingFlags.Static)
                 .Where(m => !m.IsSpecialName)
@@ -1935,37 +2462,77 @@ namespace UnityLeanMcp
 
             foreach (var m in methods)
             {
-                string retType = FormatTypeName(m.ReturnType);
-                var paramStrings = new List<string>();
-                foreach (var p in m.GetParameters())
+                string cat;
+                switch (m.Name)
                 {
-                    string pType = FormatTypeName(p.ParameterType);
-                    string pStr = $"{pType} {p.Name}";
-                    if (p.HasDefaultValue)
-                    {
-                        string defVal;
-                        if (p.DefaultValue == null)
-                        {
-                            defVal = "null";
-                        }
-                        else if (p.DefaultValue is bool b)
-                        {
-                            defVal = b ? "true" : "false";
-                        }
-                        else if (p.DefaultValue is string s)
-                        {
-                            defVal = $"\"{s}\"";
-                        }
-                        else
-                        {
-                            defVal = Convert.ToString(p.DefaultValue, CultureInfo.InvariantCulture);
-                        }
-                        pStr += $" = {defVal}";
-                    }
-                    paramStrings.Add(pStr);
+                    case nameof(Hierarchy):
+                    case nameof(Find):
+                    case nameof(MissingScripts):
+                    case nameof(SceneState):
+                        cat = "Scene & Hierarchy";
+                        break;
+                    case nameof(GameObject):
+                    case nameof(Component):
+                    case nameof(Object):
+                    case nameof(PrefabOverrides):
+                        cat = "Objects & Components";
+                        break;
+                    case nameof(FindAsset):
+                    case nameof(FindAssets):
+                    case nameof(FindPrefabs):
+                        cat = "Assets & Prefabs";
+                        break;
+                    case nameof(Selection):
+                    case nameof(MainCamera):
+                    case nameof(Tests):
+                        cat = "Editor & Tests";
+                        break;
+                    default:
+                        cat = "Utilities";
+                        break;
                 }
+                categories[cat].Add(m);
+            }
 
-                sb.AppendLine($"• {retType} {m.Name}({string.Join(", ", paramStrings)})");
+            foreach (var kvp in categories)
+            {
+                if (kvp.Value.Count == 0) continue;
+                sb.AppendLine();
+                sb.AppendLine($"{kvp.Key}:");
+                foreach (var m in kvp.Value)
+                {
+                    string retType = FormatTypeName(m.ReturnType);
+                    var paramStrings = new List<string>();
+                    foreach (var p in m.GetParameters())
+                    {
+                        string pType = FormatTypeName(p.ParameterType);
+                        string pStr = $"{pType} {p.Name}";
+                        if (p.HasDefaultValue)
+                        {
+                            string defVal;
+                            if (p.DefaultValue == null)
+                            {
+                                defVal = "null";
+                            }
+                            else if (p.DefaultValue is bool b)
+                            {
+                                defVal = b ? "true" : "false";
+                            }
+                            else if (p.DefaultValue is string s)
+                            {
+                                defVal = $"\"{s}\"";
+                            }
+                            else
+                            {
+                                defVal = Convert.ToString(p.DefaultValue, CultureInfo.InvariantCulture);
+                            }
+                            pStr += $" = {defVal}";
+                        }
+                        paramStrings.Add(pStr);
+                    }
+
+                    sb.AppendLine($"• {retType} {m.Name}({string.Join(", ", paramStrings)})");
+                }
             }
 
             return sb.ToString().TrimEnd();

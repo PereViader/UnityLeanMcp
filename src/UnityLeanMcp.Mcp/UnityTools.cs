@@ -98,7 +98,7 @@ public class UnityTools
     }
 
     [McpServerTool(Name = "unity_eval")]
-    [Description("Evaluates C# top-level statements in the active Unity Editor with top-level await. Use 'return <value>;' to return results. Call 'return Inspect.Help();' for cheatsheet.")]
+    [Description("Evaluates C# top-level statements in the active Unity Editor with top-level await. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Call 'return Inspect.Help();' for cheatsheet.")]
     public async Task<CallToolResult> UnityEvalAsync(
         [Description("Raw C# source text to evaluate. Send plain text directly—do not wrap in JSON.")] string code,
         IProgress<ProgressNotificationValue>? progress = null,
@@ -121,16 +121,23 @@ public class UnityTools
             {
                 if (hasLogs)
                 {
-                    output.AppendLine("Logs:");
-                    output.AppendLine(logsText);
-                    output.AppendLine();
                     output.AppendLine(header);
+                    output.AppendTrimmedBounded(
+                        content,
+                        McpOutputLimits.MaxFormattedOutputCharacters,
+                        McpOutputLimits.AggregateOutputTruncationMarker);
+                    output.AppendLine();
+                    output.AppendLine();
+                    output.AppendLine("Logs:");
+                    output.Append(logsText);
                 }
-
-                output.AppendTrimmedBounded(
-                    content,
-                    McpOutputLimits.MaxFormattedOutputCharacters,
-                    McpOutputLimits.AggregateOutputTruncationMarker);
+                else
+                {
+                    output.AppendTrimmedBounded(
+                        content,
+                        McpOutputLimits.MaxFormattedOutputCharacters,
+                        McpOutputLimits.AggregateOutputTruncationMarker);
+                }
             }
 
             if (result.Success)
@@ -258,7 +265,7 @@ public class UnityTools
 
 
     [McpServerTool(Name = "unity_test")]
-    [Description("Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
+    [Description("Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
     public async Task<CallToolResult> UnityTestAsync(
         [Description("Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.")]
         UnityTestMode mode,
@@ -283,6 +290,7 @@ public class UnityTools
 
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
+
     {
         try
         {
@@ -333,11 +341,12 @@ public class UnityTools
     [McpServerTool(Name = "unity_coverage")]
     [Description("Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
     public async Task<CallToolResult> UnityCoverageAsync(
-        [Description("File or directory paths to inspect coverage for (e.g. ['Assets/Scripts/PlayerController.cs'] or ['Assets/Scripts/Combat/']). Directory paths recursively match all contained C# files. Required.")]
+        [Description("File or directory paths to inspect coverage for (e.g. ['Assets/Scripts/PlayerController.cs'] or ['Assets/Scripts/Combat/']). Directory paths recursively match all contained C# files. Accepts a single string or an array of strings. Required.")]
         string[] paths,
 
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
+
     {
         try
         {
@@ -637,7 +646,7 @@ public class UnityTools
             var fail = failedTests[i] ?? new FailedTestInfo();
             var (filePath, lineNumber, fileUri) = _diagnosticFormatter.ExtractSourceLocation(fail.StackTrace, projectRoot);
             string sanitizedStackTrace = McpOutputLimits.Truncate(
-                _diagnosticFormatter.SanitizeTestStackTrace(fail.StackTrace),
+                _diagnosticFormatter.CompactTestStackTrace(fail.StackTrace),
                 McpOutputLimits.MaxFailureStackTraceCharacters,
                 McpOutputLimits.FailureStackTraceTruncationMarker);
 
@@ -714,25 +723,13 @@ public class UnityTools
             if (!string.IsNullOrWhiteSpace(fail.FilePath) && fail.LineNumber.HasValue)
             {
                 detailedOutput.Append("  Location: ");
-                if (!string.IsNullOrWhiteSpace(fail.FileUri))
-                {
-                    detailedOutput.Append("[");
-                }
+                string location = !string.IsNullOrWhiteSpace(fail.FileUri)
+                    ? fail.FileUri
+                    : $"{fail.FilePath}:{fail.LineNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
                 detailedOutput.AppendBounded(
-                    fail.FilePath,
+                    location,
                     McpOutputLimits.MaxFailureIdentifierCharacters,
                     McpOutputLimits.FailureIdentifierTruncationMarker);
-                detailedOutput.Append(":");
-                detailedOutput.Append(fail.LineNumber.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                if (!string.IsNullOrWhiteSpace(fail.FileUri))
-                {
-                    detailedOutput.Append("](");
-                    detailedOutput.AppendBounded(
-                        fail.FileUri,
-                        McpOutputLimits.MaxFailureIdentifierCharacters,
-                        McpOutputLimits.FailureIdentifierTruncationMarker);
-                    detailedOutput.Append(")");
-                }
                 detailedOutput.AppendLine();
             }
             if (!string.IsNullOrWhiteSpace(fail.Message))
@@ -833,4 +830,29 @@ public class UnityTools
         }
         return code;
     }
+
+    internal static void NormalizeToolArguments(CallToolRequestParams? @params)
+    {
+        if (@params?.Arguments == null) return;
+
+        NormalizeArrayOrSingle(@params.Arguments, "testNames");
+        NormalizeArrayOrSingle(@params.Arguments, "groupNames");
+        NormalizeArrayOrSingle(@params.Arguments, "categoryNames");
+        NormalizeArrayOrSingle(@params.Arguments, "assemblyNames");
+        NormalizeArrayOrSingle(@params.Arguments, "paths");
+    }
+
+    private static void NormalizeArrayOrSingle(IDictionary<string, JsonElement> arguments, string key)
+    {
+        if (!arguments.TryGetValue(key, out var elem)) return;
+
+        if (elem.ValueKind == JsonValueKind.String)
+        {
+            string? s = elem.GetString();
+            arguments[key] = JsonSerializer.SerializeToElement(s != null ? new[] { s } : Array.Empty<string>());
+        }
+    }
 }
+
+
+

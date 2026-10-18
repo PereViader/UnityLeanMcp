@@ -2,6 +2,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Xunit;
 
@@ -66,4 +68,84 @@ public sealed class ToolSchemaTests
             ? type.EnumerateArray().Select(value => value.GetString()!)
             : new[] { type.GetString()! };
     }
+
+    [Fact]
+    public void UnityTestMode_DeserializationBehavior()
+    {
+        var edit1 = JsonSerializer.Deserialize<UnityTestMode>("\"editmode\"");
+        Assert.Equal(UnityTestMode.EditMode, edit1);
+        var edit2 = JsonSerializer.Deserialize<UnityTestMode>("\"EditMode\"");
+        Assert.Equal(UnityTestMode.EditMode, edit2);
+        var play1 = JsonSerializer.Deserialize<UnityTestMode>("\"playmode\"");
+        Assert.Equal(UnityTestMode.PlayMode, play1);
+        var play2 = JsonSerializer.Deserialize<UnityTestMode>("\"PlayMode\"");
+        Assert.Equal(UnityTestMode.PlayMode, play2);
+    }
+
+    [Fact]
+    public void NormalizeToolArguments_NormalizesJsonElementStringToArray()
+    {
+        using var doc = JsonDocument.Parse("{\"testNames\":\"MySuite.MyTest\",\"paths\":\"Assets/Foo.cs\"}");
+        var args = new Dictionary<string, JsonElement>
+        {
+            ["testNames"] = doc.RootElement.GetProperty("testNames"),
+            ["paths"] = doc.RootElement.GetProperty("paths")
+        };
+        var requestParams = new CallToolRequestParams
+        {
+            Name = "unity_test",
+            Arguments = args
+        };
+
+        UnityTools.NormalizeToolArguments(requestParams);
+
+        Assert.Equal(JsonValueKind.Array, args["testNames"].ValueKind);
+        Assert.Equal("MySuite.MyTest", args["testNames"][0].GetString());
+        Assert.Equal(JsonValueKind.Array, args["paths"].ValueKind);
+        Assert.Equal("Assets/Foo.cs", args["paths"][0].GetString());
+    }
+
+    [Fact]
+    public void NormalizeToolArguments_LeavesExistingArraysUnchanged()
+    {
+        using var doc = JsonDocument.Parse("{\"testNames\":[\"A\",\"B\"],\"paths\":[\"X.cs\",\"Y.cs\"]}");
+        var args = new Dictionary<string, JsonElement>
+        {
+            ["testNames"] = doc.RootElement.GetProperty("testNames"),
+            ["paths"] = doc.RootElement.GetProperty("paths")
+        };
+        var requestParams = new CallToolRequestParams
+        {
+            Name = "unity_test",
+            Arguments = args
+        };
+
+        UnityTools.NormalizeToolArguments(requestParams);
+
+        Assert.Equal(JsonValueKind.Array, args["testNames"].ValueKind);
+        Assert.Equal(2, args["testNames"].GetArrayLength());
+        Assert.Equal(JsonValueKind.Array, args["paths"].ValueKind);
+        Assert.Equal(2, args["paths"].GetArrayLength());
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

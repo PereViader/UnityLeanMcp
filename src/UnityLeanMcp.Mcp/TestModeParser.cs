@@ -55,4 +55,24 @@ internal static class TestModeParser
         errorMessage = InvalidModeMessage;
         return false;
     }
+
+    internal static bool TryParseMode(string? mode, out UnityTestMode testMode)
+    {
+        string trimmed = mode?.Trim() ?? string.Empty;
+        if (string.Equals(trimmed, "editmode", StringComparison.OrdinalIgnoreCase))
+        {
+            testMode = UnityTestMode.EditMode;
+            return true;
+        }
+
+        if (string.Equals(trimmed, "playmode", StringComparison.OrdinalIgnoreCase))
+        {
+            testMode = UnityTestMode.PlayMode;
+            return true;
+        }
+
+        testMode = default;
+        return false;
+    }
 }
+

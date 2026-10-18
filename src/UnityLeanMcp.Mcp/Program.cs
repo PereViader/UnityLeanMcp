@@ -72,8 +72,23 @@ builder.Services
     {
         options.ServerInstructions = "unity_refresh verifies compilation diagnostics after editing scripts. unity_test and unity_eval automatically compile and refresh pending changes before executing, so do not call unity_refresh immediately before evaluating code or running tests.";
     })
+    .WithRequestFilters(filters =>
+    {
+        filters.AddCallToolFilter(next => async (request, cancellationToken) =>
+        {
+            if (request?.Params != null)
+            {
+                UnityTools.NormalizeToolArguments(request.Params);
+            }
+            return await next(request!, cancellationToken);
+        });
+    })
+
     .WithStdioServerTransport()
     .WithTools<UnityTools>();
+
+
+
 
 var app = builder.Build();
 await app.RunAsync();

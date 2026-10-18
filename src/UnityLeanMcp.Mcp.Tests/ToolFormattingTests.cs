@@ -537,11 +537,12 @@ public class ToolFormattingTests
 
             Assert.False(result.IsError);
             string text = GetResultText(result);
-            Assert.StartsWith("Logs:", text);
+            Assert.StartsWith("Result:", text);
+            Assert.Contains("42", text);
+            Assert.Contains("Logs:", text);
             Assert.Contains("Calculating value...", text);
             Assert.Contains("[Warning] Calculation took longer than expected", text);
-            Assert.Contains("Result:", text);
-            Assert.EndsWith("42", text);
+            Assert.True(text.IndexOf("Result:") < text.IndexOf("Logs:"), "Result must precede Logs");
         }
         finally
         {
@@ -597,10 +598,12 @@ public class ToolFormattingTests
             Assert.True(result.IsError);
             Assert.Single(result.Content);
             string text = GetResultText(result);
-            Assert.StartsWith("Logs:", text);
-            Assert.Contains("[Error] Failed to locate target", text);
-            Assert.Contains("Error:", text);
+            Assert.StartsWith("Error:", text);
             Assert.Contains("NullReferenceException:", text);
+            Assert.Contains("Logs:", text);
+            Assert.Contains("[Error] Failed to locate target", text);
+            Assert.True(text.IndexOf("Error:") < text.IndexOf("Logs:"), "Error must precede Logs");
+
         }
         finally
         {
@@ -1860,8 +1863,10 @@ public class ToolFormattingTests
             string humanText = GetResultText(result);
             Assert.Contains("Tests Failed: 1 failed, 7 passed, 2 skipped.", humanText);
             Assert.Contains("• MySuite.Test_AssertFailure (0.250s)", humanText);
-            Assert.Contains("Location: [Assets/Tests/Editor/DummyTest.cs:42](file:///", humanText);
-            Assert.Contains("#L42)", humanText);
+            Assert.Contains("Location: file:///", humanText);
+            Assert.Contains("#L42", humanText);
+            Assert.DoesNotContain("[Assets/Tests/Editor/DummyTest.cs:42]", humanText);
+            Assert.DoesNotContain("](file:///", humanText);
             Assert.Contains("Message: Expected 10 but got 5", humanText);
             Assert.Contains("Stack trace:", humanText);
         }
@@ -1952,7 +1957,7 @@ public class ToolFormattingTests
 
             int warningsIndex = text.IndexOf("Warnings:");
             int errorsIndex = text.IndexOf("Errors:");
-            Assert.True(warningsIndex < errorsIndex, "Warnings must precede errors");
+            Assert.True(errorsIndex < warningsIndex, "Errors must precede warnings");
         }
         finally
         {
@@ -2457,6 +2462,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         }
 
         public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
+        public string CompactTestStackTrace(string? stackTrace, int maxLines = 3) => stackTrace ?? string.Empty;
 
         public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
         {
@@ -2612,11 +2618,11 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
 
             int warnHeaderIdx = text.IndexOf("Warnings:");
             int errHeaderIdx = text.IndexOf("Errors:");
-            Assert.True(warnHeaderIdx < errHeaderIdx, "Warnings header must precede Errors header");
+            Assert.True(errHeaderIdx < warnHeaderIdx, "Errors header must precede Warnings header");
 
             int warn1Idx = text.IndexOf("Warn1.cs#L20");
             int err1Idx = text.IndexOf("Error1.cs#L10");
-            Assert.True(warn1Idx < err1Idx, "Warnings must appear before Errors");
+            Assert.True(err1Idx < warn1Idx, "Errors must appear before Warnings");
 
             Assert.EndsWith("Error: Unity compilation failed.", text);
         }
@@ -2731,7 +2737,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
 
             int warnIdx = text.IndexOf("Util.cs#L5");
             int errIdx = text.IndexOf("Test.cs#L12");
-            Assert.True(warnIdx < errIdx, "Warnings must precede errors");
+            Assert.True(errIdx < warnIdx, "Errors must precede warnings");
         }
         finally
         {
@@ -3123,8 +3129,8 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
 
     [Theory]
     [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler and asset import diagnostics. C# compiler errors persist across no-op refreshes, while non-C# diagnostics (shaders, import failures) are captured only during active imports and not re-emitted if assets are unchanged. Normal refresh is fast when unchanged; set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
-    [InlineData("unity_eval", "Evaluates C# top-level statements in the active Unity Editor with top-level await. Use 'return <value>;' to return results. Call 'return Inspect.Help();' for cheatsheet.")]
-    [InlineData("unity_test", "Runs Unity tests in 'editmode' or 'playmode'. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
+    [InlineData("unity_eval", "Evaluates C# top-level statements in the active Unity Editor with top-level await. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Call 'return Inspect.Help();' for cheatsheet.")]
+    [InlineData("unity_test", "Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
     [InlineData("unity_coverage", "Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
     public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
     {
@@ -3472,11 +3478,73 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         }
     }
 
+    [Fact]
+    public void DiagnosticFormatter_WhenProjectErrorsExist_SuppressesPackageCacheWarnings()
+    {
+        string text = "Assets/Scripts/Player.cs(12,4): error CS0103: The name 'player' does not exist\n" +
+                      "Library/PackageCache/com.unity.ugui@2.0.0/Runtime/UI.cs(50,1): warning CS0219: Variable 'foo' is unused\n" +
+                      "Assets/Scripts/Game.cs(8,2): warning CS0168: Variable 'bar' is unused";
+
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            failureTrailer: "Compilation failed.",
+            isSuccess: false);
+
+        Assert.Contains("Assets/Scripts/Player.cs", formatted);
+        Assert.Contains("Assets/Scripts/Game.cs", formatted);
+        Assert.DoesNotContain("com.unity.ugui", formatted);
+        Assert.DoesNotContain("Library/PackageCache", formatted);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_WhenNoProjectErrorsExist_PreservesPackageCacheWarnings()
+    {
+        string text = "Library/PackageCache/com.unity.ugui@2.0.0/Runtime/UI.cs(50,1): warning CS0219: Variable 'foo' is unused\n" +
+                      "Assets/Scripts/Game.cs(8,2): warning CS0168: Variable 'bar' is unused";
+
+        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
+            text,
+            projectRoot: "C:/Code/MyProject",
+            successTrailer: "Compilation succeeded.",
+            isSuccess: true);
+
+        Assert.Contains("com.unity.ugui", formatted);
+        Assert.Contains("Assets/Scripts/Game.cs", formatted);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_CompactTestStackTrace_SelectsTopActionableProjectLines()
+    {
+        var formatter = new DiagnosticFormatter();
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            "  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual) [0x00000] in <...>:0",
+            "  at MyProject.Engine.ComputeInternal () [0x00005] in Assets/Scripts/Engine.cs:10",
+            "  at MyProject.Engine.Compute () [0x00010] in Assets/Scripts/Engine.cs:25",
+            "  at MyProject.Tests.PlayerTests.MoveTest () [0x00025] in Assets/Tests/PlayerTests.cs:42",
+            "  at MyProject.Tests.PlayerTests.BaseRunner () [0x00001] in Assets/Tests/BaseRunner.cs:99",
+            "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
+            "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0"
+        });
+
+        string compacted = formatter.CompactTestStackTrace(rawTrace, maxLines: 3);
+
+        Assert.Contains("ComputeInternal", compacted);
+        Assert.Contains("Compute ()", compacted);
+        Assert.Contains("MoveTest", compacted);
+        Assert.DoesNotContain("BaseRunner", compacted);
+        Assert.DoesNotContain("TestMethodCommand", compacted);
+        Assert.DoesNotContain("InternalInvoke", compacted);
+        Assert.DoesNotContain("Assert.AreEqual", compacted);
+    }
+
     private sealed class CustomMockDiagnosticFormatter : IDiagnosticFormatter
     {
         public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
             => (null, null, null);
         public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
+        public string CompactTestStackTrace(string? stackTrace, int maxLines = 3) => stackTrace ?? string.Empty;
         public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText) => [];
         public string FormatCompilerDiagnostics(
             string? diagnosticText,

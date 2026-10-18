@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -10,6 +11,7 @@ public interface IDiagnosticFormatter
 {
     (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot);
     string SanitizeTestStackTrace(string? stackTrace);
+    string CompactTestStackTrace(string? stackTrace, int maxLines = 3);
     List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText);
     string FormatCompilerDiagnostics(
         string? diagnosticText,
@@ -345,6 +347,86 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         line.Contains("System.RuntimeMethodHandle") ||
         line.Contains("(wrapper ");
 
+    public string CompactTestStackTrace(string? stackTrace, int maxLines = 3)
+    {
+        string sanitized = SanitizeTestStackTrace(stackTrace);
+        if (string.IsNullOrWhiteSpace(sanitized))
+            return string.Empty;
+
+        var lines = sanitized.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length <= maxLines)
+            return sanitized;
+
+        var projectLines = new List<string>();
+        foreach (var line in lines)
+        {
+            if (IsProjectLine(line))
+            {
+                projectLines.Add(line);
+            }
+        }
+
+        if (projectLines.Count > 0)
+        {
+            if (projectLines.Count >= maxLines)
+            {
+                return string.Join(Environment.NewLine, projectLines.Take(maxLines));
+            }
+
+            var result = new List<string>(maxLines);
+            foreach (var line in lines)
+            {
+                if (result.Count >= maxLines)
+                    break;
+                result.Add(line);
+            }
+            foreach (var projLine in projectLines)
+            {
+                if (!result.Contains(projLine) && result.Count < maxLines)
+                {
+                    result.Add(projLine);
+                }
+            }
+            return string.Join(Environment.NewLine, result);
+        }
+
+        return string.Join(Environment.NewLine, lines.Take(maxLines));
+    }
+
+    internal static bool IsProjectLine(string line)
+    {
+        string trimmed = line.Trim();
+        if (IsFrameworkRunnerMarker(trimmed) || IsInvocationPlumbing(trimmed))
+            return false;
+
+        if (trimmed.Contains("NUnit.Framework.") ||
+            trimmed.Contains("UnityEngine.Assertions.") ||
+            trimmed.Contains("UnityEngine.TestTools."))
+            return false;
+
+        if (trimmed.Contains("<filename unknown>") || trimmed.Contains("<...>:0"))
+            return false;
+
+        return trimmed.Contains("Assets/") ||
+               trimmed.Contains("Assets\\") ||
+               trimmed.Contains("Packages/") ||
+               trimmed.Contains("Packages\\") ||
+               s_StackTraceRegex.IsMatch(trimmed) ||
+               trimmed.Contains(".cs:");
+    }
+
+    public static bool IsPackageCache(string? file)
+    {
+        if (string.IsNullOrWhiteSpace(file))
+            return false;
+
+        string normalized = file.Replace('\\', '/');
+        return normalized.Contains("/PackageCache/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("PackageCache/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/Library/PackageCache/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("Library/PackageCache/", StringComparison.OrdinalIgnoreCase);
+    }
+
     public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
     {
         var diagnostics = new List<StructuredCompilerDiagnostic>();
@@ -519,6 +601,12 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             }
         }
 
+        bool hasProjectErrors = errors.Any(e => !IsPackageCache(e.File));
+        if (hasProjectErrors)
+        {
+            warnings.RemoveAll(w => IsPackageCache(w.File));
+        }
+
         bool failed = errors.Count > 0 || !isSuccess;
         string? trailer = null;
         if (failed)
@@ -555,8 +643,26 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             {
                 bool showHeaders = warnings.Count > 0 && errors.Count > 0;
 
+                if (errors.Count > 0)
+                {
+                    if (showHeaders)
+                    {
+                        builder.AppendLine("Errors:");
+                    }
+
+                    foreach (var error in errors)
+                    {
+                        builder.AppendLine(FormatDiagnostic(error, projectRoot, isEval));
+                    }
+                }
+
                 if (warnings.Count > 0)
                 {
+                    if (errors.Count > 0)
+                    {
+                        builder.AppendLine();
+                    }
+
                     if (showHeaders)
                     {
                         builder.AppendLine("Warnings:");
@@ -572,24 +678,6 @@ public class DiagnosticFormatter : IDiagnosticFormatter
                     {
                         int omitted = warnings.Count - maxWarnings;
                         builder.AppendLine($"... and {omitted} more warning(s) omitted to preserve context window.");
-                    }
-                }
-
-                if (errors.Count > 0)
-                {
-                    if (warnings.Count > 0)
-                    {
-                        builder.AppendLine();
-                    }
-
-                    if (showHeaders)
-                    {
-                        builder.AppendLine("Errors:");
-                    }
-
-                    foreach (var error in errors)
-                    {
-                        builder.AppendLine(FormatDiagnostic(error, projectRoot, isEval));
                     }
                 }
             },
