@@ -412,7 +412,9 @@ namespace UnityLeanMcp
                 return;
             }
 
-            if (Interlocked.Increment(ref s_SettledUpdateCount) < 10)
+            bool isCleanRefresh = snap.Kind == OperationKinds.Refresh && !s_RefreshRequired;
+            int requiredSettledCount = isCleanRefresh ? 1 : 5;
+            if (Interlocked.Increment(ref s_SettledUpdateCount) < requiredSettledCount)
             {
                 return;
             }

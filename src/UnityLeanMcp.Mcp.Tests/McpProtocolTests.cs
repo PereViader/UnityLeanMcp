@@ -7,14 +7,13 @@ using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
-[Collection("UnityIntegration")]
-[Trait("Category", "UnityIntegration")]
+[Trait("Category", "Subsystem")]
 public class McpProtocolTests
 {
     [Fact]
     public async Task StdioHandshake_And_ToolsList_ReturnsAllExpectedTools()
     {
-        string dllPath = McpTestClient.GetMcpServerDllPath();
+        string dllPath = McpTestClient.GetSubsystemServerDllPath();
         string projectRoot = McpTestClient.GetUnityProjectRoot();
 
         var psi = new ProcessStartInfo
@@ -127,7 +126,7 @@ public class McpProtocolTests
     [Fact]
     public async Task StdioCall_UnknownTool_ReturnsJsonRpcError()
     {
-        string dllPath = McpTestClient.GetMcpServerDllPath();
+        string dllPath = McpTestClient.GetSubsystemServerDllPath();
         string projectRoot = McpTestClient.GetUnityProjectRoot();
 
         var psi = new ProcessStartInfo

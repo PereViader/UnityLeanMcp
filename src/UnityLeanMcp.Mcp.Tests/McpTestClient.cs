@@ -76,6 +76,14 @@ public class McpTestClient : IAsyncDisposable
             publishedDll);
     }
 
+    public static string GetSubsystemServerDllPath()
+    {
+        string currentDll = typeof(UnityClient).Assembly.Location;
+        if (File.Exists(currentDll)) return currentDll;
+
+        return GetMcpServerDllPath();
+    }
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (_initialized) return;

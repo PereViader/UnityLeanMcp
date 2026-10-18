@@ -444,7 +444,7 @@ public class UnityClient : IUnityClient
                     IsMatch = r => r.OperationId == opId,
                     PollCommand = $"POLL_EVAL {opId}",
                     PollTimeoutSeconds = 5,
-                    PollIntervalMs = 500,
+                    PollIntervalMs = PollIntervalMs,
                     RequireDurableResult = true,
                     OnPollTick = _ =>
                     {

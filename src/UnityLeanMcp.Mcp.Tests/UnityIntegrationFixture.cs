@@ -48,8 +48,8 @@ public class UnityIntegrationFixture : IAsyncLifetime
             File.Copy(_dummyTestMetaPath, _backupDummyTestMetaPath, true);
         }
 
-        // Always publish the Release server used by the Unity package. Reusing
-        // an existing artifact can run integration tests against stale code.
+        // Ensure the Release server used by the Unity package is published and up to date.
+        // Reusing an existing artifact is permitted only when all host sources are older than the published DLL.
         await PublishMcpServerAsync();
 
         // Ensure Unity is started and ready using shared client
@@ -70,6 +70,11 @@ public class UnityIntegrationFixture : IAsyncLifetime
             "com.pereviader.unityleanmcp",
             "MCP~");
         string publishedDll = Path.Combine(mcpDir, "UnityLeanMcp.Mcp.dll");
+
+        if (IsServerDllFresh(publishedDll))
+        {
+            return;
+        }
 
         PreparePublishDirectory(mcpDir);
 
@@ -99,6 +104,57 @@ public class UnityIntegrationFixture : IAsyncLifetime
                 "dotnet publish completed successfully but did not produce the package MCP server DLL.",
                 publishedDll);
         }
+    }
+
+    private static bool IsServerDllFresh(string publishedDll)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("UNITY_LEAN_MCP_FORCE_PUBLISH"), "true", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!File.Exists(publishedDll))
+        {
+            return false;
+        }
+
+        string mcpDir = Path.GetDirectoryName(publishedDll)!;
+        string runtimeConfig = Path.Combine(mcpDir, "UnityLeanMcp.Mcp.runtimeconfig.json");
+        if (!File.Exists(runtimeConfig))
+        {
+            return false;
+        }
+
+        DateTime publishedTime = File.GetLastWriteTimeUtc(publishedDll);
+        string repoRoot = McpTestClient.GetRepoRoot();
+        string mcpSourceDir = Path.Combine(repoRoot, "src", "UnityLeanMcp.Mcp");
+        if (!Directory.Exists(mcpSourceDir))
+        {
+            return false;
+        }
+
+        foreach (string file in Directory.EnumerateFiles(mcpSourceDir, "*.*", SearchOption.AllDirectories))
+        {
+            string rel = Path.GetRelativePath(mcpSourceDir, file).Replace('\\', '/');
+            if (rel.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
+                rel.StartsWith("obj/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (File.GetLastWriteTimeUtc(file) > publishedTime)
+            {
+                return false;
+            }
+        }
+
+        string envelopePath = Path.Combine(repoRoot, "src", "UnityLeanMcp.Unity3d", "Packages", "com.pereviader.unityleanmcp", "Editor", "ProjectCommandEnvelope.cs");
+        if (File.Exists(envelopePath) && File.GetLastWriteTimeUtc(envelopePath) > publishedTime)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static void PreparePublishDirectory(string mcpDir)

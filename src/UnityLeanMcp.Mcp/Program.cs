@@ -27,6 +27,7 @@ if (args.Contains("--help") || args.Contains("-h"))
     Console.WriteLine("  UNITY_PATH                   Path to Unity Editor executable.");
     Console.WriteLine("  UNITY_EDITOR                 Path to Unity Editor executable.");
     Console.WriteLine("  UNITY_BATCHMODE              Auto-start Unity in headless batchmode (true/1).");
+    Console.WriteLine("  UNITY_LEAN_MCP_POLL_INTERVAL_MS  Polling interval backoff cap in milliseconds (default 500).");
     return 0;
 }
 
@@ -63,6 +64,12 @@ builder.Services.AddSingleton<IUnityLogScanner, UnityLogScanner>();
 builder.Services.AddSingleton<IUnitySocketTransport, UnitySocketTransport>();
 builder.Services.AddSingleton<IUnityProcessManager, UnityProcessManager>();
 builder.Services.AddSingleton<IOperationPoller, OperationPoller>();
+int defaultPollInterval = 500;
+if (int.TryParse(Environment.GetEnvironmentVariable("UNITY_LEAN_MCP_POLL_INTERVAL_MS"), out int envPollInterval) && envPollInterval > 0)
+{
+    defaultPollInterval = envPollInterval;
+}
+builder.Services.AddSingleton(new UnityClientOptions(PollIntervalMs: defaultPollInterval));
 builder.Services.AddSingleton<IUnityClient, UnityClient>();
 builder.Services.AddSingleton<IDiagnosticFormatter, DiagnosticFormatter>();
 builder.Services.AddSingleton<UnityTools>();

@@ -17,6 +17,7 @@ public sealed class OperationPollingSpec<TResult> where TResult : class, IOperat
     public required string PollCommand { get; init; }
     public int PollTimeoutSeconds { get; init; } = 5;
     public int PollIntervalMs { get; init; } = 500;
+    public bool AdaptivePolling { get; init; } = true;
     public bool ShouldCancelOnAborted { get; init; } = true;
     /// <summary>
     /// Requires a matching durable result before accepting a protocol success.
@@ -99,6 +100,7 @@ public class OperationPoller : IOperationPoller
     public async Task CancelOperationAsync(string opId, string kind, CancellationToken cancellationToken = default)
     {
         _logger?.LogInformation("Cancellation requested. Sending CANCEL_OPERATION for {OpId} ({Kind})...", opId, kind);
+        int cancelIteration = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -117,7 +119,15 @@ public class OperationPoller : IOperationPoller
             }
             if (!_processManager.IsUnityRunning(out _))
                 return;
-            await Task.Delay(500, cancellationToken);
+            int delay = cancelIteration switch
+            {
+                0 => 25,
+                1 => 50,
+                2 => 100,
+                _ => 250
+            };
+            cancelIteration++;
+            await Task.Delay(delay, cancellationToken);
         }
     }
 
@@ -139,6 +149,7 @@ public class OperationPoller : IOperationPoller
     {
         try
         {
+            int pollIteration = 0;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -196,8 +207,8 @@ public class OperationPoller : IOperationPoller
                     var immediateTerminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(pollResp, spec.OperationId);
                     if (immediateTerminal != null && immediateTerminal.Interrupted)
                     {
-                        spec.OnResultFound?.Invoke(immediateTerminal);
-                        return immediateTerminal;
+                        DeleteResultFileSilently(spec);
+                        return spec.OnResultFound != null ? spec.OnResultFound(immediateTerminal) : immediateTerminal;
                     }
 
                     if (pollResp.StartsWith("BUSY", StringComparison.OrdinalIgnoreCase))
@@ -239,7 +250,8 @@ public class OperationPoller : IOperationPoller
                     await spec.OnAfterPoll(pollResp, cancellationToken);
                 }
 
-                await Task.Delay(spec.PollIntervalMs, cancellationToken);
+                int delay = CalculatePollDelay(spec, pollIteration++);
+                await Task.Delay(delay, cancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -290,7 +302,8 @@ public class OperationPoller : IOperationPoller
         var terminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(pollResp, spec.OperationId);
         if (terminal != null)
         {
-            return terminal;
+            DeleteResultFileSilently(spec);
+            return spec.OnResultFound != null ? spec.OnResultFound(terminal) : terminal;
         }
 
         if (pollResp.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
@@ -356,5 +369,25 @@ public class OperationPoller : IOperationPoller
         if (string.IsNullOrEmpty(filePath) || string.IsNullOrEmpty(operationId)) return false;
         string fileName = Path.GetFileName(filePath);
         return fileName.Contains(operationId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static int CalculatePollDelay<TResult>(OperationPollingSpec<TResult> spec, int pollIteration) where TResult : class, IOperationResult, new()
+    {
+        if (!spec.AdaptivePolling)
+        {
+            return spec.PollIntervalMs;
+        }
+
+        int adaptiveDelay = pollIteration switch
+        {
+            0 => 10,
+            1 => 25,
+            2 => 50,
+            3 => 100,
+            4 => 250,
+            _ => spec.PollIntervalMs
+        };
+
+        return Math.Min(adaptiveDelay, spec.PollIntervalMs);
     }
 }

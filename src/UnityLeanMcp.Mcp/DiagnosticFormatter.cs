@@ -451,8 +451,8 @@ public class DiagnosticFormatter : IDiagnosticFormatter
                 var match = s_CompilerDiagnosticRegex.Match(item);
                 if (match.Success)
                 {
-                    int diagLine = match.Groups["line"].Success ? int.Parse(match.Groups["line"].Value) : 0;
-                    int column = match.Groups["col"].Success ? int.Parse(match.Groups["col"].Value) : 0;
+                    int diagLine = match.Groups["line"].Success && int.TryParse(match.Groups["line"].Value, out int pl) ? pl : 0;
+                    int column = match.Groups["col"].Success && int.TryParse(match.Groups["col"].Value, out int pc) ? pc : 0;
                     string code = match.Groups["code"].Success ? match.Groups["code"].Value : "";
 
                     string rawDiagMsg = match.Groups["msg"].Value.Trim();

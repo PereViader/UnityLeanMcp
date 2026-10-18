@@ -23,7 +23,7 @@ The release workflow checks `v<VERSION>` and runs its test/publish jobs only for
 Tests use `Category=Unit` for isolated logic, `Category=Subsystem` for mocked transports/processes, and `Category=UnityIntegration` for live Editor behavior.
 
 - Prefer precompiled Unity fixtures and persistent MCP client sessions. When a fixture changes source, await refresh explicitly; intentional compile-error fixtures may return a failed refresh result.
-- Integration clients use the successfully published Release package DLL. Subsystem subprocess tests explicitly use their current build rather than a possibly stale packaged DLL.
+- Integration clients use the successfully published Release package DLL, verifying that it is up to date relative to host sources before triggering `dotnet publish` to avoid redundant compilation during test initialization. Subsystem subprocess tests explicitly use their current build rather than a possibly stale packaged DLL.
 - Isolate host process discovery and environment changes. Child-process fixtures use the test executable, not PATH-dependent shell utilities.
 - Control admission, completion, cancellation, and contention with explicit signals. Do not make test correctness depend on ThreadPool timing or fixed sleeps.
 - Mock the actual refresh contract: accepted operations publish correlated results; rejected IDs do not own foreign compilation. Test both lost acknowledgement and publication failure across reload boundaries.

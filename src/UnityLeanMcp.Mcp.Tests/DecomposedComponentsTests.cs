@@ -344,6 +344,65 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public void OperationPoller_CalculatePollDelay_AdaptiveProgression_BacksOffAndCapsAtPollInterval()
+    {
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op1",
+            ResultFilePath = "dummy",
+            IsMatch = _ => true,
+            PollCommand = "POLL op1",
+            PollIntervalMs = 500,
+            AdaptivePolling = true
+        };
+
+        Assert.Equal(10, OperationPoller.CalculatePollDelay(spec, 0));
+        Assert.Equal(25, OperationPoller.CalculatePollDelay(spec, 1));
+        Assert.Equal(50, OperationPoller.CalculatePollDelay(spec, 2));
+        Assert.Equal(100, OperationPoller.CalculatePollDelay(spec, 3));
+        Assert.Equal(250, OperationPoller.CalculatePollDelay(spec, 4));
+        Assert.Equal(500, OperationPoller.CalculatePollDelay(spec, 5));
+        Assert.Equal(500, OperationPoller.CalculatePollDelay(spec, 10));
+    }
+
+    [Fact]
+    public void OperationPoller_CalculatePollDelay_LowIntervalCap_ClampsAdaptiveValues()
+    {
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op1",
+            ResultFilePath = "dummy",
+            IsMatch = _ => true,
+            PollCommand = "POLL op1",
+            PollIntervalMs = 40,
+            AdaptivePolling = true
+        };
+
+        Assert.Equal(10, OperationPoller.CalculatePollDelay(spec, 0));
+        Assert.Equal(25, OperationPoller.CalculatePollDelay(spec, 1));
+        Assert.Equal(40, OperationPoller.CalculatePollDelay(spec, 2));
+        Assert.Equal(40, OperationPoller.CalculatePollDelay(spec, 3));
+    }
+
+    [Fact]
+    public void OperationPoller_CalculatePollDelay_AdaptiveDisabled_AlwaysReturnsPollInterval()
+    {
+        var spec = new OperationPollingSpec<UnityOperationResult>
+        {
+            OperationId = "op1",
+            ResultFilePath = "dummy",
+            IsMatch = _ => true,
+            PollCommand = "POLL op1",
+            PollIntervalMs = 500,
+            AdaptivePolling = false
+        };
+
+        Assert.Equal(500, OperationPoller.CalculatePollDelay(spec, 0));
+        Assert.Equal(500, OperationPoller.CalculatePollDelay(spec, 1));
+        Assert.Equal(500, OperationPoller.CalculatePollDelay(spec, 2));
+    }
+
+    [Fact]
     public void DiagnosticFormatter_SanitizeTestStackTrace_SyncTestWithReflectionPlumbing_PreservesUserCodeAndStripsPlumbing()
     {
         var formatter = new DiagnosticFormatter();
