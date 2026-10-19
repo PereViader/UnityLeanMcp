@@ -621,6 +621,106 @@ public sealed class CommandGatePublicationTests : IDisposable
     }
 
     [Fact]
+    public async Task TestCancellationFromWorkerRecordsIntentWithoutWritingNativeState()
+    {
+        const string runId = "worker-cancel";
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, runId, OperationStatus.Running, out _));
+        File.WriteAllText(UnityLeanMcpPaths.TestRunningFile, UnityEngine.JsonUtility.ToJson(
+            new UnityLeanMcp.UnityTestRunState { runId = runId, status = OperationStatus.Running, jobGuid = "job" }));
+        RunTestsHandler.ClearCachedRunState();
+        RunTestsHandler.Active = true;
+        int writes = SessionState.SetStringCount;
+
+        var result = await Task.Run(() => RunTestsHandler.CancelActiveTestRun(runId));
+
+        Assert.Equal(OperationCancelResult.Cancelling, result);
+        Assert.Equal(writes, SessionState.SetStringCount);
+        Assert.Equal(OperationStatus.Running, UnityCommandGate.ReadSnapshot()!.Status);
+        Assert.True(RunTestsHandler.IsCancellationRequested(runId));
+
+        UnityLeanMcpDispatcher.Update();
+        Assert.Equal(OperationStatus.Cancelling, UnityCommandGate.ReadSnapshot()!.Status);
+        Assert.False(File.Exists(UnityLeanMcpPaths.GetTestResultsFile(runId)));
+    }
+
+    [Fact]
+    public async Task WorkerCancellationSurvivesReloadWhenPersistedAtMainThreadBoundary()
+    {
+        const string runId = "cancel-before-reload";
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, runId, OperationStatus.Running, out _));
+        Assert.True(await Task.Run(() => UnityCommandGate.TryRequestCancellation(runId, out _)));
+        UnityCommandGate.SuspendCancellationForReload();
+        Assert.False(await Task.Run(() => UnityCommandGate.TryRequestCancellation("too-late", out _)));
+        var requests = (HashSet<string>)typeof(UnityCommandGate).GetField("s_CancellationRequests", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
+        requests.Clear();
+        typeof(UnityCommandGate).GetField("s_Snapshot", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
+
+        UnityCommandGate.InitializeMainThread();
+
+        Assert.Equal(OperationStatus.Cancelling, UnityCommandGate.ReadSnapshot()!.Status);
+        Assert.True(RunTestsHandler.IsCancellationRequested(runId));
+        Assert.True(UnityCommandGate.TryRequestCancellation("new-domain", out _));
+    }
+
+    [Theory]
+    [InlineData("eval")]
+    [InlineData("test")]
+    [InlineData("refresh")]
+    [InlineData("recompile")]
+    public async Task CancelledQueuedMutationAndSameIdRetryNeverStart(string kind)
+    {
+        const string id = "queued-cancel";
+        UnityLeanMcpCompilationTracker.IsCompiling = false;
+        UnityLeanMcpCompilationTracker.RefreshPending = false;
+        UnityLeanMcpCompilationTracker.RefreshRequired = false;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+        var compilation = new CompilationProbe(kind);
+        ICommandHandler handler = kind == "eval" ? new EvalHandler() : kind == "test" ? new RunTestsHandler() : compilation;
+        string payload = kind == "eval" ? id + " return 42;" : kind == "test" ? id + " {\"mode\":\"editmode\"}" : id;
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+        UnityLeanMcpDispatcher.Enqueue(() => handler.Handle(payload, writer));
+        using var cancelStream = new MemoryStream();
+        using var cancelWriter = new StreamWriter(cancelStream) { AutoFlush = true };
+
+        await Task.Run(() => CancelOperationHandler.CancelActiveOperation(id, cancelWriter));
+        Assert.Equal("NO_OPERATION", System.Text.Encoding.UTF8.GetString(cancelStream.ToArray()).Trim());
+        UnityLeanMcpDispatcher.Update();
+        handler.Handle(payload, writer);
+
+        string[] responses = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, responses.Length);
+        Assert.All(responses, r => Assert.StartsWith("INTERRUPTION", r));
+        Assert.Null(UnityCommandGate.ReadSnapshot());
+        Assert.Equal(0, compilation.Executions);
+    }
+
+    [Fact]
+    public void CancellingForeignQueuedIdDoesNotCancelActiveOwner()
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, "owner", OperationStatus.Executing, out _));
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+        CancelOperationHandler.CancelActiveOperation("waiter", writer);
+        Assert.Equal("MISMATCH owner", System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim());
+        Assert.False(UnityCommandGate.IsCancellationRequested("owner"));
+        UnityCommandGate.Complete("owner");
+        Assert.Equal(BeginGateResult.Cancelled, UnityCommandGate.TryBegin(OperationKinds.Eval, "waiter", OperationStatus.Executing, out _));
+    }
+
+    [Fact]
+    public void CancellationResponseRemainsCancellingWhileBackingWorkIsActive()
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, "active-cancel", OperationStatus.Executing, out _));
+        CancelOperationHandler.CancelRouteHook = (_, _) => OperationCancelResult.Cancelling;
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+        CancelOperationHandler.CancelActiveOperation("active-cancel", writer);
+        Assert.Equal("CANCELLING", System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim());
+        Assert.True(UnityCommandGate.IsOwnedBy("active-cancel", OperationKinds.Test));
+    }
+
+    [Fact]
     public void RunTestsHandler_CancelActiveTestRun_UsesWorkerSnapshotAndChecksTerminalStatus()
     {
         RunTestsHandler.ClearCachedRunState();

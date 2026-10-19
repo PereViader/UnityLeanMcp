@@ -53,6 +53,11 @@ namespace UnityLeanMcp
 
             string rawCode = ProtocolCodec.UnescapeLine(requestParts[1].Trim());
             var begin = UnityCommandGate.TryBegin(OperationKinds.Eval, operationId, OperationStatus.Compiling, out var busyReason);
+            if (begin == BeginGateResult.Cancelled)
+            {
+                writer.WriteLine("INTERRUPTION Operation was cancelled before admission.");
+                return;
+            }
             if (begin == BeginGateResult.Invalid)
             {
                 writer.WriteLine("ERROR: Missing or invalid operation id");

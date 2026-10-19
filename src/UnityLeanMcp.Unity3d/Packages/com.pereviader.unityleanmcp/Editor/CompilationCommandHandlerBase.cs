@@ -26,6 +26,11 @@ namespace PereViader.UnityLeanMcp.Editor
             }
 
             var begin = UnityCommandGate.TryBegin(OperationKind, operationId, OperationStatus.Requested, out var busyReason);
+            if (begin == BeginGateResult.Cancelled)
+            {
+                writer.WriteLine("INTERRUPTION Operation was cancelled before admission.");
+                return;
+            }
             if (begin == BeginGateResult.Invalid)
             {
                 writer.WriteLine("ERROR: Missing or invalid operation id");

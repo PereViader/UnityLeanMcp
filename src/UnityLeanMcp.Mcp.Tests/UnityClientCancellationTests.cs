@@ -134,13 +134,25 @@ public sealed class UnityClientCancellationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task CancelOperationAsync_TransientTransportFailure_RetriesUntilAcknowledged(bool throws)
+    public async Task CancelOperationAsync_RetriesTransportFailureUntilAcknowledged(bool throws)
     {
         var paths = new UnityPathResolver(System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N")));
-        var transport = new RetryingCancellationTransport(throws);
+        var transport = new RetryingCancellationTransport(throws, pending: false);
         var poller = new OperationPoller(new StubProcessManager(paths), paths, transport);
         await poller.CancelOperationAsync("owned-id", "eval");
         Assert.Equal(2, transport.Attempts);
+    }
+
+    [Fact]
+    public async Task CancelOperationAsync_AcceptedCancellationReturnsWhileBackingWorkIsStillRunning()
+    {
+        var paths = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var transport = new RetryingCancellationTransport(throws: false, pending: true);
+        var process = new StubProcessManager(paths);
+        var poller = new OperationPoller(process, paths, transport);
+        await poller.CancelOperationAsync("owned-id", "test");
+        Assert.Equal(1, transport.Attempts);
+        Assert.True(process.IsUnityRunning(out _));
     }
 
     [Theory]
@@ -213,7 +225,7 @@ public sealed class UnityClientCancellationTests
             CancellationToken cancellationToken = default) => Task.FromResult(false);
     }
 
-    private sealed class RetryingCancellationTransport(bool throws) : IUnitySocketTransport
+    private sealed class RetryingCancellationTransport(bool throws, bool pending) : IUnitySocketTransport
     {
         public int Attempts { get; private set; }
         public Task<string?> SendCommandAsync(int port, string projectRoot, string command,
@@ -223,7 +235,7 @@ public sealed class UnityClientCancellationTests
             if (++Attempts == 1)
             {
                 if (throws) throw new System.IO.IOException("simulated domain reload disconnect");
-                return Task.FromResult<string?>(null);
+                return Task.FromResult<string?>(pending ? "CANCELLING" : null);
             }
             return Task.FromResult<string?>("CANCELLED");
         }

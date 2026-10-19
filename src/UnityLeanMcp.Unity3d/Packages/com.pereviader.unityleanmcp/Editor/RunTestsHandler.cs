@@ -251,6 +251,11 @@ namespace UnityLeanMcp
             }
 
             var begin = UnityCommandGate.TryBegin(OperationKinds.Test, operationId, OperationStatus.Queued, out var busyReason);
+            if (begin == BeginGateResult.Cancelled)
+            {
+                writer.WriteLine("INTERRUPTION Operation was cancelled before admission.");
+                return;
+            }
             if (begin == BeginGateResult.Invalid)
             {
                 writer.WriteLine("ERROR: Missing or invalid operation id");
@@ -751,7 +756,9 @@ namespace UnityLeanMcp
 
             string activeRunId = operationId;
 
-            UnityCommandGate.Update(activeRunId, OperationStatus.Cancelling);
+            if (!UnityCommandGate.TryRequestCancellation(activeRunId, out _) &&
+                !UnityCommandGate.IsCancellationRequested(activeRunId))
+                return OperationCancelResult.NotFound;
 
             // The action performs all Unity API and state-transition work on
             // the main thread via the dispatcher.
@@ -843,6 +850,8 @@ namespace UnityLeanMcp
             {
                 return false;
             }
+
+            if (UnityCommandGate.IsCancellationRequested(runId)) return true;
 
             var snapshot = UnityCommandGate.ReadSnapshot();
             if (snapshot != null && snapshot.OperationId == runId && snapshot.Status == OperationStatus.Cancelling)

@@ -11,6 +11,56 @@ namespace UnityLeanMcp.Mcp.Tests
     public class RefreshAndCompilationTests
     {
         [Fact]
+        public void AssemblyDiagnosticsSurviveReloadAndNoOpRefreshUntilReplacedPerAssembly()
+        {
+            const string key = UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey;
+            string previous = UnityEditor.SessionState.GetString(key, "")!;
+            var callback = typeof(UnityLeanMcpCompilationTracker).GetMethod("OnAssemblyCompilationFinished",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var diagnostics = (System.Collections.IDictionary)typeof(UnityLeanMcpCompilationTracker).GetField("s_AssemblyDiagnostics",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+            var previousMap = new Dictionary<string, List<string>>((Dictionary<string, List<string>>)diagnostics);
+            UnityCommandGate.ForceReset();
+            RefreshErrorLogCapture.Clear();
+            try
+            {
+                diagnostics.Clear();
+                foreach (string assembly in new[] { "Assembly-A", "Assembly-B" })
+                    callback.Invoke(null, new object[] { assembly, new[] { new UnityEditor.Compilation.CompilerMessage
+                    {
+                        message = "CS1030: " + assembly,
+                        file = "Assets/" + assembly + ".cs", line = 1, column = 1,
+                        type = UnityEditor.Compilation.CompilerMessageType.Warning
+                    } } });
+
+                diagnostics.Clear(); // Domain reload discards managed dictionaries.
+                UnityLeanMcpCompilationTracker.RestoreAssemblyDiagnostics();
+                UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics(); // No-op refresh has no compiler callbacks.
+                var restored = UnityLeanMcpCompilationTracker.WriteActiveErrorsToFile();
+                Assert.Contains(restored, d => d.Contains("warning CS1030: Assembly-A"));
+                Assert.Contains(restored, d => d.Contains("warning CS1030: Assembly-B"));
+
+                callback.Invoke(null, new object[] { "Assembly-A", Array.Empty<UnityEditor.Compilation.CompilerMessage>() });
+                diagnostics.Clear();
+                UnityLeanMcpCompilationTracker.RestoreAssemblyDiagnostics();
+                restored = UnityLeanMcpCompilationTracker.WriteActiveErrorsToFile();
+                Assert.DoesNotContain(restored, d => d.Contains("Assembly-A"));
+                Assert.Contains(restored, d => d.Contains("Assembly-B"));
+
+                callback.Invoke(null, new object[] { "Assembly-B", Array.Empty<UnityEditor.Compilation.CompilerMessage>() });
+                diagnostics.Clear();
+                UnityLeanMcpCompilationTracker.RestoreAssemblyDiagnostics();
+                Assert.Empty(UnityLeanMcpCompilationTracker.WriteActiveErrorsToFile());
+            }
+            finally
+            {
+                UnityEditor.SessionState.SetString(key, previous);
+                diagnostics.Clear();
+                foreach (var entry in previousMap) diagnostics.Add(entry.Key, entry.Value);
+            }
+        }
+
+        [Fact]
         public void RefreshErrorLogCapture_StartAndStopCapture_CapturesOnlyErrorsAndExceptions()
         {
             UnityCommandGate.ForceReset();

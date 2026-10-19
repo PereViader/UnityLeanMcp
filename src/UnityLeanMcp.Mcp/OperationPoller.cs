@@ -109,7 +109,7 @@ public class OperationPoller : IOperationPoller
             {
                 int port = _processManager.ReadPortFile();
                 string? response = await _socketTransport.SendCommandAsync(port, _pathResolver.ProjectRoot, $"CANCEL_OPERATION {opId}", 3, cancellationToken);
-                if (response is "CANCELLED" or "NO_OPERATION" or "NOT_CANCELABLE" ||
+                if (response is "CANCELLED" or "CANCELLING" or "NO_OPERATION" or "NOT_CANCELABLE" ||
                     response?.StartsWith("MISMATCH ", StringComparison.Ordinal) == true)
                     return;
             }

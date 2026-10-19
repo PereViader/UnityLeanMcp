@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Threading;
 
 namespace UnityLeanMcp
 {
@@ -34,7 +33,14 @@ namespace UnityLeanMcp
                 return;
             }
 
-            var operation = UnityCommandGate.ReadSnapshot();
+            // Record intent atomically with admission, including requests still
+            // queued on the main thread or arriving after this connection.
+            if (!UnityCommandGate.TryRequestCancellation(operationId, out var operation))
+            {
+                writer.WriteLine("RELOADING");
+                writer.Flush();
+                return;
+            }
             if (operation == null)
             {
                 if (IsTerminalInterruptedResult(operationId))
@@ -64,22 +70,10 @@ namespace UnityLeanMcp
                 result == OperationCancelResult.Cancelled ||
                 result == OperationCancelResult.Cancelling)
             {
-                var deadline = DateTime.UtcNow.AddSeconds(2.5);
-                while (DateTime.UtcNow < deadline)
-                {
-                    if (IsTerminalInterruptedResult(operationId))
-                    {
-                        break;
-                    }
-                    var currentOp = UnityCommandGate.ReadSnapshot();
-                    if (currentOp == null || !string.Equals(currentOp.OperationId, operationId, StringComparison.Ordinal))
-                    {
-                        break;
-                    }
-                    Thread.Sleep(20);
-                }
-
-                writer.WriteLine("CANCELLED");
+                var currentOp = UnityCommandGate.ReadSnapshot();
+                bool finished = IsTerminalInterruptedResult(operationId) || currentOp == null ||
+                    !string.Equals(currentOp.OperationId, operationId, StringComparison.Ordinal);
+                writer.WriteLine(finished ? "CANCELLED" : "CANCELLING");
                 writer.Flush();
                 return;
             }

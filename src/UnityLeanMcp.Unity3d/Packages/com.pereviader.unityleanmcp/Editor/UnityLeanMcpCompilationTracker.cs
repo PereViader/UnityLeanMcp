@@ -19,6 +19,21 @@ namespace UnityLeanMcp
 
     public static class UnityLeanMcpCompilationTracker
     {
+        internal const string AssemblyDiagnosticsKey = "UnityLeanMcp_AssemblyDiagnostics";
+
+        [Serializable]
+        private sealed class AssemblyDiagnosticsEntry
+        {
+            public string path;
+            public List<string> messages;
+        }
+
+        [Serializable]
+        private sealed class AssemblyDiagnosticsState
+        {
+            public List<AssemblyDiagnosticsEntry> assemblies = new List<AssemblyDiagnosticsEntry>();
+        }
+
         private static readonly Dictionary<string, List<string>> s_AssemblyDiagnostics = new Dictionary<string, List<string>>();
         private static readonly object s_DiagnosticsLock = new object();
         private static readonly System.Text.RegularExpressions.Regex s_LeadingLocationRegex = new System.Text.RegularExpressions.Regex(
@@ -143,6 +158,7 @@ namespace UnityLeanMcp
         {
             UnityLeanMcpPaths.EnsureInitialized();
             RefreshErrorLogCapture.InitializeMainThread();
+            RestoreAssemblyDiagnostics();
             UpdateCompilationState();
             var operation = UnityCommandGate.ReadSnapshot();
             bool resumingCompilation = operation != null &&
@@ -221,11 +237,34 @@ namespace UnityLeanMcp
                         s_AssemblyDiagnostics.Remove(key);
                     }
                 }
+
+                // Persist the per-assembly replacement, including removal of old
+                // diagnostics, before Unity can reload the managed domain.
+                var state = new AssemblyDiagnosticsState();
+                foreach (var entry in s_AssemblyDiagnostics)
+                    state.assemblies.Add(new AssemblyDiagnosticsEntry { path = entry.Key, messages = entry.Value });
+                SessionState.SetString(AssemblyDiagnosticsKey, JsonUtility.ToJson(state));
             }
 
             // Persist at the authoritative compiler callback. A domain reload
             // can begin before compilationFinished or the next Editor update.
             WriteCapturedDiagnosticsSnapshot();
+        }
+
+        internal static void RestoreAssemblyDiagnostics()
+        {
+            string json = SessionState.GetString(AssemblyDiagnosticsKey, "");
+            var state = string.IsNullOrEmpty(json) ? null : JsonUtility.FromJson<AssemblyDiagnosticsState>(json);
+            lock (s_DiagnosticsLock)
+            {
+                s_AssemblyDiagnostics.Clear();
+                if (state?.assemblies == null) return;
+                foreach (var entry in state.assemblies)
+                {
+                    if (entry != null && entry.path != null && entry.messages != null && entry.messages.Count > 0)
+                        s_AssemblyDiagnostics[entry.path] = entry.messages;
+                }
+            }
         }
 
         private static List<string> GetCapturedDiagnosticsSnapshot()

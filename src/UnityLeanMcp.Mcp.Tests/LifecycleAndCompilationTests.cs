@@ -282,7 +282,7 @@ public class LifecycleAndCompilationTests
 
             await writer.WriteLineAsync(UnityLeanMcp.ProjectCommandEnvelope.Encode(_fixture.UnityRoot, $"CANCEL_OPERATION {opId}"));
             string? cancelResp = await reader.ReadLineAsync();
-            Assert.Equal("CANCELLED", cancelResp);
+            Assert.True(cancelResp is "CANCELLED" or "CANCELLING", $"Expected CANCELLED or CANCELLING, got {cancelResp}");
         }
 
         var deadline = DateTime.UtcNow.AddSeconds(5);

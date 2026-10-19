@@ -264,6 +264,7 @@ namespace UnityLeanMcpTests
             var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
             object originalScoped = scoped.GetValue(null);
             string originalSession = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
+            string originalCompilerSession = UnityEditor.SessionState.GetString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey, "");
             string assembly = "test-assembly-" + Guid.NewGuid().ToString("N");
             const string diagnostic = "Assets/Fixture.cs(1,1): error CS1002: ; expected";
             try
@@ -280,6 +281,7 @@ namespace UnityLeanMcpTests
                 assemblies.Remove(assembly);
                 scoped.SetValue(null, originalScoped);
                 UnityEditor.SessionState.SetString("UnityLeanMcp_RefreshDiagnostics", originalSession);
+                UnityEditor.SessionState.SetString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey, originalCompilerSession);
             }
         }
 
@@ -453,18 +455,25 @@ namespace UnityLeanMcpTests
         public void ScopedDiagnostics_PersistsAcrossSimulatedDomainReload()
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var tracker = typeof(UnityLeanMcpCompilationTracker);
             var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
             var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
-            var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
-            var init = typeof(UnityLeanMcpCompilationTracker).GetMethod("InitializeMainThread", flags);
+            var assembliesField = tracker.GetField("s_AssemblyDiagnostics", flags);
+            var read = tracker.GetMethod("GetCapturedDiagnosticsSnapshot", flags);
+            var init = tracker.GetMethod("InitializeMainThread", flags);
             object originalSnapshot = snapshot.GetValue(null);
             object originalScoped = scoped.GetValue(null);
+            var assemblies = (System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>)assembliesField.GetValue(null);
+            var originalAssemblies = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>(assemblies);
             string originalActiveOp = UnityEditor.SessionState.GetString("UnityLeanMcp_ActiveOp", "");
             string originalSession = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
+            string originalCompilerSession = UnityEditor.SessionState.GetString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey, "");
             string opId = Guid.NewGuid().ToString("N");
 
             try
             {
+                assemblies.Clear();
+                UnityEditor.SessionState.EraseString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey);
                 var activeOp = new ActiveOperationSnapshot("refresh", opId, OperationStatus.Refreshing);
                 UnityEditor.SessionState.SetString("UnityLeanMcp_ActiveOp", UnityEngine.JsonUtility.ToJson(activeOp));
                 snapshot.SetValue(null, activeOp);
@@ -497,9 +506,12 @@ namespace UnityLeanMcpTests
             }
             finally
             {
+                assemblies.Clear();
+                foreach (var kvp in originalAssemblies) assemblies[kvp.Key] = kvp.Value;
                 snapshot.SetValue(null, originalSnapshot);
                 scoped.SetValue(null, originalScoped);
                 UnityEditor.SessionState.SetString("UnityLeanMcp_RefreshDiagnostics", originalSession);
+                UnityEditor.SessionState.SetString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey, originalCompilerSession);
                 if (string.IsNullOrEmpty(originalActiveOp))
                     UnityEditor.SessionState.EraseString("UnityLeanMcp_ActiveOp");
                 else
@@ -526,16 +538,23 @@ namespace UnityLeanMcpTests
         public void CaptureOperationError_BoundsScopedDiagnosticsAtMaxCount()
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var tracker = typeof(UnityLeanMcpCompilationTracker);
             var snapshot = typeof(UnityCommandGate).GetField("s_Snapshot", flags);
             var scoped = typeof(RefreshErrorLogCapture).GetField("s_ScopedDiagnostics", flags);
-            var read = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", flags);
+            var assembliesField = tracker.GetField("s_AssemblyDiagnostics", flags);
+            var read = tracker.GetMethod("GetCapturedDiagnosticsSnapshot", flags);
             object originalSnapshot = snapshot.GetValue(null);
             object originalScoped = scoped.GetValue(null);
+            var assemblies = (System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>)assembliesField.GetValue(null);
+            var originalAssemblies = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string>>(assemblies);
             string originalSession = UnityEditor.SessionState.GetString("UnityLeanMcp_RefreshDiagnostics", "");
+            string originalCompilerSession = UnityEditor.SessionState.GetString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey, "");
             string opId = Guid.NewGuid().ToString("N");
 
             try
             {
+                assemblies.Clear();
+                UnityEditor.SessionState.EraseString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey);
                 snapshot.SetValue(null, new ActiveOperationSnapshot("refresh", opId, OperationStatus.Refreshing));
                 scoped.SetValue(null, new ScopedDiagnostics { operationId = opId });
 
@@ -550,9 +569,12 @@ namespace UnityLeanMcpTests
             }
             finally
             {
+                assemblies.Clear();
+                foreach (var kvp in originalAssemblies) assemblies[kvp.Key] = kvp.Value;
                 snapshot.SetValue(null, originalSnapshot);
                 scoped.SetValue(null, originalScoped);
                 UnityEditor.SessionState.SetString("UnityLeanMcp_RefreshDiagnostics", originalSession);
+                UnityEditor.SessionState.SetString(UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey, originalCompilerSession);
             }
         }
 

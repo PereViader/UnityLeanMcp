@@ -16,6 +16,63 @@ namespace UnityLeanMcpTests
     public class ReviewRegressionTests
     {
         [Test]
+        public void WorkerTestCancellationAvoidsNativeStateUntilMainThreadPersistence()
+        {
+            using (var scope = new IsolatedOperation(OperationKinds.Test))
+            {
+                var state = new UnityTestRunState { runId = scope.Id, status = OperationStatus.Running };
+                File.WriteAllText(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state));
+                RunTestsHandler.ClearCachedRunState();
+                string owner = SessionState.GetString("UnityLeanMcp_ActiveOp", "");
+                Exception failure = null;
+                OperationCancelResult result = OperationCancelResult.NotFound;
+                var worker = new System.Threading.Thread(() =>
+                {
+                    try { result = RunTestsHandler.CancelActiveTestRun(scope.Id); }
+                    catch (Exception ex) { failure = ex; }
+                });
+                worker.Start();
+                worker.Join();
+
+                Assert.That(failure, Is.Null);
+                Assert.That(result, Is.EqualTo(OperationCancelResult.Cancelling));
+                Assert.That(SessionState.GetString("UnityLeanMcp_ActiveOp", ""), Is.EqualTo(owner));
+                Assert.That(RunTestsHandler.IsCancellationRequested(scope.Id), Is.True);
+                UnityCommandGate.PersistCancellationRequest();
+                Assert.That(SessionState.GetString("UnityLeanMcp_ActiveOp", ""), Does.Contain(OperationStatus.Cancelling));
+                // Do not run the queued cancellation callback against the test runner
+                // executing this regression. Scope disposal restores its ownership.
+            }
+        }
+
+        [TestCase("eval")]
+        [TestCase("test")]
+        [TestCase("refresh")]
+        [TestCase("recompile")]
+        public void CancelBeforeAdmissionPreventsMainThreadDispatchAndSameIdRetries(string kind)
+        {
+            using (var scope = new IsolatedOperation(kind))
+            {
+                UnityCommandGate.Complete(scope.Id);
+                using (var cancelStream = new MemoryStream())
+                using (var cancelWriter = new StreamWriter(cancelStream) { AutoFlush = true })
+                    CancelOperationHandler.CancelActiveOperation(scope.Id, cancelWriter);
+                ICommandHandler handler = kind == "eval" ? (ICommandHandler)new EvalHandler() :
+                    kind == "test" ? new RunTestsHandler() : kind == "refresh" ?
+                    new PereViader.UnityLeanMcp.Editor.RefreshHandler() : new PereViader.UnityLeanMcp.Editor.RecompileHandler();
+                var dispatch = typeof(UnityLeanMcpServer).GetMethod("ExecuteMainThreadCommand", BindingFlags.NonPublic | BindingFlags.Static);
+                using (var stream = new MemoryStream())
+                using (var writer = new StreamWriter(stream) { AutoFlush = true })
+                {
+                    dispatch.Invoke(null, new object[] { handler, scope.Id + " must never execute", writer });
+                    Assert.That(System.Text.Encoding.UTF8.GetString(stream.ToArray()), Does.StartWith("INTERRUPTION"));
+                }
+                Assert.That(UnityCommandGate.TryBegin(kind, scope.Id, OperationStatus.Executing, out _), Is.EqualTo(BeginGateResult.Cancelled));
+                Assert.That(UnityCommandGate.ReadSnapshot(), Is.Null);
+            }
+        }
+
+        [Test]
         public void EvalTerminalPayloadSurvivesUnavailableResultDirectory()
         {
             using (var scope = new IsolatedOperation(OperationKinds.Eval))

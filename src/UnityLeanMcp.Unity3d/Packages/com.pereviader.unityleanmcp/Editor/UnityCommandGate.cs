@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -12,7 +13,8 @@ namespace UnityLeanMcp
         Started,
         AlreadyStarted,
         Busy,
-        Invalid
+        Invalid,
+        Cancelled
     }
 
     [Serializable]
@@ -51,12 +53,17 @@ namespace UnityLeanMcp
         private static long s_LastRetryTicks;
         private const string SessionKey = "UnityLeanMcp_ActiveOp";
         private static readonly object s_Lock = new object();
+        // Keep cancelled IDs until domain unload so delayed dispatches and same-ID
+        // retries cannot start after the caller has received NO_OPERATION.
+        private static readonly HashSet<string> s_CancellationRequests = new HashSet<string>(StringComparer.Ordinal);
+        private static bool s_AcceptingCancellationRequests = true;
         private static volatile ActiveOperationSnapshot s_Snapshot;
 
         public static void InitializeMainThread()
         {
             lock (s_Lock)
             {
+                s_AcceptingCancellationRequests = true;
                 string json = SessionState.GetString(SessionKey, null);
                 if (!string.IsNullOrEmpty(json))
                 {
@@ -162,6 +169,45 @@ namespace UnityLeanMcp
         // Called lock-free from background worker threads
         public static ActiveOperationSnapshot ReadSnapshot() => s_Snapshot;
 
+        // Worker-safe: shares the admission lock but never calls Unity APIs.
+        internal static bool TryRequestCancellation(string opId, out ActiveOperationSnapshot operation)
+        {
+            lock (s_Lock)
+            {
+                operation = s_Snapshot;
+                if (!s_AcceptingCancellationRequests) return false;
+                s_CancellationRequests.Add(opId);
+                return true;
+            }
+        }
+
+        internal static bool IsCancellationRequested(string opId)
+        {
+            lock (s_Lock) return opId != null && s_CancellationRequests.Contains(opId);
+        }
+
+        // Main-thread reload boundary: retain intent for backing work that survives.
+        internal static void PersistCancellationRequest()
+        {
+            lock (s_Lock)
+            {
+                if (s_Snapshot != null && s_CancellationRequests.Contains(s_Snapshot.OperationId) &&
+                    (s_Snapshot.Kind == OperationKinds.Test || s_Snapshot.Kind == OperationKinds.Eval))
+                    Update(s_Snapshot.OperationId, OperationStatus.Cancelling);
+            }
+        }
+
+        internal static void SuspendCancellationForReload()
+        {
+            lock (s_Lock)
+            {
+                // Every acknowledged request is included in the native state;
+                // later workers must retry against the next domain instead.
+                s_AcceptingCancellationRequests = false;
+                PersistCancellationRequest();
+            }
+        }
+
         // Called on main thread to begin operation
         public static BeginGateResult TryBegin(string kind, string opId, string status, out string busyReason)
         {
@@ -183,6 +229,12 @@ namespace UnityLeanMcp
 
                     busyReason = $"{s_Snapshot.Kind} {s_Snapshot.OperationId}";
                     return BeginGateResult.Busy;
+                }
+
+                if (s_CancellationRequests.Contains(opId))
+                {
+                    busyReason = null;
+                    return BeginGateResult.Cancelled;
                 }
 
                 if (!RunTestsHandler.TryGetTestRunnerActiveState(out bool testRunActive) || testRunActive)
@@ -253,6 +305,8 @@ namespace UnityLeanMcp
         {
             lock (s_Lock)
             {
+                s_CancellationRequests.Clear();
+                s_AcceptingCancellationRequests = true;
                 EditorApplication.update -= RetryPendingResult;
                 EditorApplication.update -= RecoverTestRun;
                 SessionState.EraseString(PendingResultKey);

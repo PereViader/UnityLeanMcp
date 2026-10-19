@@ -228,6 +228,7 @@ namespace UnityLeanMcp
         private static void OnBeforeAssemblyReload()
         {
             _isReloading = true;
+            UnityCommandGate.SuspendCancellationForReload();
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             s_IsPlayModeActive = false;
             s_IsPlayModeChanging = false;
@@ -494,6 +495,13 @@ namespace UnityLeanMcp
         {
             if (_shutdownRequested || _isReloading)
             {
+                return;
+            }
+
+            if (handler.IsMutating && UnityCommandGate.IsCancellationRequested(ExtractOperationId(payload)) &&
+                !UnityCommandGate.IsOwnedBy(ExtractOperationId(payload), GetHandlerOperationKind(handler)))
+            {
+                writer.WriteLine("INTERRUPTION Operation was cancelled before admission.");
                 return;
             }
 
