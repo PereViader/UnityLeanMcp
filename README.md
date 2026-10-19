@@ -21,6 +21,41 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts the Unity Editor in normal interactive mode first and keeps it running for subsequent commands.
 
+### `Inspect` Helpers (`unity_eval`)
+
+Top-level statements evaluated with `unity_eval` automatically import `UnityLeanMcp.Inspect`. These helpers provide token-bounded, recursion-safe scene and object introspection designed for AI agents without polluting the context window. Output is capped at 64 KB and avoids mutating getters (such as `Renderer.material`, using safe `sharedMaterial` instead to avoid scene leaks):
+
+| Category | Method | Description |
+| :--- | :--- | :--- |
+| **Scene & Hierarchy** | `Inspect.Hierarchy([root], [maxDepth], [maxItems])` | Formatted hierarchy tree of active or all loaded scenes, a root `GameObject`/`Transform`, or a scene by name. |
+| | `Inspect.Find(namePattern, [includeInactive], [maxItems])` | Finds GameObjects across loaded scenes by exact name or wildcard glob pattern (e.g. `*Player*`). |
+| | `Inspect.MissingScripts([maxItems])` | Detects GameObjects with missing or unassigned MonoBehaviour scripts. |
+| | `Inspect.SceneState()` | Summarizes loaded scenes, active scene, root object count, dirty state, and PlayMode state. |
+| **Objects & Components** | `Inspect.GameObject(gameObject, [maxItems])` | Detailed inspection of active state, tag, layer, components, and children. |
+| | `Inspect.Component(component, [maxItems])` | Serialized fields and properties without instantiating copies or mutating state. |
+| | `Inspect.Object(target, [maxDepth], [maxItems])` | General reflection-based inspection of arbitrary C# objects or collections. |
+| | `Inspect.PrefabOverrides(instance, [maxItems])` | Lists added/removed components and property deltas on a prefab instance relative to the source asset. |
+| **Assets & Prefabs** | `Inspect.FindAsset(nameOrPath)` | Resolves asset details (type, GUID, main path) by name or relative path. |
+| | `Inspect.FindAssets([filter], [type], [label], [maxItems])` | Searches project assets via AssetDatabase filters (`filter`, `t:type`, `l:label`). |
+| | `Inspect.FindPrefabs([filter], [maxItems])` | Finds prefabs in the project matching an optional filter. |
+| **Editor & Tests** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
+| | `Inspect.MainCamera()` | Properties of `Camera.main` (transform, clear flags, culling mask, FOV, clipping planes). |
+| | `Inspect.Tests([filter], [maxItems])` | Enumerates available EditMode and PlayMode tests with an optional name filter. |
+| **Utilities** | `Inspect.Help()` | Returns the complete runtime cheatsheet of all available `Inspect.*` signatures. |
+
+Call these directly inside `unity_eval`:
+
+```csharp
+// Inspect scene hierarchy up to depth 3
+return Inspect.Hierarchy(maxDepth: 3);
+
+// Find GameObjects by wildcard pattern
+return Inspect.Find("*Player*");
+
+// Print the full runtime cheatsheet
+return Inspect.Help();
+```
+
 ---
 
 ## Installation & Setup
@@ -73,6 +108,42 @@ If configuring manually, add the following to your MCP client configuration (adj
 ```
 
 When `cwd` points to the `MCP~` folder, the MCP server automatically resolves the Unity project root from the current working directory. Use **Tools > UnityLeanMcp > Install MCP Configurations** in Unity to configure all installed IDEs and agent clients automatically.
+
+### Environment Variables & CLI Options
+
+UnityLeanMcp can be configured via command-line options and environment variables for CI/CD pipelines, Docker containers, or non-standard project layouts:
+
+| Variable / Option | Default | Description |
+| :--- | :--- | :--- |
+| **`--project`**, **`-p <path>`** | Discovered | CLI option specifying the path to the Unity project root directory. |
+| **`UNITY_LEAN_MCP_PROJECT_ROOT`** | Discovered | Environment variable specifying the Unity project root directory. Precedence is `--project` > `UNITY_LEAN_MCP_PROJECT_ROOT` > parent directory discovery. |
+| **`UNITY_BATCHMODE`** | `false` | When set to `true`, `1`, or `yes`, auto-started Unity instances launch headlessly with `-batchmode -nographics` (ideal for headless CI/CD). Default auto-start is interactive GUI. |
+| **`UNITY_PATH`** (or `UNITY_EDITOR`) | Discovered | Path to a custom Unity Editor executable or its installation directory, overriding automatic Unity Hub and `PATH` detection. |
+| **`UNITY_LEAN_MCP_POLL_INTERVAL_MS`** | `500` | Polling backoff cap in milliseconds for long-running Editor operations. |
+
+When neither `--project` nor `UNITY_LEAN_MCP_PROJECT_ROOT` is provided, UnityLeanMcp resolves the project root by walking parent directories of the current working directory (`cwd`) until finding `Assets` and `ProjectSettings`.
+
+Example MCP client configuration with custom environment variables and CLI options:
+
+```json
+{
+  "mcpServers": {
+    "unity-lean-mcp": {
+      "command": "dotnet",
+      "args": [
+        "UnityLeanMcp.Mcp.dll",
+        "--project",
+        "/path/to/unity/project"
+      ],
+      "cwd": "/path/to/unity/project/Packages/com.pereviader.unityleanmcp/MCP~/",
+      "env": {
+        "UNITY_BATCHMODE": "true",
+        "UNITY_PATH": "/opt/unity/Editor/Unity"
+      }
+    }
+  }
+}
+```
 
 ### Release Versioning
 
