@@ -446,8 +446,8 @@ public class UnityTools
                             output.Append(span.EndLine.ToString());
                         }
                     }
-                    output.AppendLine();
                 }
+                output.AppendLine();
             }
 
             return Result(output.ToString().TrimEnd());

@@ -1008,9 +1008,9 @@ public class UnityProcessManagerTests
 
         try
         {
-            string platformProjectPath = commandLineTemplate.StartsWith("C:", StringComparison.Ordinal)
-                ? tempDir.Replace(Path.DirectorySeparatorChar, '\\').Replace(Path.AltDirectorySeparatorChar, '\\')
-                : tempDir.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+            // The executable may use foreign syntax; the project is a real local
+            // path and must retain the host filesystem's syntax and identity.
+            string platformProjectPath = FileUnityProcessIdentityStore.ResolveRealPath(tempDir);
             var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
             {
                 ProcessProvider = () => new[] { candidate },
@@ -1357,12 +1357,36 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
+    public void CommandLineTargetsProject_RequiresExplicitProjectArgument()
+    {
+        var manager = new UnityProcessManager(Path.GetTempPath(), NullLogger<UnityProcessManager>.Instance);
+        string project = manager.PathResolver.ProjectRoot;
+        Assert.False(manager.CommandLineTargetsProject($"Unity -logFile \"{project}\""));
+        Assert.False(manager.CommandLineTargetsProject($"Unity -projectPath other -logFile \"{project}\""));
+        Assert.False(manager.CommandLineTargetsProject($"Unity \"{project}\""));
+        Assert.True(manager.CommandLineTargetsProject($"Unity -projectPath \"{project}\""));
+    }
+
+    [Fact]
+    public void CommandLineTargetsProject_RelativeArgumentUsesOnlyTargetWorkingDirectory()
+    {
+        var manager = new UnityProcessManager(Directory.GetCurrentDirectory(), NullLogger<UnityProcessManager>.Instance);
+        Assert.False(manager.CommandLineTargetsProject("Unity -projectPath ."));
+        manager.LinuxProcessCwdProvider = _ => null;
+        Assert.False(manager.CommandLineTargetsProject("Unity -projectPath .", 123));
+        manager.LinuxProcessCwdProvider = _ => Path.GetTempPath();
+        Assert.False(manager.CommandLineTargetsProject("Unity -projectPath .", 123));
+        manager.LinuxProcessCwdProvider = _ => Directory.GetCurrentDirectory();
+        Assert.True(manager.CommandLineTargetsProject("Unity -projectPath .", 123));
+    }
+
+    [Fact]
     public void UnityPathResolver_ResolvesExpectedPaths()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "test_proj_paths");
         var resolver = new UnityPathResolver(projectRoot);
 
-        Assert.Equal(Path.GetFullPath(projectRoot), resolver.ProjectRoot);
+        Assert.Equal(FileUnityProcessIdentityStore.ResolveRealPath(projectRoot), resolver.ProjectRoot);
         Assert.Equal(Path.Combine(resolver.ProjectRoot, "Temp"), resolver.TempDir);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_compilation_errors.txt"), resolver.CompilationErrorsFile);
         Assert.Equal(Path.Combine(resolver.TempDir, "unity_lean_mcp_port.txt"), resolver.PortFile);

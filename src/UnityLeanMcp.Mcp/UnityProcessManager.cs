@@ -583,65 +583,26 @@ public class UnityProcessManager : IUnityProcessManager
 
     internal bool CommandLineTargetsProject(string commandLine, int? processId = null)
     {
-        string projectRoot = _pathResolver.ProjectRoot
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Replace('\\', '/');
-        string normalizedCommandLine = commandLine.Replace('\\', '/');
+        if (!TryExtractProjectPathArgument(commandLine, out string? projectPathArg) ||
+            string.IsNullOrWhiteSpace(projectPathArg))
+            return false;
 
-        int searchStart = 0;
-        while (searchStart < normalizedCommandLine.Length)
+        // Only an explicit project argument proves intent. Relative arguments
+        // belong to the Editor's working directory, never this host's directory.
+        if (Path.IsPathFullyQualified(projectPathArg))
+            return FileUnityProcessIdentityStore.PathsEqual(projectPathArg, _pathResolver.ProjectRoot);
+
+        if (processId.HasValue && (LinuxProcessCwdProvider != null || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
         {
-            int matchIndex = normalizedCommandLine.IndexOf(projectRoot, searchStart, StringComparison.OrdinalIgnoreCase);
-            if (matchIndex < 0)
+            string? procCwd = TryGetLinuxProcessCwd(processId.Value);
+            if (!string.IsNullOrWhiteSpace(procCwd) && Path.IsPathFullyQualified(procCwd))
             {
-                break;
-            }
-
-            int matchEnd = matchIndex + projectRoot.Length;
-            bool leftBoundary = matchIndex == 0 || IsCommandLineBoundary(normalizedCommandLine[matchIndex - 1]);
-            bool rightBoundary = matchEnd == normalizedCommandLine.Length || IsCommandLineBoundary(normalizedCommandLine[matchEnd]);
-            if (leftBoundary && rightBoundary)
-            {
-                return true;
-            }
-
-            searchStart = matchEnd;
-        }
-
-        // Support relative -projectPath arguments (e.g. -projectPath . or -projectPath ./)
-        if (TryExtractProjectPathArgument(commandLine, out string? projectPathArg) && !string.IsNullOrWhiteSpace(projectPathArg))
-        {
-            if (FileUnityProcessIdentityStore.PathsEqual(projectPathArg, _pathResolver.ProjectRoot))
-            {
-                return true;
-            }
-
-            try
-            {
-                string absoluteProjectPath = FileUnityProcessIdentityStore.ResolveRealPath(Path.GetFullPath(projectPathArg));
-                if (FileUnityProcessIdentityStore.PathsEqual(absoluteProjectPath, _pathResolver.ProjectRoot))
+                try
                 {
-                    return true;
+                    string combined = Path.GetFullPath(Path.Combine(procCwd, projectPathArg));
+                    return FileUnityProcessIdentityStore.PathsEqual(combined, _pathResolver.ProjectRoot);
                 }
-            }
-            catch { }
-
-            if (processId.HasValue && (LinuxProcessCwdProvider != null || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
-            {
-                string? procCwd = TryGetLinuxProcessCwd(processId.Value);
-                if (!string.IsNullOrWhiteSpace(procCwd))
-                {
-                    try
-                    {
-                        string combined = Path.Combine(procCwd, projectPathArg);
-                        string resolved = FileUnityProcessIdentityStore.ResolveRealPath(combined);
-                        if (FileUnityProcessIdentityStore.PathsEqual(resolved, _pathResolver.ProjectRoot))
-                        {
-                            return true;
-                        }
-                    }
-                    catch { }
-                }
+                catch { }
             }
         }
 
@@ -777,9 +738,6 @@ public class UnityProcessManager : IUnityProcessManager
 
         return null;
     }
-
-    private static bool IsCommandLineBoundary(char value) =>
-        char.IsWhiteSpace(value) || value == '\0' || value == '"' || value == '=';
 
     /// <summary>
     /// Locates the Unity executable for this project. Delegates to <see cref="IUnityExecutableLocator"/>.

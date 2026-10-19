@@ -810,9 +810,15 @@ namespace UnityLeanMcp
             string state = SessionState.GetString("UnityLeanMcp_CoverageOwner", "");
             if (state == runId + ":enabled" || state == runId + ":disabled")
             {
-                GetCoverageHandler.CaptureCoverage(runId);
-                Coverage.enabled = state == runId + ":enabled";
-                SessionState.EraseString("UnityLeanMcp_CoverageOwner");
+                try
+                {
+                    GetCoverageHandler.CaptureCoverage(runId);
+                }
+                finally
+                {
+                    Coverage.enabled = state == runId + ":enabled";
+                    SessionState.EraseString("UnityLeanMcp_CoverageOwner");
+                }
             }
         }
 

@@ -13,6 +13,13 @@ namespace UnityLeanMcp
 {
     internal class GetCoverageHandler : ICommandHandler
     {
+        // Preserve distinct Unix source paths, including case-sensitive macOS
+        // volumes. This is the same conservative identity policy as the protocol.
+        internal static StringComparison PathComparison => Path.DirectorySeparatorChar == '\\'
+            ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        internal static StringComparer PathComparer => Path.DirectorySeparatorChar == '\\'
+            ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
         // Native counters can be lost when Coverage.enabled becomes false. Keep
         // the completed report in native session state before restoring the flag:
         // Test Runner cleanup can unlock a pending reload after RunFinished.
@@ -82,7 +89,7 @@ namespace UnityLeanMcp
                 if (!TryResolveExistingPath(rawPath, projectRoot, out string fullPath))
                 {
                     string trimmed = rawPath.Trim();
-                    if (!nonExistentPaths.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                    if (!nonExistentPaths.Contains(trimmed, PathComparer))
                     {
                         nonExistentPaths.Add(trimmed);
                     }
@@ -146,7 +153,7 @@ namespace UnityLeanMcp
             foreach (string filter in normalizedFilters)
             {
                 if (filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
-                    !reports.Any(r => r.path.Equals(filter, StringComparison.OrdinalIgnoreCase)))
+                    !reports.Any(r => r.path.Equals(filter, PathComparison)))
                 {
                     reports.Add(CreateEmptyFileReport(filter));
                 }
@@ -154,7 +161,7 @@ namespace UnityLeanMcp
 
             string json = JsonUtility.ToJson(new CoverageResponsePayload
             {
-                files = reports.OrderBy(r => r.path, StringComparer.OrdinalIgnoreCase).ToList()
+                files = reports.OrderBy(r => r.path, PathComparer).ToList()
             });
             writer.WriteLine($"SUCCESS {ProtocolCodec.EscapeLine(json)}");
         }
@@ -178,7 +185,7 @@ namespace UnityLeanMcp
             // Find assemblies containing scripts that match any requested filter
             var allAssemblies = CompilationPipeline.GetAssemblies();
             var matchedAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var matchedSourceFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var matchedSourceFiles = new HashSet<string>(PathComparer);
 
             foreach (var asm in allAssemblies)
             {
@@ -197,8 +204,8 @@ namespace UnityLeanMcp
                         normalizedPathCache[srcFile] = normSrc;
                     }
 
-                    if (!normSrc.StartsWith("PackageCache/", StringComparison.OrdinalIgnoreCase) &&
-                        !normSrc.StartsWith("Library/PackageCache/", StringComparison.OrdinalIgnoreCase))
+                    if (!normSrc.StartsWith("PackageCache/", PathComparison) &&
+                        !normSrc.StartsWith("Library/PackageCache/", PathComparison))
                     {
                         allPackageCache = false;
                         break;
@@ -251,7 +258,7 @@ namespace UnityLeanMcp
                         if (!loaded.IsDynamic && !string.IsNullOrEmpty(loaded.Location))
                         {
                             string loc = loaded.Location.Replace('\\', '/');
-                            if (loc.Contains("/ScriptAssemblies/") || loc.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+                            if (loc.Contains("/ScriptAssemblies/") || loc.StartsWith(projectRoot, PathComparison))
                             {
                                 assembliesToScan.Add(loaded);
                             }
@@ -262,7 +269,7 @@ namespace UnityLeanMcp
             }
 
             // Harvest sequence points for matching files
-            var pointsByFile = new Dictionary<string, List<CoveredSequencePoint>>(StringComparer.OrdinalIgnoreCase);
+            var pointsByFile = new Dictionary<string, List<CoveredSequencePoint>>(PathComparer);
             var visitedTypes = new HashSet<Type>();
 
             foreach (var asm in assembliesToScan)
@@ -291,7 +298,7 @@ namespace UnityLeanMcp
             }
 
             var reports = new List<CoverageFileReport>();
-            foreach (var kvp in pointsByFile.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var kvp in pointsByFile.OrderBy(k => k.Key, PathComparer))
             {
                 string filePath = kvp.Key;
                 var points = kvp.Value;
@@ -319,13 +326,13 @@ namespace UnityLeanMcp
             // Add any compiled source files matching the filters that had 0 sequence points (e.g. interfaces/enums)
             foreach (var srcFile in matchedSourceFiles)
             {
-                if (!reports.Any(r => r.path.Equals(srcFile, StringComparison.OrdinalIgnoreCase)))
+                if (!reports.Any(r => r.path.Equals(srcFile, PathComparison)))
                 {
                     reports.Add(CreateEmptyFileReport(srcFile));
                 }
             }
 
-            reports = reports.OrderBy(r => r.path, StringComparer.OrdinalIgnoreCase).ToList();
+            reports = reports.OrderBy(r => r.path, PathComparer).ToList();
 
             SessionState.SetString(CapturedCoverageKey, JsonUtility.ToJson(new CapturedCoverage { runId = runId, files = reports }));
         }
@@ -346,13 +353,15 @@ namespace UnityLeanMcp
                 path = canonicalPath;
             string p = path.Trim().Replace('\\', '/');
             string normRoot = (projectRoot ?? "").Replace('\\', '/').TrimEnd('/');
+            var rootComparison = normRoot.Length >= 2 && char.IsLetter(normRoot[0]) && normRoot[1] == ':'
+                ? StringComparison.OrdinalIgnoreCase : PathComparison;
             if (!string.IsNullOrEmpty(normRoot))
             {
-                if (p.Equals(normRoot, StringComparison.OrdinalIgnoreCase))
+                if (p.Equals(normRoot, rootComparison))
                 {
                     return "";
                 }
-                if (p.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase))
+                if (p.StartsWith(normRoot + "/", rootComparison))
                 {
                     p = p.Substring(normRoot.Length + 1);
                 }
@@ -393,8 +402,8 @@ namespace UnityLeanMcp
                 {
                     fullPath = Path.GetFullPath(trimmed);
                     string normFull = fullPath.Replace('\\', '/');
-                    if (normFull.Equals(normRoot, StringComparison.OrdinalIgnoreCase) ||
-                        normFull.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase))
+                    if (normFull.Equals(normRoot, PathComparison) ||
+                        normFull.StartsWith(normRoot + "/", PathComparison))
                     {
                         if (File.Exists(fullPath) || Directory.Exists(fullPath))
                         {
@@ -434,12 +443,12 @@ namespace UnityLeanMcp
 
                 if (f.EndsWith("/", StringComparison.Ordinal))
                 {
-                    if (filePath.StartsWith(f, StringComparison.OrdinalIgnoreCase))
+                    if (filePath.StartsWith(f, PathComparison))
                         return true;
                 }
                 else
                 {
-                    if (filePath.Equals(f, StringComparison.OrdinalIgnoreCase))
+                    if (filePath.Equals(f, PathComparison))
                         return true;
                 }
             }

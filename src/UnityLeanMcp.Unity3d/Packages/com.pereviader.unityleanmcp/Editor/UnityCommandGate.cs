@@ -311,6 +311,11 @@ namespace UnityLeanMcp
 
             try
             {
+                // The payload is already recoverable in SessionState. Capture
+                // coverage and restore profiling before exposing terminal output,
+                // independently of any file publication contention.
+                if (pending.Kind == OperationKinds.Test)
+                    RunTestsHandler.RestoreCoverage(pending.OperationId);
                 System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pending.Path));
                 WriteAtomic(pending.Path, pending.Json, pending.OperationId, attempts: 1);
                 if (pending.Kind == OperationKinds.Test)

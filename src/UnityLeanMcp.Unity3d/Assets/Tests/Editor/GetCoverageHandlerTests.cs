@@ -12,6 +12,17 @@ namespace UnityLeanMcpTests
     {
         private const string DummyProjectRoot = "C:/Code/MyUnityProject/";
 
+        [Test]
+        public void CoverageFiltersPreserveCaseDistinctUnixSourcePaths()
+        {
+            bool windows = Path.DirectorySeparatorChar == '\\';
+            Assert.That(GetCoverageHandler.MatchesAnyFilter("Assets/foo.cs", new List<string> { "Assets/Foo.cs" }), Is.EqualTo(windows));
+            Assert.That(GetCoverageHandler.MatchesAnyFilter("Assets/child/Foo.cs", new List<string> { "Assets/Child/" }), Is.EqualTo(windows));
+            if (!windows)
+                Assert.That(GetCoverageHandler.NormalizePathRelativeToProject("/tmp/Project/Assets/Foo.cs", "/tmp/project"),
+                    Is.EqualTo("tmp/Project/Assets/Foo.cs"));
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void QueryAfterRecordingPreservesCapturedHitsAndProfilerSetting(bool originallyEnabled)

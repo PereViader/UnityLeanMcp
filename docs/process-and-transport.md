@@ -42,7 +42,7 @@ An MCP startup claim must retain the same inode for its whole lifetime. Unlinkin
 ### Path identity
 
 - `Path.GetFullPath` does not resolve symlinks. Process executable verification and project ownership checks resolve the full symlink chain of `/proc/{pid}/cwd` and path components to match canonical targets across symlinked directories. Path comparisons use symlink-resolving equality.
-- Linux `/proc/{pid}/cmdline` is NUL-separated. Argument parsing extracts `-projectPath` arguments whether delimited by `\0` or spaces/quotes, resolving relative paths against the target process's working directory rather than the MCP host's directory.
+- Linux `/proc/{pid}/cmdline` is NUL-separated. Argument parsing accepts project evidence only from explicit `-projectPath` arguments, whether delimited by `\0` or spaces/quotes; a project path in a log argument or other token does not establish ownership. Resolve relative paths only against an inspected target process working directory. If that directory cannot be verified, the argument is insufficient evidence; never fall back to the MCP host's directory.
 - Diagnostic URI generation normalizes package dependencies (`Packages/...`), WSL mount paths (`/mnt/c/...`), and Windows UNC shares (`//server/share` or `\\server\share`). Package and project-relative paths resolve against `projectRoot` when provided, preserving authority and producing valid `file://` URIs with `#L<line>` anchors across Windows and POSIX host shells.
 - macOS commonly uses case-insensitive volumes but also supports case-sensitive ones. Do not infer universal filesystem equality from the OS. The current process identity helper uses case-insensitive comparison on Windows/macOS; project protocol validation deliberately uses ordinal comparison on Unix. Tests should expose this distinction rather than claim one policy fits every volume.
 - `Path.IsPathRooted` uses the host OS's syntax. Diagnostic URI conversion must recognize Windows drive paths even when running on Unix.
@@ -50,7 +50,7 @@ An MCP startup claim must retain the same inode for its whole lifetime. Unlinkin
 
 ### Process discovery pitfalls
 
-A native executable named `Unity` may be a CLI, not the Editor. Validate the installed Editor layout without executing candidates. `UNITY_PATH` may name an installation directory rather than its executable.
+A native executable named `Unity` may be a CLI, not the Editor. Validate the installed Editor layout without executing candidates. macOS Editor assemblies can live under `Contents/Managed` or `Contents/Resources/Scripting/Managed`; both supported layouts retain the app-bundle and executable checks. `UNITY_PATH` may name an installation directory rather than its executable.
 
 A PID can be reused. The identity store also checks start time, executable, and project root. Linux start-time readings can differ in precision; the current tolerance is an identity comparison allowance, not an operation timeout or proof against every PID-reuse scenario. Restricted process inspection may require `/proc` executable or command-line evidence and can still be unavailable.
 

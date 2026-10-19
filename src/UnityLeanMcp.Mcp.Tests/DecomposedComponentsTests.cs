@@ -968,19 +968,22 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
-    public void UnityProcessManager_CommandLineTargetsProject_MatchesRelativeProjectPath()
+    public void UnityProcessManager_CommandLineTargetsProject_MatchesRelativeProjectPathFromTargetWorkingDirectory()
     {
         string projectRoot = Directory.GetCurrentDirectory();
         var resolver = new UnityPathResolver(projectRoot);
-        var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+        var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance)
+        {
+            LinuxProcessCwdProvider = _ => projectRoot
+        };
 
         // Standard absolute matching
         Assert.True(pm.CommandLineTargetsProject($"Unity.exe -projectPath \"{projectRoot}\" -batchmode"));
 
-        // Relative matching with . and ./
-        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath . -batchmode"));
-        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath ./ -batchmode"));
-        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath=\".\" -batchmode"));
+        // Relative matching requires verified target process working directory.
+        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath . -batchmode", 123));
+        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath ./ -batchmode", 123));
+        Assert.True(pm.CommandLineTargetsProject("Unity.exe -projectPath=\".\" -batchmode", 123));
 
         // Unrelated project
         Assert.False(pm.CommandLineTargetsProject("Unity.exe -projectPath \"C:/Other/Project\" -batchmode"));

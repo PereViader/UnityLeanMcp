@@ -493,6 +493,35 @@ public class UnityExecutableLocatorTests
         }
     }
 
+    [Fact]
+    public void FindUnityExecutable_AcceptsMacEditorWithRelocatedScriptingAssemblies()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        string root = Path.Combine(Path.GetTempPath(), "unity-relocated-managed-" + Guid.NewGuid().ToString("N"));
+        string? originalUnityPath = Environment.GetEnvironmentVariable("UNITY_PATH");
+        string? originalUnityEditor = Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        try
+        {
+            string executable = CreateEditorFixture(root);
+            string contents = Path.GetDirectoryName(Path.GetDirectoryName(executable))!;
+            string relocated = Path.Combine(contents, "Resources", "Scripting", "Managed");
+            Directory.CreateDirectory(relocated);
+            File.Move(Path.Combine(contents, "Managed", "UnityEditor.dll"), Path.Combine(relocated, "UnityEditor.dll"));
+            Environment.SetEnvironmentVariable("UNITY_PATH", null);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", null);
+            var locator = new CandidateLocator(root, new List<string> { executable });
+            var result = locator.FindUnityExecutable();
+            Assert.True(result.Success, result.Diagnostic);
+            Assert.Equal(executable, result.ExecutablePath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("UNITY_PATH", originalUnityPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", originalUnityEditor);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     private sealed class CandidateLocator : UnityExecutableLocator
     {
         private readonly List<string> _candidates;

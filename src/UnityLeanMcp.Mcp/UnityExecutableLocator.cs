@@ -208,12 +208,13 @@ public class UnityExecutableLocator : IUnityExecutableLocator
                                      appDirectory?.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase) == true;
             if (isMacEditorBinary &&
                 contentsDirectory != null &&
-                File.Exists(Path.Combine(contentsDirectory.FullName, "Managed", "UnityEditor.dll")))
+                (File.Exists(Path.Combine(contentsDirectory.FullName, "Managed", "UnityEditor.dll")) ||
+                 File.Exists(Path.Combine(contentsDirectory.FullName, "Resources", "Scripting", "Managed", "UnityEditor.dll"))))
             {
                 return null;
             }
 
-            return "it is not inside a Unity Editor app bundle (expected Unity.app/Contents/MacOS/Unity with Contents/Managed/UnityEditor.dll)";
+            return "it is not inside a Unity Editor app bundle (expected Unity.app/Contents/MacOS/Unity with UnityEditor.dll under Contents/Managed or Contents/Resources/Scripting/Managed)";
         }
 
         string? editorDirectory = Path.GetDirectoryName(executablePath);

@@ -166,6 +166,8 @@ public class CoverageFormattingTests
             Assert.Contains("• Assets/Scripts/FileA.cs: 100.0% (10/10 points)", text);
             Assert.Contains("• Assets/Scripts/FileB.cs: 50.0% (5/10 points)", text);
             Assert.Contains("Uncovered lines: 1-2", text);
+            Assert.Contains("(10/10 points)" + Environment.NewLine + "• Assets/Scripts/FileB.cs", text);
+            Assert.Equal(2, text.Split(Environment.NewLine).Count(line => line.StartsWith("• ")));
         }
         finally
         {
