@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -56,6 +57,27 @@ namespace UnityLeanMcp
 
     internal static class RoslynCompilerHelper
     {
+        private readonly struct CachedMetadataReference
+        {
+            public readonly long LastWriteTicks;
+            public readonly object Reference;
+
+            public CachedMetadataReference(long lastWriteTicks, object reference)
+            {
+                LastWriteTicks = lastWriteTicks;
+                Reference = reference;
+            }
+        }
+
+        private static StringComparer PathComparer => Path.DirectorySeparatorChar == '\\'
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+        private static readonly ConcurrentDictionary<string, CachedMetadataReference> s_MetadataReferenceCache =
+            new ConcurrentDictionary<string, CachedMetadataReference>(PathComparer);
+
+        internal static int CachedMetadataReferenceCount => s_MetadataReferenceCache.Count;
+
         private static bool s_Initialized;
         private static bool s_IsSupported;
         private static string s_UnsupportedReason = "";
@@ -168,6 +190,7 @@ namespace UnityLeanMcp
 #pragma warning disable CS8622
                 AppDomain.CurrentDomain.AssemblyResolve -= OnAssemblyResolve;
 #pragma warning restore CS8622
+                s_MetadataReferenceCache.Clear();
                 s_Initialized = false;
                 s_IsSupported = false;
                 s_UnsupportedReason = "";
@@ -418,10 +441,33 @@ namespace UnityLeanMcp
             return method.Invoke(null, args);
         }
 
+        internal static object GetOrCreateMetadataReference(string fullPath, Func<string, object> factory)
+        {
+            if (string.IsNullOrEmpty(fullPath) || !File.Exists(fullPath))
+            {
+                return null;
+            }
+
+            long lastWriteTicks = File.GetLastWriteTimeUtc(fullPath).Ticks;
+            if (s_MetadataReferenceCache.TryGetValue(fullPath, out var cached) &&
+                cached.LastWriteTicks == lastWriteTicks &&
+                cached.Reference != null)
+            {
+                return cached.Reference;
+            }
+
+            object created = factory(fullPath);
+            if (created != null)
+            {
+                s_MetadataReferenceCache[fullPath] = new CachedMetadataReference(lastWriteTicks, created);
+            }
+            return created;
+        }
+
         private static Array BuildMetadataReferenceArray()
         {
             var refList = new List<object>();
-            var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var addedPaths = new HashSet<string>(PathComparer);
 
             void AddPath(string path)
             {
@@ -431,7 +477,7 @@ namespace UnityLeanMcp
 
                 try
                 {
-                    object r = InvokeCreateFromFile(s_CreateFromFileMethod, fullPath);
+                    object r = GetOrCreateMetadataReference(fullPath, p => InvokeCreateFromFile(s_CreateFromFileMethod, p));
                     if (r != null)
                     {
                         refList.Add(r);
@@ -549,7 +595,7 @@ namespace UnityLeanMcp
                 var syntaxTreeArray = Array.CreateInstance(s_CodeAnalysisAsm.GetType("Microsoft.CodeAnalysis.SyntaxTree"), 1);
                 syntaxTreeArray.SetValue(syntaxTree, 0);
 
-                // 3. Create compilation with freshly gathered metadata references (stateless & transactional)
+                // 3. Create compilation with metadata references (cached per file path & timestamp)
                 Array metadataReferenceArray = BuildMetadataReferenceArray();
                 string assemblyName = "__UnityLeanMcpEval_" + Guid.NewGuid().ToString("N");
                 var compilation = s_CreateCompMethod.Invoke(null, new object[] { assemblyName, syntaxTreeArray, metadataReferenceArray, s_CompilationOptions });

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
@@ -12,6 +13,28 @@ namespace UnityLeanMcp
 {
     internal class EvalHandler : ICommandHandler
     {
+        private readonly struct CompiledSnippetEntry
+        {
+            public readonly MethodInfo ExecuteMethod;
+            public readonly bool IsVoidStatement;
+
+            public CompiledSnippetEntry(MethodInfo executeMethod, bool isVoidStatement)
+            {
+                ExecuteMethod = executeMethod;
+                IsVoidStatement = isVoidStatement;
+            }
+        }
+
+        private static readonly ConcurrentDictionary<string, CompiledSnippetEntry> s_SnippetCache =
+            new ConcurrentDictionary<string, CompiledSnippetEntry>(StringComparer.Ordinal);
+
+        internal static int CachedSnippetCount => s_SnippetCache.Count;
+
+        internal static void ClearCache()
+        {
+            s_SnippetCache.Clear();
+        }
+
         public static bool CancelActiveEval(string operationId)
         {
             return OperationExecutionEngine.TryCancel(operationId);
@@ -103,12 +126,12 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                // Attempt compilation with smart wrapping
-                byte[] assemblyBytes;
+                // Resolve cached or newly compiled snippet runner method
+                MethodInfo execMethod;
                 bool isVoidStatement;
                 List<string> errors;
 
-                if (!TryCompileSnippet(rawCode, out assemblyBytes, out isVoidStatement, out errors) || assemblyBytes == null)
+                if (!TryGetOrCompileSnippet(rawCode, out execMethod, out isVoidStatement, out errors) || execMethod == null)
                 {
                     string combinedErrors = string.Join("\n", errors);
                     OperationExecutionEngine.FinishOperation(operationId, OperationKinds.Eval, resultFilePath, false, combinedErrors, 0, null, null);
@@ -142,23 +165,7 @@ namespace UnityLeanMcp
                     operationKind: OperationKinds.Eval,
                     resultFilePath: resultFilePath,
                     isVoid: isVoidStatement,
-                    invoker: ct =>
-                    {
-                        var asm = Assembly.Load(assemblyBytes);
-                        var runnerType = asm.GetType("__UnityLeanMcpEvalRunner");
-                        if (runnerType == null)
-                        {
-                            throw new Exception("Evaluation runner type could not be loaded from dynamic assembly.");
-                        }
-
-                        var execMethod = runnerType.GetMethod("Execute", BindingFlags.Public | BindingFlags.Static);
-                        if (execMethod == null)
-                        {
-                            throw new Exception("Evaluation runner execute method not found.");
-                        }
-
-                        return execMethod.Invoke(null, new object[] { ct });
-                    },
+                    invoker: ct => execMethod.Invoke(null, new object[] { ct }),
                     canCancel: true
                 );
             }
@@ -176,6 +183,41 @@ namespace UnityLeanMcp
                     catch { }
                 }
             }
+        }
+
+        internal static bool TryGetOrCompileSnippet(string rawCode, out MethodInfo execMethod, out bool isVoidStatement, out List<string> errors)
+        {
+            string cacheKey = rawCode ?? "";
+            if (s_SnippetCache.TryGetValue(cacheKey, out var cached) && cached.ExecuteMethod != null)
+            {
+                execMethod = cached.ExecuteMethod;
+                isVoidStatement = cached.IsVoidStatement;
+                errors = new List<string>();
+                return true;
+            }
+
+            execMethod = null;
+            byte[] assemblyBytes;
+            if (!TryCompileSnippet(cacheKey, out assemblyBytes, out isVoidStatement, out errors) || assemblyBytes == null)
+            {
+                return false;
+            }
+
+            var asm = Assembly.Load(assemblyBytes);
+            var runnerType = asm.GetType("__UnityLeanMcpEvalRunner");
+            if (runnerType == null)
+            {
+                throw new Exception("Evaluation runner type could not be loaded from dynamic assembly.");
+            }
+
+            execMethod = runnerType.GetMethod("Execute", BindingFlags.Public | BindingFlags.Static);
+            if (execMethod == null)
+            {
+                throw new Exception("Evaluation runner execute method not found.");
+            }
+
+            s_SnippetCache[cacheKey] = new CompiledSnippetEntry(execMethod, isVoidStatement);
+            return true;
         }
 
         private static bool TryCompileSnippet(string rawCode, out byte[] assemblyBytes, out bool isVoidStatement, out List<string> errors)
