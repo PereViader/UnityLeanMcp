@@ -905,7 +905,7 @@ public class UnityClient : IUnityClient
                 return new CoverageResult
                 {
                     Success = false,
-                    Message = ProtocolCodec.StripStatusPrefix(response)
+                    Message = ProtocolCodec.UnescapeLine(ProtocolCodec.StripStatusPrefix(response))
                 };
             }
 

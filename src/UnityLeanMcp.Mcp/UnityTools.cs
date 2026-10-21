@@ -428,7 +428,12 @@ public class UnityTools
                 output.Append(file.TotalPoints.ToString());
                 output.Append(" points)");
 
-                if (file.UncoveredLines != null && file.UncoveredLines.Length > 0)
+                if (file.UncoveredSpans != null && file.UncoveredSpans.Count > 0)
+                {
+                    output.Append("  Uncovered lines: ");
+                    output.Append(FormatUncoveredMethodSpans(file.UncoveredSpans));
+                }
+                else if (file.UncoveredLines != null && file.UncoveredLines.Length > 0)
                 {
                     var spans = FormatUncoveredSpans(file.UncoveredLines);
                     output.Append("  Uncovered lines: ");
@@ -456,6 +461,51 @@ public class UnityTools
         {
             return Error($"Coverage query failed: {ex.Message}");
         }
+    }
+
+    internal static string FormatUncoveredMethodSpans(IReadOnlyList<UncoveredMethodSpan> spans)
+    {
+        if (spans == null || spans.Count == 0)
+            return "";
+
+        var sb = new StringBuilder();
+        int i = 0;
+        bool firstMethod = true;
+
+        while (i < spans.Count)
+        {
+            string currentMethod = spans[i].Method ?? "";
+            var lineRanges = new List<string>();
+            while (i < spans.Count && (spans[i].Method ?? "") == currentMethod)
+            {
+                int start = spans[i].StartLine;
+                int end = spans[i].EndLine;
+                if (end > start)
+                    lineRanges.Add($"{start}-{end}");
+                else
+                    lineRanges.Add(start.ToString());
+                i++;
+            }
+
+            if (!firstMethod)
+                sb.Append(", ");
+            firstMethod = false;
+
+            string rangesStr = string.Join(", ", lineRanges);
+            if (!string.IsNullOrEmpty(currentMethod))
+            {
+                sb.Append(currentMethod);
+                sb.Append(" (");
+                sb.Append(rangesStr);
+                sb.Append(")");
+            }
+            else
+            {
+                sb.Append(rangesStr);
+            }
+        }
+
+        return sb.ToString();
     }
 
     public readonly record struct LineSpan(int StartLine, int EndLine);

@@ -29,6 +29,8 @@ namespace UnityLeanMcp
         private sealed class CapturedCoverage
         {
             public string runId;
+            public int compilationEpoch;
+            public long capturedAtUtcTicks;
             public List<CoverageFileReport> files;
         }
 
@@ -128,6 +130,13 @@ namespace UnityLeanMcp
                 return;
             }
 
+            int currentEpoch = SessionState.GetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
+            if (captured.compilationEpoch != currentEpoch || UnityLeanMcpCompilationTracker.IsCompiling || EditorApplication.isCompiling)
+            {
+                writer.WriteLine("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
+                return;
+            }
+
             // Normalize requested filter paths
             var normalizedFilters = new List<string>();
             foreach (var rawPath in resolvedPaths)
@@ -150,6 +159,39 @@ namespace UnityLeanMcp
             }
 
             var reports = captured.files.Where(r => MatchesAnyFilter(r.path, normalizedFilters)).ToList();
+
+            if (captured.capturedAtUtcTicks > 0)
+            {
+                var checkedPaths = new HashSet<string>(PathComparer);
+                foreach (var fullPath in resolvedPaths)
+                {
+                    if (File.Exists(fullPath) && !Directory.Exists(fullPath) && checkedPaths.Add(fullPath))
+                    {
+                        long lastWriteTicks = File.GetLastWriteTimeUtc(fullPath).Ticks;
+                        if (lastWriteTicks > captured.capturedAtUtcTicks)
+                        {
+                            string relPath = NormalizePathRelativeToProject(fullPath, projectRoot);
+                            writer.WriteLine($"FAILURE Coverage data for '{relPath}' is obsolete because the file was modified since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
+                            return;
+                        }
+                    }
+                }
+
+                foreach (var report in reports)
+                {
+                    if (string.IsNullOrEmpty(report.path)) continue;
+                    string fullPath = Path.Combine(projectRoot, report.path);
+                    if (File.Exists(fullPath) && checkedPaths.Add(fullPath))
+                    {
+                        long lastWriteTicks = File.GetLastWriteTimeUtc(fullPath).Ticks;
+                        if (lastWriteTicks > captured.capturedAtUtcTicks)
+                        {
+                            writer.WriteLine($"FAILURE Coverage data for '{report.path}' is obsolete because the file was modified since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
+                            return;
+                        }
+                    }
+                }
+            }
             foreach (string filter in normalizedFilters)
             {
                 if (filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
@@ -314,12 +356,15 @@ namespace UnityLeanMcp
                     .OrderBy(l => l)
                     .ToArray();
 
+                var uncoveredSpans = ComputeUncoveredSpans(points);
+
                 reports.Add(new CoverageFileReport
                 {
                     path = filePath,
                     totalPoints = totalPoints,
                     coveredPoints = coveredPoints,
-                    uncoveredLines = uncoveredLines
+                    uncoveredLines = uncoveredLines,
+                    uncoveredSpans = uncoveredSpans
                 });
             }
 
@@ -334,7 +379,16 @@ namespace UnityLeanMcp
 
             reports = reports.OrderBy(r => r.path, PathComparer).ToList();
 
-            SessionState.SetString(CapturedCoverageKey, JsonUtility.ToJson(new CapturedCoverage { runId = runId, files = reports }));
+            int epoch = SessionState.GetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
+            long nowTicks = DateTime.UtcNow.Ticks;
+
+            SessionState.SetString(CapturedCoverageKey, JsonUtility.ToJson(new CapturedCoverage
+            {
+                runId = runId,
+                compilationEpoch = epoch,
+                capturedAtUtcTicks = nowTicks,
+                files = reports
+            }));
         }
 
         private static CoverageFileReport CreateEmptyFileReport(string path) =>
@@ -343,7 +397,8 @@ namespace UnityLeanMcp
                 path = path,
                 totalPoints = 0,
                 coveredPoints = 0,
-                uncoveredLines = new int[0]
+                uncoveredLines = new int[0],
+                uncoveredSpans = new List<UncoveredMethodSpan>()
             };
 
         internal static string NormalizePathRelativeToProject(string path, string projectRoot)
@@ -583,8 +638,204 @@ namespace UnityLeanMcp
                     pointsByFile[normFile] = list;
                 }
 
-                list.Add(sp);
+                var point = sp;
+                if (point.method == null)
+                {
+                    point.method = method;
+                }
+                list.Add(point);
             }
+        }
+
+        internal static List<UncoveredMethodSpan> ComputeUncoveredSpans(List<CoveredSequencePoint> points)
+        {
+            var result = new List<UncoveredMethodSpan>();
+            if (points == null || points.Count == 0)
+                return result;
+
+            var pointsByMethod = new Dictionary<string, List<CoveredSequencePoint>>(StringComparer.Ordinal);
+            var methodNameCache = new Dictionary<MethodBase, string>();
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+                string name;
+                if (pt.method == null)
+                {
+                    name = "";
+                }
+                else if (!methodNameCache.TryGetValue(pt.method, out name))
+                {
+                    name = GetFriendlyMethodName(pt.method);
+                    methodNameCache[pt.method] = name;
+                }
+
+                if (!pointsByMethod.TryGetValue(name, out var list))
+                {
+                    list = new List<CoveredSequencePoint>();
+                    pointsByMethod[name] = list;
+                }
+                list.Add(pt);
+            }
+
+            foreach (var kvp in pointsByMethod)
+            {
+                string methodName = kvp.Key;
+                var methodPoints = kvp.Value;
+
+                var methodUncoveredLines = methodPoints
+                    .GroupBy(p => p.line)
+                    .Where(g => g.Any(p => p.hitCount == 0))
+                    .Select(g => (int)g.Key)
+                    .OrderBy(l => l)
+                    .ToArray();
+
+                if (methodUncoveredLines.Length == 0)
+                    continue;
+
+                int spanStart = methodUncoveredLines[0];
+                int prev = spanStart;
+                for (int i = 1; i < methodUncoveredLines.Length; i++)
+                {
+                    if (methodUncoveredLines[i] == prev + 1)
+                    {
+                        prev = methodUncoveredLines[i];
+                    }
+                    else
+                    {
+                        result.Add(new UncoveredMethodSpan
+                        {
+                            method = methodName,
+                            startLine = spanStart,
+                            endLine = prev
+                        });
+                        spanStart = methodUncoveredLines[i];
+                        prev = spanStart;
+                    }
+                }
+                result.Add(new UncoveredMethodSpan
+                {
+                    method = methodName,
+                    startLine = spanStart,
+                    endLine = prev
+                });
+            }
+
+            result.Sort((a, b) =>
+            {
+                int cmp = a.startLine.CompareTo(b.startLine);
+                if (cmp != 0) return cmp;
+                cmp = a.endLine.CompareTo(b.endLine);
+                if (cmp != 0) return cmp;
+                return string.Compare(a.method, b.method, StringComparison.Ordinal);
+            });
+
+            return result;
+        }
+
+        internal static string GetFriendlyMethodName(MethodBase method)
+        {
+            if (method == null) return "";
+
+            string name = method.Name;
+            Type declaringType = method.DeclaringType;
+
+            // MoveNext or SetStateMachine in an async/iterator state machine type (e.g. <Foo>d__1)
+            if ((name == "MoveNext" || name == "SetStateMachine") && declaringType != null && declaringType.IsNested)
+            {
+                string typeName = declaringType.Name;
+                string extracted = ExtractFromAngleBrackets(typeName);
+                if (!string.IsNullOrEmpty(extracted))
+                {
+                    return DemangleMethodName(extracted);
+                }
+            }
+
+            return DemangleMethodName(name);
+        }
+
+        internal static string DemangleMethodName(string rawName)
+        {
+            if (string.IsNullOrEmpty(rawName)) return "";
+
+            // Strip enclosing < ... > wrapper if present: e.g. <Foo> or <<Foo>d>
+            while (rawName.StartsWith("<", StringComparison.Ordinal) && rawName.EndsWith(">", StringComparison.Ordinal))
+            {
+                rawName = rawName.Substring(1, rawName.Length - 2);
+            }
+
+            // State machine wrapper: <Inner>d or <Inner>d__12
+            if (rawName.StartsWith("<", StringComparison.Ordinal))
+            {
+                int lastAngle = rawName.LastIndexOf('>');
+                if (lastAngle > 0 && lastAngle < rawName.Length - 1)
+                {
+                    string suffix = rawName.Substring(lastAngle + 1);
+                    if (suffix.StartsWith("d") || suffix.StartsWith("c"))
+                    {
+                        string inner = rawName.Substring(1, lastAngle - 1);
+                        return DemangleMethodName(inner);
+                    }
+                }
+            }
+
+            // Local function: <EnclosingMethod>g__LocalFunctionName|...
+            int gIndex = rawName.LastIndexOf(">g__", StringComparison.Ordinal);
+            if (gIndex >= 0)
+            {
+                int start = rawName.StartsWith("<", StringComparison.Ordinal) ? 1 : 0;
+                string enclosing = rawName.Substring(start, gIndex - start);
+                enclosing = DemangleMethodName(enclosing);
+                string localPart = rawName.Substring(gIndex + 4);
+                int pipeIndex = localPart.IndexOf('|');
+                string localName = pipeIndex >= 0 ? localPart.Substring(0, pipeIndex) : localPart;
+                return string.IsNullOrEmpty(enclosing) ? localName : (enclosing + "." + localName);
+            }
+
+            // Lambda: <EnclosingMethod>b__...
+            int bIndex = rawName.LastIndexOf(">b__", StringComparison.Ordinal);
+            if (bIndex >= 0)
+            {
+                int start = rawName.StartsWith("<", StringComparison.Ordinal) ? 1 : 0;
+                string enclosing = rawName.Substring(start, bIndex - start);
+                return DemangleMethodName(enclosing);
+            }
+
+            // Generic state machine or other angle bracket wrapper: <MethodName>...
+            if (rawName.StartsWith("<", StringComparison.Ordinal))
+            {
+                int endAngle = rawName.LastIndexOf('>');
+                if (endAngle > 1)
+                {
+                    string inner = rawName.Substring(1, endAngle - 1);
+                    return DemangleMethodName(inner);
+                }
+            }
+
+            // Explicit interface implementation: Namespace.IFoo.Bar -> IFoo.Bar
+            int lastDot = rawName.LastIndexOf('.');
+            if (lastDot > 0 && lastDot < rawName.Length - 1)
+            {
+                int secondToLastDot = rawName.LastIndexOf('.', lastDot - 1);
+                if (secondToLastDot >= 0)
+                {
+                    return rawName.Substring(secondToLastDot + 1);
+                }
+                return rawName;
+            }
+
+            return rawName;
+        }
+
+        private static string ExtractFromAngleBrackets(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            int start = s.IndexOf('<');
+            int end = s.LastIndexOf('>');
+            if (start >= 0 && end > start)
+            {
+                return s.Substring(start + 1, end - start - 1);
+            }
+            return "";
         }
     }
 }

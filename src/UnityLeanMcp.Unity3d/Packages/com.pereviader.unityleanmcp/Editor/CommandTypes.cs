@@ -166,12 +166,21 @@ namespace UnityLeanMcp
     }
 
     [Serializable]
+    public class UncoveredMethodSpan
+    {
+        public string method;
+        public int startLine;
+        public int endLine;
+    }
+
+    [Serializable]
     public class CoverageFileReport
     {
         public string path;
         public int totalPoints;
         public int coveredPoints;
         public int[] uncoveredLines;
+        public List<UncoveredMethodSpan> uncoveredSpans;
     }
 
     [Serializable]

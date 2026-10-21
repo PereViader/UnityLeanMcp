@@ -281,6 +281,18 @@ public class GetCoverageArgs
     public string[] Paths { get; set; } = System.Array.Empty<string>();
 }
 
+public class UncoveredMethodSpan
+{
+    [JsonPropertyName("method")]
+    public string Method { get; set; } = "";
+
+    [JsonPropertyName("startLine")]
+    public int StartLine { get; set; }
+
+    [JsonPropertyName("endLine")]
+    public int EndLine { get; set; }
+}
+
 public class CoverageFileResult
 {
     [JsonPropertyName("path")]
@@ -294,6 +306,9 @@ public class CoverageFileResult
 
     [JsonPropertyName("uncoveredLines")]
     public int[] UncoveredLines { get; set; } = System.Array.Empty<int>();
+
+    [JsonPropertyName("uncoveredSpans")]
+    public List<UncoveredMethodSpan> UncoveredSpans { get; set; } = new();
 }
 
 public class CoverageResult

@@ -442,6 +442,7 @@ namespace UnityEditor
     public static class SessionState
     {
         private static readonly Dictionary<string, string> Values = new();
+        private static readonly Dictionary<string, int> IntValues = new();
         public static int SetStringCount { get; set; }
         public static string? GetString(string key, string? fallback) => Values.TryGetValue(key, out var value) ? value : fallback;
         public static void SetString(string key, string value)
@@ -450,6 +451,9 @@ namespace UnityEditor
             Values[key] = value;
         }
         public static void EraseString(string key) => Values.Remove(key);
+        public static int GetInt(string key, int fallback) => IntValues.TryGetValue(key, out var value) ? value : fallback;
+        public static void SetInt(string key, int value) => IntValues[key] = value;
+        public static void EraseInt(string key) => IntValues.Remove(key);
     }
     public class Editor { }
     public static class EditorApplication
@@ -1026,12 +1030,21 @@ namespace UnityLeanMcp
     }
 
     [Serializable]
+    public class UncoveredMethodSpan
+    {
+        public string method = "";
+        public int startLine;
+        public int endLine;
+    }
+
+    [Serializable]
     public class CoverageFileReport
     {
         public string path = "";
         public int totalPoints;
         public int coveredPoints;
         public int[] uncoveredLines = Array.Empty<int>();
+        public List<UncoveredMethodSpan> uncoveredSpans = new();
     }
 
     [Serializable]

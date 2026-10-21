@@ -20,6 +20,14 @@ namespace UnityLeanMcp
     public static class UnityLeanMcpCompilationTracker
     {
         internal const string AssemblyDiagnosticsKey = "UnityLeanMcp_AssemblyDiagnostics";
+        internal const string CompilationEpochKey = "UnityLeanMcp_CompilationEpoch";
+
+        internal static int IncrementCompilationEpoch()
+        {
+            int epoch = SessionState.GetInt(CompilationEpochKey, 0) + 1;
+            SessionState.SetInt(CompilationEpochKey, epoch);
+            return epoch;
+        }
 
         [Serializable]
         private sealed class AssemblyDiagnosticsEntry
@@ -185,6 +193,7 @@ namespace UnityLeanMcp
         {
             s_IsCompiling = true;
             CompilationInProgress = true;
+            IncrementCompilationEpoch();
         }
 
         private static void OnCompilationFinished(object obj)
@@ -192,6 +201,7 @@ namespace UnityLeanMcp
             s_IsCompiling = false;
             CompilationFinished = true;
             s_ScriptCompilationFailed = EditorUtility.scriptCompilationFailed;
+            IncrementCompilationEpoch();
             WriteActiveErrorsToFile();
         }
 

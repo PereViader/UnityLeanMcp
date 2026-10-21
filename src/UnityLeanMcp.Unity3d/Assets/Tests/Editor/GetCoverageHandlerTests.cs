@@ -74,6 +74,7 @@ namespace UnityLeanMcpTests
                     Assert.That(report.files.Single().coveredPoints, Is.GreaterThan(0));
                     foreach (var point in recordedPoints)
                         Assert.That(report.files.Single().uncoveredLines.Contains((int)point.line), Is.False);
+                    Assert.That(report.files.Single().uncoveredSpans, Is.Not.Null);
                 }
             }
             finally
@@ -374,6 +375,117 @@ namespace UnityLeanMcpTests
             var setB = new HashSet<System.Reflection.MethodBase>(methodsClassB);
             setA.IntersectWith(setB);
             Assert.That(setA.Count, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void DemangleMethodName_ResolvesAllRoslynCompilerPatterns()
+        {
+            Assert.That(GetCoverageHandler.DemangleMethodName("<AsyncVoidMethod>d__0"), Is.EqualTo("AsyncVoidMethod"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("<YieldEnumeratorMethod>d__1"), Is.EqualTo("YieldEnumeratorMethod"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("<SimpleLambdaMethod>b__0"), Is.EqualTo("SimpleLambdaMethod"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("<<NestedLambdaMethod>b__0>b__1"), Is.EqualTo("NestedLambdaMethod"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("<HostMethod>g__RegularLocal|0_0"), Is.EqualTo("HostMethod.RegularLocal"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("<<HostMethod>g__AsyncLocal|0_0>d"), Is.EqualTo("HostMethod.AsyncLocal"));
+            Assert.That(GetCoverageHandler.DemangleMethodName(".ctor"), Is.EqualTo(".ctor"));
+            Assert.That(GetCoverageHandler.DemangleMethodName(".cctor"), Is.EqualTo(".cctor"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("get_AutoProperty"), Is.EqualTo("get_AutoProperty"));
+            Assert.That(GetCoverageHandler.DemangleMethodName("Namespace.IFoo.ExplicitMethod"), Is.EqualTo("IFoo.ExplicitMethod"));
+        }
+
+        [Test]
+        public void ComputeUncoveredSpans_ProducesMethodAnnotatedSpansOrderedByLine()
+        {
+            var methodA = typeof(GetCoverageHandlerTests).GetMethod(nameof(DemangleMethodName_ResolvesAllRoslynCompilerPatterns));
+            var methodB = typeof(GetCoverageHandlerTests).GetMethod(nameof(CoverageFiltersPreserveCaseDistinctUnixSourcePaths));
+
+            var points = new List<UnityEngine.TestTools.CoveredSequencePoint>
+            {
+                new UnityEngine.TestTools.CoveredSequencePoint { method = methodA, line = 10, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = methodA, line = 11, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = methodA, line = 12, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = methodB, line = 15, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = methodA, line = 20, hitCount = 0 }
+            };
+
+            var spans = GetCoverageHandler.ComputeUncoveredSpans(points);
+            Assert.That(spans.Count, Is.EqualTo(3));
+
+            Assert.That(spans[0].method, Is.EqualTo(methodA.Name));
+            Assert.That(spans[0].startLine, Is.EqualTo(11));
+            Assert.That(spans[0].endLine, Is.EqualTo(12));
+
+            Assert.That(spans[1].method, Is.EqualTo(methodB.Name));
+            Assert.That(spans[1].startLine, Is.EqualTo(15));
+            Assert.That(spans[1].endLine, Is.EqualTo(15));
+
+            Assert.That(spans[2].method, Is.EqualTo(methodA.Name));
+            Assert.That(spans[2].startLine, Is.EqualTo(20));
+            Assert.That(spans[2].endLine, Is.EqualTo(20));
+        }
+
+        [Test]
+        public void WriteCoverage_WhenEpochChanged_ReturnsObsoleteFailure()
+        {
+            string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_epoch_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(projectRoot);
+            bool origCoverage = Coverage.enabled;
+            try
+            {
+                Coverage.enabled = true;
+                UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 1);
+                GetCoverageHandler.CaptureCoverage("run-epoch-nunit");
+
+                UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 2);
+
+                using (var stream = new MemoryStream())
+                using (var writer = new StreamWriter(stream) { AutoFlush = true })
+                {
+                    GetCoverageHandler.WriteCoverage(new List<string> { Path.Combine(projectRoot, "Assets/Foo.cs") }, projectRoot, writer);
+                    string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                    Assert.That(response, Does.StartWith("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded."));
+                }
+            }
+            finally
+            {
+                Coverage.enabled = origCoverage;
+                GetCoverageHandler.ClearCapturedCoverage();
+                try { Directory.Delete(projectRoot, true); } catch { }
+            }
+        }
+
+        [Test]
+        public void WriteCoverage_WhenQueriedFileModified_ReturnsObsoleteFailure()
+        {
+            string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_stale_" + Guid.NewGuid().ToString("N"));
+            string assetsDir = Path.Combine(projectRoot, "Assets");
+            Directory.CreateDirectory(assetsDir);
+            string csFile = Path.Combine(assetsDir, "Player.cs");
+            File.WriteAllText(csFile, "public class Player {}");
+            bool origCoverage = Coverage.enabled;
+
+            try
+            {
+                Coverage.enabled = true;
+                UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
+
+                GetCoverageHandler.CaptureCoverage("run-stale-nunit");
+
+                File.SetLastWriteTimeUtc(csFile, DateTime.UtcNow.AddHours(1));
+
+                using (var stream = new MemoryStream())
+                using (var writer = new StreamWriter(stream) { AutoFlush = true })
+                {
+                    GetCoverageHandler.WriteCoverage(new List<string> { csFile }, projectRoot, writer);
+                    string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                    Assert.That(response, Does.StartWith("FAILURE Coverage data for 'Assets/Player.cs' is obsolete because the file was modified since coverage was recorded."));
+                }
+            }
+            finally
+            {
+                Coverage.enabled = origCoverage;
+                GetCoverageHandler.ClearCapturedCoverage();
+                try { Directory.Delete(projectRoot, true); } catch { }
+            }
         }
 
         private class TypeWithStaticAndInstanceCtors

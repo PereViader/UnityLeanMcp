@@ -13,6 +13,7 @@ using Xunit;
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("CommandGate")]
 public class CoverageFormattingTests
 {
     [Fact]
@@ -57,6 +58,73 @@ public class CoverageFormattingTests
 
         Assert.Equal(20, spans[3].StartLine);
         Assert.Equal(20, spans[3].EndLine);
+    }
+
+    [Fact]
+    public void FormatUncoveredMethodSpans_EmptyOrNull_ReturnsEmptyString()
+    {
+        Assert.Equal("", UnityTools.FormatUncoveredMethodSpans(null!));
+        Assert.Equal("", UnityTools.FormatUncoveredMethodSpans([]));
+    }
+
+    [Fact]
+    public void FormatUncoveredMethodSpans_SingleMethodSingleSpan_FormatsCorrectly()
+    {
+        var spans = new List<UncoveredMethodSpan>
+        {
+            new() { Method = "MovePlayer", StartLine = 42, EndLine = 50 }
+        };
+        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        Assert.Equal("MovePlayer (42-50)", formatted);
+    }
+
+    [Fact]
+    public void FormatUncoveredMethodSpans_SingleMethodSingleLine_FormatsWithoutHyphen()
+    {
+        var spans = new List<UncoveredMethodSpan>
+        {
+            new() { Method = "TakeDamage", StartLine = 15, EndLine = 15 }
+        };
+        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        Assert.Equal("TakeDamage (15)", formatted);
+    }
+
+    [Fact]
+    public void FormatUncoveredMethodSpans_SingleMethodMultipleSpans_CombinesIntoSingleParenthesizedGroup()
+    {
+        var spans = new List<UncoveredMethodSpan>
+        {
+            new() { Method = "MovePlayer", StartLine = 42, EndLine = 45 },
+            new() { Method = "MovePlayer", StartLine = 48, EndLine = 50 },
+            new() { Method = "MovePlayer", StartLine = 55, EndLine = 55 }
+        };
+        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        Assert.Equal("MovePlayer (42-45, 48-50, 55)", formatted);
+    }
+
+    [Fact]
+    public void FormatUncoveredMethodSpans_MultipleMethods_FormatsCommaSeparated()
+    {
+        var spans = new List<UncoveredMethodSpan>
+        {
+            new() { Method = "MovePlayer", StartLine = 42, EndLine = 50 },
+            new() { Method = "ApplyDamage", StartLine = 78, EndLine = 84 },
+            new() { Method = "Parry", StartLine = 90, EndLine = 90 }
+        };
+        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        Assert.Equal("MovePlayer (42-50), ApplyDamage (78-84), Parry (90)", formatted);
+    }
+
+    [Fact]
+    public void FormatUncoveredMethodSpans_UnnamedMethod_FormatsWithoutMethodName()
+    {
+        var spans = new List<UncoveredMethodSpan>
+        {
+            new() { Method = "", StartLine = 10, EndLine = 12 },
+            new() { Method = "", StartLine = 15, EndLine = 15 }
+        };
+        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        Assert.Equal("10-12, 15", formatted);
     }
 
     [Fact]
@@ -123,6 +191,47 @@ public class CoverageFormattingTests
             Assert.DoesNotContain("file:///", text);
             // Single file output should not produce an aggregate total line
             Assert.DoesNotContain("Total Coverage:", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityCoverage_WithUncoveredMethodSpans_FormatsMethodAnnotatedLines()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.CoverageResultToReturn = new CoverageResult
+            {
+                Success = true,
+                Files =
+                [
+                    new CoverageFileResult
+                    {
+                        Path = "Assets/Scripts/PlayerController.cs",
+                        TotalPoints = 30,
+                        CoveredPoints = 20,
+                        UncoveredLines = [5, 6, 7, 25, 26, 30],
+                        UncoveredSpans =
+                        [
+                            new() { Method = "MovePlayer", StartLine = 5, EndLine = 7 },
+                            new() { Method = "ApplyDamage", StartLine = 25, EndLine = 26 },
+                            new() { Method = "Heal", StartLine = 30, EndLine = 30 }
+                        ]
+                    }
+                ]
+            };
+
+            var result = await tools.UnityCoverageAsync(["Assets/Scripts/PlayerController.cs"]);
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+
+            Assert.Contains("• Assets/Scripts/PlayerController.cs: 66.7% (20/30 points)", text);
+            Assert.Contains("Uncovered lines: MovePlayer (5-7), ApplyDamage (25-26), Heal (30)", text);
+            Assert.DoesNotContain("file:///", text);
         }
         finally
         {
@@ -579,6 +688,158 @@ public class CoverageFormattingTests
         }
     }
 
+    [Theory]
+    [InlineData("<AsyncMethod>d__0", "AsyncMethod")]
+    [InlineData("<YieldEnumeratorMethod>d__1", "YieldEnumeratorMethod")]
+    [InlineData("<SimpleLambdaMethod>b__0", "SimpleLambdaMethod")]
+    [InlineData("<<NestedLambdaMethod>b__0>b__1", "NestedLambdaMethod")]
+    [InlineData("<HostMethod>g__RegularLocal|0_0", "HostMethod.RegularLocal")]
+    [InlineData("<<HostMethod>g__AsyncLocal|0_0>d", "HostMethod.AsyncLocal")]
+    [InlineData("get_AutoProperty", "get_AutoProperty")]
+    [InlineData("set_AutoProperty", "set_AutoProperty")]
+    [InlineData(".ctor", ".ctor")]
+    [InlineData(".cctor", ".cctor")]
+    [InlineData("UnityLeanMcp.ITestCoverageInterface.ExplicitMethod", "ITestCoverageInterface.ExplicitMethod")]
+    public void GetCoverageHandler_DemangleMethodName_HandlesAllRoslynPatterns(string rawName, string expected)
+    {
+        string demangled = GetCoverageHandler.DemangleMethodName(rawName);
+        Assert.Equal(expected, demangled);
+    }
+
+    [Fact]
+    public void GetCoverageHandler_ComputeUncoveredSpans_GroupsByMethodAndOrdersByLine()
+    {
+        var methodA = typeof(CoverageFormattingTests).GetMethod(nameof(GetCoverageHandler_ComputeUncoveredSpans_GroupsByMethodAndOrdersByLine))!;
+        var methodB = typeof(CoverageFormattingTests).GetMethod(nameof(FormatUncoveredMethodSpans_EmptyOrNull_ReturnsEmptyString))!;
+
+        var points = new List<UnityEngine.TestTools.CoveredSequencePoint>
+        {
+            new() { method = methodA, line = 10, hitCount = 1 },
+            new() { method = methodA, line = 11, hitCount = 0 },
+            new() { method = methodA, line = 12, hitCount = 0 },
+            new() { method = methodA, line = 13, hitCount = 1 },
+            new() { method = methodB, line = 15, hitCount = 0 },
+            new() { method = methodB, line = 16, hitCount = 0 },
+            new() { method = methodA, line = 20, hitCount = 0 }
+        };
+
+        var spans = GetCoverageHandler.ComputeUncoveredSpans(points);
+        Assert.Equal(3, spans.Count);
+
+        Assert.Equal(methodA.Name, spans[0].method);
+        Assert.Equal(11, spans[0].startLine);
+        Assert.Equal(12, spans[0].endLine);
+
+        Assert.Equal(methodB.Name, spans[1].method);
+        Assert.Equal(15, spans[1].startLine);
+        Assert.Equal(16, spans[1].endLine);
+
+        Assert.Equal(methodA.Name, spans[2].method);
+        Assert.Equal(20, spans[2].startLine);
+        Assert.Equal(20, spans[2].endLine);
+    }
+
+    [Fact]
+    public void GetCoverageHandler_WriteCoverage_WhenScriptsRecompiled_ReturnsObsoleteFailure()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_epoch_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectRoot);
+        bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+        try
+        {
+            UnityEngine.TestTools.Coverage.enabled = true;
+            UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 5);
+            GetCoverageHandler.CaptureCoverage("run-epoch-test");
+
+            // Simulate recompilation occurring after capture
+            UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 6);
+
+            using var stream = new MemoryStream();
+            using var writer = new StreamWriter(stream) { AutoFlush = true };
+            GetCoverageHandler.WriteCoverage([Path.Combine(projectRoot, "Assets/Foo.cs")], projectRoot, writer);
+
+            string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+            Assert.StartsWith("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded.", response);
+        }
+        finally
+        {
+            UnityEngine.TestTools.Coverage.enabled = origCoverage;
+            GetCoverageHandler.ClearCapturedCoverage();
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void GetCoverageHandler_WriteCoverage_WhenQueriedFileModified_ReturnsObsoleteFailure()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_stale_" + Guid.NewGuid().ToString("N"));
+        string assetsDir = Path.Combine(projectRoot, "Assets");
+        Directory.CreateDirectory(assetsDir);
+        string csFile = Path.Combine(assetsDir, "Player.cs");
+        File.WriteAllText(csFile, "public class Player {}");
+        bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+
+        try
+        {
+            UnityEngine.TestTools.Coverage.enabled = true;
+            UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
+
+            // Mock sequence point for Player.cs
+            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = _ => new[]
+            {
+                new UnityEngine.TestTools.CoveredSequencePoint { filename = csFile, line = 1, hitCount = 1 }
+            };
+
+            GetCoverageHandler.CaptureCoverage("run-stale-test");
+
+            // Simulate file edit after capture: set file write time to 1 hour in the future
+            File.SetLastWriteTimeUtc(csFile, DateTime.UtcNow.AddHours(1));
+
+            using var stream = new MemoryStream();
+            using var writer = new StreamWriter(stream) { AutoFlush = true };
+            GetCoverageHandler.WriteCoverage([csFile], projectRoot, writer);
+
+            string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+            Assert.StartsWith("FAILURE Coverage data for 'Assets/Player.cs' is obsolete because the file was modified since coverage was recorded.", response);
+        }
+        finally
+        {
+            UnityEngine.TestTools.Coverage.enabled = origCoverage;
+            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = null;
+            GetCoverageHandler.ClearCapturedCoverage();
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void GetCoverageHandler_WriteCoverage_WhenCompilingInProgress_ReturnsObsoleteFailure()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_compiling_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectRoot);
+        bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+        try
+        {
+            UnityEngine.TestTools.Coverage.enabled = true;
+            UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
+            GetCoverageHandler.CaptureCoverage("run-compiling-test");
+
+            UnityEditor.EditorApplication.isCompiling = true;
+
+            using var stream = new MemoryStream();
+            using var writer = new StreamWriter(stream) { AutoFlush = true };
+            GetCoverageHandler.WriteCoverage([Path.Combine(projectRoot, "Assets/Foo.cs")], projectRoot, writer);
+
+            string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+            Assert.StartsWith("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded.", response);
+        }
+        finally
+        {
+            UnityEngine.TestTools.Coverage.enabled = origCoverage;
+            UnityEditor.EditorApplication.isCompiling = false;
+            GetCoverageHandler.ClearCapturedCoverage();
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
 
     private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()
     {
