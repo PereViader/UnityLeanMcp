@@ -32,6 +32,8 @@ namespace UnityLeanMcp.Mcp.Tests
             PrefabUtility.GetPropertyModificationsFunc = null;
             PrefabUtility.GetAddedComponentsFunc = null;
             PrefabUtility.GetRemovedComponentsFunc = null;
+            PrefabStageUtility.GetCurrentPrefabStageFunc = null;
+            EditorSettings.prefabModeAllowAutoSave = true;
             SerializedObject.CustomProperties.Clear();
         }
 
@@ -53,6 +55,8 @@ namespace UnityLeanMcp.Mcp.Tests
             PrefabUtility.GetPropertyModificationsFunc = null;
             PrefabUtility.GetAddedComponentsFunc = null;
             PrefabUtility.GetRemovedComponentsFunc = null;
+            PrefabStageUtility.GetCurrentPrefabStageFunc = null;
+            EditorSettings.prefabModeAllowAutoSave = true;
             SerializedObject.CustomProperties.Clear();
         }
 
@@ -213,6 +217,237 @@ namespace UnityLeanMcp.Mcp.Tests
 
             Assert.Contains("SpecialRoot [active]", result);
             Assert.Contains("  SpecialChild [active]", result);
+        }
+
+        [Fact]
+        public void PrefabStage_WhenNoStageOpen_ReturnsCleanNotification()
+        {
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => null;
+
+            string result = Inspect.PrefabStage();
+
+            Assert.Equal("(No active Prefab Stage open in Editor)", result);
+        }
+
+        [Fact]
+        public void PrefabStage_WhenStageOpen_ReturnsMetadataAndHierarchy()
+        {
+            var rootGo = new GameObject("Hero");
+            rootGo.activeSelf = true;
+            rootGo.AddComponent<Collider>();
+
+            var childGo = new GameObject("Shield");
+            childGo.activeSelf = true;
+            rootGo.transform.AddChild(childGo.transform);
+
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Hero.prefab",
+                mode = PrefabStage.Mode.InIsolation,
+                prefabContentsRoot = rootGo,
+                scene = new Scene { isDirty = false },
+                autoSave = true
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            string result = Inspect.PrefabStage();
+
+            Assert.Contains("Active Prefab Stage:", result);
+            Assert.Contains("Asset Path: Assets/Prefabs/Hero.prefab", result);
+            Assert.Contains("Mode: InIsolation", result);
+            Assert.Contains("Root GameObject: \"Hero\"", result);
+            Assert.Contains("Is Dirty: false", result);
+            Assert.Contains("Auto Save: true", result);
+            Assert.Contains("Hierarchy:", result);
+            Assert.Contains("Hero [active] [Transform, Collider]", result);
+            Assert.Contains("Shield [active] [Transform]", result);
+        }
+
+        [Fact]
+        public void PrefabStage_WhenDirtyAndAutoSaveFalse_ReportsCorrectFlags()
+        {
+            var rootGo = new GameObject("Enemy");
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Enemy.prefab",
+                mode = PrefabStage.Mode.InContext,
+                prefabContentsRoot = rootGo,
+                scene = new Scene { isDirty = true },
+                autoSave = false
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            string result = Inspect.PrefabStage();
+
+            Assert.Contains("Mode: InContext", result);
+            Assert.Contains("Is Dirty: true", result);
+            Assert.Contains("Auto Save: false", result);
+        }
+
+        [Fact]
+        public void PrefabStage_WhenRootNull_ReportsNoRootGameObject()
+        {
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Corrupt.prefab",
+                mode = PrefabStage.Mode.InIsolation,
+                prefabContentsRoot = null,
+                scene = new Scene { isDirty = false },
+                autoSave = true
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            string result = Inspect.PrefabStage();
+
+            Assert.Contains("Root GameObject: \"(null)\"", result);
+            Assert.Contains("Hierarchy: (No root GameObject)", result);
+        }
+
+        [Fact]
+        public void SceneState_WhenPrefabStageOpen_IncludesPrefabStageSectionAndScenes()
+        {
+            var rootGo = new GameObject("Hero");
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Hero.prefab",
+                mode = PrefabStage.Mode.InIsolation,
+                prefabContentsRoot = rootGo,
+                scene = new Scene { isDirty = false },
+                autoSave = true
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            var scene = new Scene
+            {
+                handle = 1,
+                name = "MainScene",
+                path = "Assets/Scenes/Main.unity",
+                isLoaded = true,
+                isDirty = false,
+                RootObjects = new List<GameObject> { new GameObject("Ground") }
+            };
+            SceneManager.Scenes.Add(scene);
+
+            string result = Inspect.SceneState();
+
+            Assert.Contains("Active Prefab Stage:", result);
+            Assert.Contains("Asset Path: Assets/Prefabs/Hero.prefab", result);
+            Assert.Contains("Root GameObject: \"Hero\"", result);
+            Assert.Contains("Active Scene: \"MainScene\"", result);
+            Assert.Contains("Loaded Scenes (1):", result);
+        }
+
+        [Fact]
+        public void SceneState_WhenPrefabStageOpenAndNoScenesLoaded_ReportsPrefabStageMetadata()
+        {
+            var rootGo = new GameObject("Hero");
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Hero.prefab",
+                mode = PrefabStage.Mode.InIsolation,
+                prefabContentsRoot = rootGo,
+                scene = new Scene { isDirty = true },
+                autoSave = false
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            string result = Inspect.SceneState();
+
+            Assert.Contains("Active Prefab Stage:", result);
+            Assert.Contains("Asset Path: Assets/Prefabs/Hero.prefab", result);
+            Assert.Contains("Is Dirty: true", result);
+            Assert.Contains("Auto Save: false", result);
+            Assert.DoesNotContain("Loaded Scenes", result);
+        }
+
+        [Fact]
+        public void Hierarchy_WhenPrefabStageOpen_IncludesPrefabStageHierarchy()
+        {
+            var heroGo = new GameObject("Hero");
+            var weaponGo = new GameObject("Sword");
+            heroGo.transform.AddChild(weaponGo.transform);
+
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Hero.prefab",
+                prefabContentsRoot = heroGo,
+                scene = new Scene { isDirty = false },
+                autoSave = true
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            var sceneGo = new GameObject("Environment");
+            var scene = new Scene
+            {
+                name = "MainScene",
+                isLoaded = true,
+                RootObjects = new List<GameObject> { sceneGo }
+            };
+            SceneManager.Scenes.Add(scene);
+
+            string result = Inspect.Hierarchy();
+
+            Assert.Contains("=== Prefab Stage: \"Hero\" (Asset: \"Assets/Prefabs/Hero.prefab\") ===", result);
+            Assert.Contains("Hero [active] [Transform]", result);
+            Assert.Contains("  Sword [active] [Transform]", result);
+            Assert.Contains("=== Scene: \"MainScene\" (roots: 1) ===", result);
+            Assert.Contains("Environment [active] [Transform]", result);
+        }
+
+        [Fact]
+        public void Hierarchy_WhenPrefabStageOpenWithNoScenes_ReturnsPrefabStageHierarchyOnly()
+        {
+            var heroGo = new GameObject("Hero");
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Hero.prefab",
+                prefabContentsRoot = heroGo,
+                scene = new Scene { isDirty = false },
+                autoSave = true
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            string result = Inspect.Hierarchy();
+
+            Assert.Contains("=== Prefab Stage: \"Hero\" (Asset: \"Assets/Prefabs/Hero.prefab\") ===", result);
+            Assert.Contains("Hero [active] [Transform]", result);
+            Assert.DoesNotContain("=== Scene:", result);
+        }
+
+        [Fact]
+        public void Hierarchy_ByPrefabStageNameOrAssetPath_MatchesActivePrefabStage()
+        {
+            var heroGo = new GameObject("Hero");
+            var stage = new PrefabStage
+            {
+                assetPath = "Assets/Prefabs/Hero.prefab",
+                prefabContentsRoot = heroGo,
+                scene = new Scene { isDirty = false },
+                autoSave = true
+            };
+            PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+            string resByName = Inspect.Hierarchy("Hero");
+            Assert.Contains("=== Prefab Stage: \"Hero\" (Asset: \"Assets/Prefabs/Hero.prefab\") ===", resByName);
+
+            string resByFile = Inspect.Hierarchy("Hero.prefab");
+            Assert.Contains("=== Prefab Stage: \"Hero\" (Asset: \"Assets/Prefabs/Hero.prefab\") ===", resByFile);
+
+            string resByPath = Inspect.Hierarchy("Assets/Prefabs/Hero.prefab");
+            Assert.Contains("=== Prefab Stage: \"Hero\" (Asset: \"Assets/Prefabs/Hero.prefab\") ===", resByPath);
+
+            string resByKeyword = Inspect.Hierarchy("Prefab");
+            Assert.Contains("=== Prefab Stage: \"Hero\" (Asset: \"Assets/Prefabs/Hero.prefab\") ===", resByKeyword);
+        }
+
+        [Fact]
+        public void InspectHelp_IncludesPrefabStageUnderSceneAndHierarchy()
+        {
+            string help = Inspect.Help();
+
+            Assert.Contains("Scene & Hierarchy:", help);
+            Assert.Contains("• string PrefabStage()", help);
+            Assert.Contains("• string PrefabStage(int maxDepth, int maxItems = 100)", help);
         }
 
         #endregion

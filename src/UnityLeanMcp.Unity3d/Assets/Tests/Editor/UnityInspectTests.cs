@@ -245,5 +245,21 @@ namespace UnityLeanMcpTests
                 Assert.IsFalse(result.Contains("is not currently loaded"));
             }
         }
+
+        [Test]
+        public void PrefabStage_WhenNoPrefabOpen_ReturnsCleanNotification()
+        {
+            string result = Inspect.PrefabStage();
+            Assert.AreEqual("(No active Prefab Stage open in Editor)", result);
+        }
+
+        [Test]
+        public void SceneState_ReturnsFormattedSceneState()
+        {
+            string result = Inspect.SceneState();
+            Assert.IsNotNull(result);
+            StringAssert.Contains("Active Scene:", result);
+            StringAssert.Contains("Loaded Scenes", result);
+        }
     }
 }

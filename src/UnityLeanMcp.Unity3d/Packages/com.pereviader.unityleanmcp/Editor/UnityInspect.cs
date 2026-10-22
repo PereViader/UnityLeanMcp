@@ -94,13 +94,40 @@ namespace UnityLeanMcp
         }
 
         /// <summary>
-        /// Inspects the hierarchy of a specific loaded scene by name or path.
+        /// Inspects the hierarchy of a specific loaded scene by name or path, or the active Prefab Stage.
         /// </summary>
         public static string Hierarchy(string sceneName, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
         {
             if (string.IsNullOrWhiteSpace(sceneName))
             {
                 return Hierarchy(root: (GameObject)null, maxDepth: maxDepth, maxItems: maxItems);
+            }
+
+            string cleanQuery = sceneName.Trim().Replace('\\', '/');
+            string cleanNameWithoutExt = Path.GetFileNameWithoutExtension(cleanQuery);
+
+            PrefabStage stage = null;
+            try
+            {
+                stage = PrefabStageUtility.GetCurrentPrefabStage();
+            }
+            catch { }
+
+            if (stage != null)
+            {
+                string stageAssetPath = GetPrefabStageAssetPath(stage).Replace('\\', '/');
+                string stageFileNameWithoutExt = Path.GetFileNameWithoutExtension(stageAssetPath);
+                string rootName = stage.prefabContentsRoot != null ? stage.prefabContentsRoot.name : null;
+
+                if (string.Equals(cleanQuery, "Prefab", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cleanQuery, "PrefabStage", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cleanQuery, "Prefab Stage", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cleanQuery, stageAssetPath, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cleanNameWithoutExt, stageFileNameWithoutExt, StringComparison.OrdinalIgnoreCase) ||
+                    (!string.IsNullOrEmpty(rootName) && string.Equals(cleanQuery, rootName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return InspectPrefabStageHierarchy(stage, maxDepth, maxItems);
+                }
             }
 
             Scene targetScene = default;
@@ -111,9 +138,6 @@ namespace UnityLeanMcp
                 count = SceneManager.sceneCount;
             }
             catch { }
-
-            string cleanQuery = sceneName.Trim().Replace('\\', '/');
-            string cleanNameWithoutExt = Path.GetFileNameWithoutExtension(cleanQuery);
 
             for (int i = 0; i < count; i++)
             {
@@ -183,13 +207,43 @@ namespace UnityLeanMcp
             }
             catch { }
 
-            if (sceneCount == 0)
+            PrefabStage stage = null;
+            try
+            {
+                stage = PrefabStageUtility.GetCurrentPrefabStage();
+            }
+            catch { }
+
+            if (stage == null && sceneCount == 0)
             {
                 return "(No scenes currently loaded)";
             }
 
+            if (stage != null)
+            {
+                string assetPath = GetPrefabStageAssetPath(stage);
+                var stageRoot = stage.prefabContentsRoot;
+                string rootName = stageRoot != null ? stageRoot.name : (!string.IsNullOrEmpty(assetPath) ? Path.GetFileNameWithoutExtension(assetPath) : "(empty)");
+
+                sb.AppendLine($"=== Prefab Stage: \"{rootName}\" (Asset: \"{assetPath}\") ===");
+
+                if (stageRoot != null && stageRoot.transform != null)
+                {
+                    TraverseHierarchy(stageRoot.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                }
+                else
+                {
+                    sb.AppendLine("Prefab Stage (0 root GameObjects - empty prefab)");
+                }
+            }
+
             for (int s = 0; s < sceneCount; s++)
             {
+                if (itemCount >= maxItems)
+                {
+                    break;
+                }
+
                 Scene scene;
                 try
                 {
@@ -206,7 +260,7 @@ namespace UnityLeanMcp
                     continue;
                 }
 
-                if (sceneCount > 1)
+                if (stage != null || sceneCount > 1)
                 {
                     sb.AppendLine($"=== Scene: \"{scene.name}\" (roots: {scene.rootCount}) ===");
                 }
@@ -242,16 +296,13 @@ namespace UnityLeanMcp
                         TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
                     }
                 }
-
-                if (itemCount >= maxItems)
-                {
-                    break;
-                }
             }
 
             if (sb.Length == 0)
             {
-                return "(No GameObjects found in loaded scenes)";
+                return stage != null
+                    ? "(No GameObjects found in Prefab Stage or loaded scenes)"
+                    : "(No GameObjects found in loaded scenes)";
             }
 
             return LimitOutput(sb.ToString().TrimEnd());
@@ -308,6 +359,32 @@ namespace UnityLeanMcp
             {
                 return $"Scene \"{scene.name}\" (0 valid root GameObjects)";
             }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        private static string InspectPrefabStageHierarchy(PrefabStage stage, int maxDepth, int maxItems)
+        {
+            maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
+            maxItems = Math.Max(1, maxItems);
+
+            string assetPath = GetPrefabStageAssetPath(stage);
+            var rootGo = stage.prefabContentsRoot;
+            string rootName = rootGo != null ? rootGo.name : (!string.IsNullOrEmpty(assetPath) ? Path.GetFileNameWithoutExtension(assetPath) : "(empty)");
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"=== Prefab Stage: \"{rootName}\" (Asset: \"{assetPath}\") ===");
+
+            if (rootGo == null || rootGo.transform == null)
+            {
+                sb.AppendLine("Prefab Stage (0 root GameObjects - empty prefab)");
+                return sb.ToString().TrimEnd();
+            }
+
+            int itemCount = 0;
+            bool itemLimitReached = false;
+            var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
+            TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
 
             return LimitOutput(sb.ToString().TrimEnd());
         }
@@ -755,10 +832,18 @@ namespace UnityLeanMcp
         }
 
         /// <summary>
-        /// Returns active scene name, path, root GameObject count, isDirty state, and loaded scenes summary.
+        /// Returns active scene name, path, root GameObject count, isDirty state, and loaded scenes summary,
+        /// as well as active Prefab Stage details if open.
         /// </summary>
         public static string SceneState()
         {
+            PrefabStage stage = null;
+            try
+            {
+                stage = PrefabStageUtility.GetCurrentPrefabStage();
+            }
+            catch { }
+
             int sceneCount = 0;
             try
             {
@@ -766,9 +851,38 @@ namespace UnityLeanMcp
             }
             catch { }
 
-            if (sceneCount == 0)
+            if (stage == null && sceneCount == 0)
             {
                 return "(No scenes currently loaded)";
+            }
+
+            var sb = new StringBuilder();
+
+            if (stage != null)
+            {
+                string stageAssetPath = GetPrefabStageAssetPath(stage);
+                string mode = stage.mode.ToString();
+                var stageRoot = stage.prefabContentsRoot;
+                string stageRootName = stageRoot != null ? stageRoot.name : "(null)";
+                bool isDirty = GetPrefabStageDirty(stage);
+                bool autoSave = GetPrefabStageAutoSave(stage);
+
+                sb.AppendLine("Active Prefab Stage:");
+                sb.AppendLine($"  Asset Path: {stageAssetPath}");
+                sb.AppendLine($"  Mode: {mode}");
+                sb.AppendLine($"  Root GameObject: \"{stageRootName}\"");
+                sb.AppendLine($"  Is Dirty: {(isDirty ? "true" : "false")}");
+                sb.AppendLine($"  Auto Save: {(autoSave ? "true" : "false")}");
+
+                if (sceneCount > 0)
+                {
+                    sb.AppendLine();
+                }
+            }
+
+            if (sceneCount == 0 && stage != null)
+            {
+                return LimitOutput(sb.ToString().TrimEnd());
             }
 
             Scene activeScene = default;
@@ -778,7 +892,6 @@ namespace UnityLeanMcp
             }
             catch { }
 
-            var sb = new StringBuilder();
             string activeName = !string.IsNullOrEmpty(activeScene.name) ? activeScene.name : "(Untitled)";
             string activePath = !string.IsNullOrEmpty(activeScene.path) ? activeScene.path : "(Unsaved)";
 
@@ -813,6 +926,150 @@ namespace UnityLeanMcp
             }
 
             return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Inspects the currently active Prefab Stage in the Unity Editor, returning its asset path,
+        /// stage mode, root GameObject, dirty state, auto-save status, and internal hierarchy.
+        /// Returns a notification if no Prefab Stage is open.
+        /// </summary>
+        public static string PrefabStage()
+        {
+            return PrefabStage(DefaultMaxDepth, DefaultMaxItems);
+        }
+
+        /// <summary>
+        /// Inspects the currently active Prefab Stage with custom depth and item limits.
+        /// </summary>
+        public static string PrefabStage(int maxDepth, int maxItems = DefaultMaxItems)
+        {
+            PrefabStage stage = null;
+            try
+            {
+                stage = PrefabStageUtility.GetCurrentPrefabStage();
+            }
+            catch { }
+
+            if (stage == null)
+            {
+                return "(No active Prefab Stage open in Editor)";
+            }
+
+            maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
+            maxItems = Math.Max(1, maxItems);
+
+            string assetPath = GetPrefabStageAssetPath(stage);
+            string mode = stage.mode.ToString();
+            var rootGo = stage.prefabContentsRoot;
+            string rootName = rootGo != null ? rootGo.name : "(null)";
+            bool isDirty = GetPrefabStageDirty(stage);
+            bool autoSave = GetPrefabStageAutoSave(stage);
+
+            var sb = new StringBuilder();
+            sb.AppendLine("Active Prefab Stage:");
+            sb.AppendLine($"  Asset Path: {assetPath}");
+            sb.AppendLine($"  Mode: {mode}");
+            sb.AppendLine($"  Root GameObject: \"{rootName}\"");
+            sb.AppendLine($"  Is Dirty: {(isDirty ? "true" : "false")}");
+            sb.AppendLine($"  Auto Save: {(autoSave ? "true" : "false")}");
+
+            if (rootGo != null && rootGo.transform != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine("Hierarchy:");
+                int itemCount = 0;
+                bool itemLimitReached = false;
+                var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
+                TraverseHierarchy(rootGo.transform, 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+            }
+            else
+            {
+                sb.AppendLine();
+                sb.AppendLine("Hierarchy: (No root GameObject)");
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        private static string GetPrefabStageAssetPath(PrefabStage stage)
+        {
+            if (stage == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                if (!string.IsNullOrEmpty(stage.assetPath))
+                {
+                    return stage.assetPath.Replace('\\', '/');
+                }
+            }
+            catch { }
+
+            try
+            {
+                var prop = typeof(PrefabStage).GetProperty("prefabAssetPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (prop != null)
+                {
+                    var val = prop.GetValue(stage, null) as string;
+                    if (!string.IsNullOrEmpty(val))
+                    {
+                        return val.Replace('\\', '/');
+                    }
+                }
+            }
+            catch { }
+
+            return "(Unknown)";
+        }
+
+        private static bool GetPrefabStageDirty(PrefabStage stage)
+        {
+            if (stage == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return stage.scene.isDirty;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool GetPrefabStageAutoSave(PrefabStage stage)
+        {
+            if (stage == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                var prop = typeof(PrefabStage).GetProperty("autoSave", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (prop != null)
+                {
+                    var val = prop.GetValue(stage, null);
+                    if (val is bool b)
+                    {
+                        return b;
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                return EditorSettings.prefabModeAllowAutoSave;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         #endregion
@@ -2469,6 +2726,7 @@ namespace UnityLeanMcp
                     case nameof(Find):
                     case nameof(MissingScripts):
                     case nameof(SceneState):
+                    case nameof(PrefabStage):
                         cat = "Scene & Hierarchy";
                         break;
                     case nameof(GameObject):

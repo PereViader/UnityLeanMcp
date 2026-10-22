@@ -439,6 +439,10 @@ namespace UnityEditor
     {
         public static bool scriptCompilationFailed;
     }
+    public static class EditorSettings
+    {
+        public static bool prefabModeAllowAutoSave { get; set; } = true;
+    }
     public static class SessionState
     {
         private static readonly Dictionary<string, string> Values = new();
@@ -601,6 +605,28 @@ namespace UnityEditor
         public class RemovedComponent
         {
             public UnityEngine.Component? assetComponent { get; set; }
+        }
+
+        public class PrefabStage
+        {
+            public enum Mode
+            {
+                InIsolation = 0,
+                InContext = 1
+            }
+
+            public string assetPath { get; set; } = string.Empty;
+            public string prefabAssetPath { get; set; } = string.Empty;
+            public UnityEngine.GameObject? prefabContentsRoot { get; set; }
+            public UnityEngine.SceneManagement.Scene scene { get; set; }
+            public Mode mode { get; set; } = Mode.InIsolation;
+            public bool autoSave { get; set; } = true;
+        }
+
+        public static class PrefabStageUtility
+        {
+            public static Func<PrefabStage?>? GetCurrentPrefabStageFunc;
+            public static PrefabStage? GetCurrentPrefabStage() => GetCurrentPrefabStageFunc?.Invoke();
         }
     }
 

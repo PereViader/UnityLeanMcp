@@ -27,10 +27,11 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 
 | Category | Method | Description |
 | :--- | :--- | :--- |
-| **Scene & Hierarchy** | `Inspect.Hierarchy([root], [maxDepth], [maxItems])` | Formatted hierarchy tree of active or all loaded scenes, a root `GameObject`/`Transform`, or a scene by name. |
+| **Scene & Hierarchy** | `Inspect.Hierarchy([root], [maxDepth], [maxItems])` | Formatted hierarchy tree of active/loaded scenes, open Prefab Stage, a root `GameObject`/`Transform`, or a scene/prefab by name. |
+| | `Inspect.PrefabStage([maxDepth], [maxItems])` | Inspects active Prefab Stage (asset path, mode, root GameObject, dirty state, auto-save status, and contents hierarchy). |
 | | `Inspect.Find(namePattern, [includeInactive], [maxItems])` | Finds GameObjects across loaded scenes by exact name or wildcard glob pattern (e.g. `*Player*`). |
 | | `Inspect.MissingScripts([maxItems])` | Detects GameObjects with missing or unassigned MonoBehaviour scripts. |
-| | `Inspect.SceneState()` | Summarizes loaded scenes, active scene, root object count, dirty state, and PlayMode state. |
+| | `Inspect.SceneState()` | Summarizes loaded scenes, active scene, active Prefab Stage (if open), root object count, and dirty state. |
 | **Objects & Components** | `Inspect.GameObject(gameObject, [maxItems])` | Detailed inspection of active state, tag, layer, components, and children. |
 | | `Inspect.Component(component, [maxItems])` | Serialized fields and properties without instantiating copies or mutating state. |
 | | `Inspect.Object(target, [maxDepth], [maxItems])` | General reflection-based inspection of arbitrary C# objects or collections. |
@@ -48,6 +49,9 @@ Call these directly inside `unity_eval`:
 ```csharp
 // Inspect scene hierarchy up to depth 3
 return Inspect.Hierarchy(maxDepth: 3);
+
+// Inspect the currently active Prefab Stage
+return Inspect.PrefabStage();
 
 // Find GameObjects by wildcard pattern
 return Inspect.Find("*Player*");
