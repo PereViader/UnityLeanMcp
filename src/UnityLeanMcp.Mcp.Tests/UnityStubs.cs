@@ -53,6 +53,9 @@ namespace UnityEngine
             }
         }
 
+        public static void DestroyImmediate(Object? obj, bool allowDestroyingAssets) => DestroyImmediate(obj);
+        public static void Destroy(Object? obj) => DestroyImmediate(obj);
+
         public static Func<Type, object[]>? FindObjectsOfTypeFunc;
 
         public static T? FindObjectOfType<T>() where T : Object
@@ -259,6 +262,42 @@ namespace UnityEngine
     public class Rigidbody : Component { }
     public class Material : Object { }
 
+    public static class Mathf
+    {
+        public static int Clamp(int value, int min, int max) => Math.Max(min, Math.Min(max, value));
+        public static float Clamp(float value, float min, float max) => Math.Max(min, Math.Min(max, value));
+    }
+
+    public class Texture : Object { }
+    public enum TextureFormat { RGB24, RGBA32 }
+    public class Texture2D : Texture
+    {
+        public int width { get; set; }
+        public int height { get; set; }
+        public Texture2D(int width, int height, TextureFormat format = TextureFormat.RGBA32, bool mipChain = false)
+        {
+            this.width = width;
+            this.height = height;
+        }
+        public void ReadPixels(Rect source, int destX, int destY, bool recalculateMipMaps = true) { }
+        public void Apply(bool updateMipmaps = true, bool makeNoLongerReadable = false) { }
+        public byte[] EncodeToPNG() => new byte[128];
+    }
+
+    public enum RenderTextureFormat { Default }
+    public enum RenderTextureReadWrite { Default }
+    public class RenderTexture : Texture
+    {
+        public static RenderTexture? active { get; set; }
+        public int width { get; set; }
+        public int height { get; set; }
+        public static RenderTexture GetTemporary(int width, int height, int depthBuffer = 0, RenderTextureFormat format = RenderTextureFormat.Default, RenderTextureReadWrite readWrite = RenderTextureReadWrite.Default)
+        {
+            return new RenderTexture { width = width, height = height };
+        }
+        public static void ReleaseTemporary(RenderTexture temp) { }
+    }
+
     public class Camera : Behaviour
     {
         public static Camera? main;
@@ -279,6 +318,8 @@ namespace UnityEngine
         public int cullingMask { get; set; } = -1;
         public float depth { get; set; } = 0f;
         public string renderingPath { get; set; } = "UsePlayerSettings";
+        public RenderTexture? targetTexture { get; set; }
+        public void Render() { }
     }
 
     public class GameObject : Object
@@ -366,6 +407,7 @@ namespace UnityEngine
     public static class Application
     {
         public static string unityVersion { get; set; } = "6000.7.0f1";
+        public static bool isPlaying { get; set; } = false;
         public delegate void LogCallback(string condition, string stackTrace, LogType type);
         public static event LogCallback? logMessageReceivedThreaded { add { } remove { } }
     }
@@ -376,6 +418,27 @@ namespace UnityEngine
         public static void LogError(object? message) { }
         public static void LogWarning(object? message) { }
         public static void LogException(Exception? exception) { }
+    }
+}
+
+namespace UnityEngine.Rendering
+{
+    public static class GraphicsSettings
+    {
+        public static RenderPipelineAsset? currentRenderPipeline { get; set; }
+    }
+
+    public class RenderPipelineAsset : Object { }
+
+    public static class RenderPipeline
+    {
+        public class StandardRequest
+        {
+            public RenderTexture? destination;
+        }
+
+        public static bool SupportsRenderRequest(Camera camera, StandardRequest data) => false;
+        public static void SubmitRenderRequest(Camera camera, StandardRequest data) { }
     }
 }
 
@@ -460,6 +523,13 @@ namespace UnityEditor
         public static void EraseInt(string key) => IntValues.Remove(key);
     }
     public class Editor { }
+    public class SceneView
+    {
+        public static SceneView? lastActiveSceneView { get; set; }
+        public static readonly List<SceneView> SceneViewsList = new();
+        public static System.Collections.ArrayList sceneViews => new System.Collections.ArrayList(SceneViewsList);
+        public UnityEngine.Camera? camera { get; set; }
+    }
     public static class EditorApplication
     {
         public static bool isCompiling;

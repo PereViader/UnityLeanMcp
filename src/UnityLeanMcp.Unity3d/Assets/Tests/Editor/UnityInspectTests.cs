@@ -11,6 +11,7 @@ namespace UnityLeanMcpTests
     public class UnityInspectTests
     {
         private readonly List<GameObject> m_CreatedObjects = new List<GameObject>();
+        private readonly List<string> m_CreatedFiles = new List<string>();
 
         [TearDown]
         public void Teardown()
@@ -24,6 +25,19 @@ namespace UnityLeanMcpTests
             }
             m_CreatedObjects.Clear();
             Selection.activeObject = null;
+
+            foreach (var file in m_CreatedFiles)
+            {
+                try
+                {
+                    if (System.IO.File.Exists(file))
+                    {
+                        System.IO.File.Delete(file);
+                    }
+                }
+                catch { }
+            }
+            m_CreatedFiles.Clear();
         }
 
         private GameObject CreateTestGameObject(string name)
@@ -260,6 +274,104 @@ namespace UnityLeanMcpTests
             Assert.IsNotNull(result);
             StringAssert.Contains("Active Scene:", result);
             StringAssert.Contains("Loaded Scenes", result);
+        }
+
+        [Test]
+        public void CaptureCamera_DefaultCamera_SavesPngAndReturnsSummary()
+        {
+            string outputPath = "Temp/test_inspect_cam_default.png";
+            m_CreatedFiles.Add(outputPath);
+
+            string result = Inspect.CaptureCamera(outputPath, width: 256, height: 192);
+
+            StringAssert.Contains("Captured camera", result);
+            StringAssert.Contains("(256x192,", result);
+            StringAssert.Contains("Temp/test_inspect_cam_default.png", result);
+            Assert.IsTrue(System.IO.File.Exists(outputPath));
+            Assert.Greater(new System.IO.FileInfo(outputPath).Length, 0);
+        }
+
+        [Test]
+        public void CaptureCamera_CustomCameraAndOutputPath_SavesPngAtCustomPath()
+        {
+            string outputPath = "Temp/SubFolder/test_inspect_cam_custom.png";
+            m_CreatedFiles.Add(outputPath);
+
+            var camGo = CreateTestGameObject("SpecialAngleCam");
+            var cam = camGo.AddComponent<Camera>();
+
+            string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+            StringAssert.Contains("Captured camera \"SpecialAngleCam\"", result);
+            StringAssert.Contains("(320x240,", result);
+            StringAssert.Contains("Temp/SubFolder/test_inspect_cam_custom.png", result);
+            Assert.IsTrue(System.IO.File.Exists(outputPath));
+            Assert.Greater(new System.IO.FileInfo(outputPath).Length, 0);
+        }
+
+        [Test]
+        public void CaptureCamera_ClampsInvalidDimensions_SavesValidPng()
+        {
+            string outputPath = "Temp/test_inspect_cam_clamped.png";
+            m_CreatedFiles.Add(outputPath);
+
+            string result = Inspect.CaptureCamera(outputPath, width: 5, height: 10000);
+
+            StringAssert.Contains("(16x4096,", result);
+            Assert.IsTrue(System.IO.File.Exists(outputPath));
+        }
+
+        [Test]
+        public void CaptureCamera_CleansUpTextures_DoesNotLeakRenderTextureOrTexture2D()
+        {
+            string outputPath = "Temp/test_inspect_cam_cleanup.png";
+            m_CreatedFiles.Add(outputPath);
+
+            var camGo = CreateTestGameObject("CleanupCam");
+            var cam = camGo.AddComponent<Camera>();
+            cam.tag = "MainCamera";
+
+            var initialActive = RenderTexture.active;
+            var initialTarget = cam.targetTexture;
+
+            string result = Inspect.CaptureCamera(outputPath, width: 128, height: 128, camera: cam);
+
+            Assert.AreEqual(initialActive, RenderTexture.active);
+            Assert.AreEqual(initialTarget, cam.targetTexture);
+            StringAssert.Contains("Captured camera \"CleanupCam\"", result);
+        }
+
+        [Test]
+        public void CaptureSceneView_WhenSceneViewPresent_SavesPngAndReturnsSummary()
+        {
+            string outputPath = "Temp/test_inspect_sceneview.png";
+            m_CreatedFiles.Add(outputPath);
+
+            string result = Inspect.CaptureSceneView(outputPath, width: 256, height: 192);
+
+            Assert.IsNotNull(result);
+            if (result.Contains("(No active SceneView"))
+            {
+                // In headless or batchmode environments without SceneView window
+                Assert.Pass("No SceneView available in this test environment.");
+            }
+            else
+            {
+                StringAssert.Contains("Captured SceneView (256x192,", result);
+                StringAssert.Contains("Temp/test_inspect_sceneview.png", result);
+                Assert.IsTrue(System.IO.File.Exists(outputPath));
+                Assert.Greater(new System.IO.FileInfo(outputPath).Length, 0);
+            }
+        }
+
+        [Test]
+        public void Inspect_Help_IncludesVisualCaptureCategoryAndMethods()
+        {
+            string help = Inspect.Help();
+
+            StringAssert.Contains("Visual Capture:", help);
+            StringAssert.Contains("CaptureCamera", help);
+            StringAssert.Contains("CaptureSceneView", help);
         }
     }
 }

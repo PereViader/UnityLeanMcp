@@ -13,6 +13,8 @@ namespace UnityLeanMcp.Mcp.Tests
     [Trait("Category", "Unit")]
     public class UnityInspectUnitTests : IDisposable
     {
+        private readonly List<string> _createdFiles = new();
+
         public UnityInspectUnitTests()
         {
             // Reset stubs before each test
@@ -23,6 +25,8 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.gameObjects = Array.Empty<GameObject>();
             Camera.main = null;
             Camera.AllCamerasList.Clear();
+            SceneView.lastActiveSceneView = null;
+            SceneView.SceneViewsList.Clear();
             AssetDatabase.FindAssetsFunc = null;
             AssetDatabase.GUIDToAssetPathFunc = null;
             AssetDatabase.GetMainAssetTypeAtPathFunc = null;
@@ -46,6 +50,8 @@ namespace UnityLeanMcp.Mcp.Tests
             Selection.gameObjects = Array.Empty<GameObject>();
             Camera.main = null;
             Camera.AllCamerasList.Clear();
+            SceneView.lastActiveSceneView = null;
+            SceneView.SceneViewsList.Clear();
             AssetDatabase.FindAssetsFunc = null;
             AssetDatabase.GUIDToAssetPathFunc = null;
             AssetDatabase.GetMainAssetTypeAtPathFunc = null;
@@ -58,6 +64,19 @@ namespace UnityLeanMcp.Mcp.Tests
             PrefabStageUtility.GetCurrentPrefabStageFunc = null;
             EditorSettings.prefabModeAllowAutoSave = true;
             SerializedObject.CustomProperties.Clear();
+
+            foreach (var file in _createdFiles)
+            {
+                try
+                {
+                    if (System.IO.File.Exists(file))
+                    {
+                        System.IO.File.Delete(file);
+                    }
+                }
+                catch { }
+            }
+            _createdFiles.Clear();
         }
 
         #region Hierarchy & Scene Inspection Tests
@@ -816,6 +835,99 @@ namespace UnityLeanMcp.Mcp.Tests
             string c2 = Inspect.MainCamera();
             Assert.Equal(c1, c2);
         }
+
+        #region Visual Capture Tests
+
+        [Fact]
+        public void CaptureCamera_WhenCameraPresent_SavesPngAndReturnsFormattedSummary()
+        {
+            var go = new GameObject("TestCamObj");
+            var cam = go.AddComponent<Camera>();
+            cam.name = "MyRenderCam";
+            Camera.main = cam;
+
+            string outputPath = "Temp/test_inspect_cam_unit.png";
+            _createdFiles.Add(outputPath);
+
+            string result = Inspect.CaptureCamera(outputPath, width: 800, height: 600, camera: cam);
+
+            Assert.Contains("Captured camera \"MyRenderCam\"", result);
+            Assert.Contains("(800x600,", result);
+            Assert.Contains("Temp/test_inspect_cam_unit.png", result);
+            Assert.True(System.IO.File.Exists(outputPath));
+        }
+
+        [Fact]
+        public void CaptureCamera_WhenNoCameraInScene_ReturnsCleanNotification()
+        {
+            Camera.main = null;
+            Camera.AllCamerasList.Clear();
+
+            string result = Inspect.CaptureCamera("Temp/not_used.png");
+
+            Assert.Equal("(No active Camera found in scene to capture)", result);
+        }
+
+        [Fact]
+        public void CaptureCamera_ClampsInvalidDimensions()
+        {
+            var go = new GameObject("ClampCamObj");
+            var cam = go.AddComponent<Camera>();
+            cam.name = "ClampCam";
+            Camera.main = cam;
+
+            string outputPath = "Temp/test_inspect_cam_unit_clamp.png";
+            _createdFiles.Add(outputPath);
+
+            string result = Inspect.CaptureCamera(outputPath, width: 2, height: 8000, camera: cam);
+
+            Assert.Contains("(16x4096,", result);
+            Assert.True(System.IO.File.Exists(outputPath));
+        }
+
+        [Fact]
+        public void CaptureSceneView_WhenSceneViewPresent_SavesPngAndReturnsSummary()
+        {
+            var camGo = new GameObject("SceneCamObj");
+            var cam = camGo.AddComponent<Camera>();
+            cam.name = "SceneCamera";
+
+            var sv = new SceneView { camera = cam };
+            SceneView.lastActiveSceneView = sv;
+
+            string outputPath = "Temp/test_inspect_sceneview_unit.png";
+            _createdFiles.Add(outputPath);
+
+            string result = Inspect.CaptureSceneView(outputPath, width: 640, height: 480);
+
+            Assert.Contains("Captured SceneView (640x480,", result);
+            Assert.Contains("Temp/test_inspect_sceneview_unit.png", result);
+            Assert.True(System.IO.File.Exists(outputPath));
+        }
+
+        [Fact]
+        public void CaptureSceneView_WhenNoSceneView_ReturnsCleanNotification()
+        {
+            SceneView.lastActiveSceneView = null;
+            SceneView.SceneViewsList.Clear();
+
+            string result = Inspect.CaptureSceneView();
+
+            Assert.Equal("(No active SceneView found in Editor to capture)", result);
+        }
+
+        [Fact]
+        public void CaptureSceneView_WhenSceneViewHasNoCamera_ReturnsCleanNotification()
+        {
+            var sv = new SceneView { camera = null };
+            SceneView.lastActiveSceneView = sv;
+
+            string result = Inspect.CaptureSceneView();
+
+            Assert.Equal("(SceneView does not have an active Camera to capture)", result);
+        }
+
+        #endregion
 
         [Fact]
         public void LimitOutput_TruncatesWhenExceedingCharacterCap()
@@ -1873,12 +1985,15 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("Scene & Hierarchy:", help);
             Assert.Contains("Objects & Components:", help);
             Assert.Contains("Assets & Prefabs:", help);
+            Assert.Contains("Visual Capture:", help);
             Assert.Contains("Editor & Tests:", help);
             Assert.Contains("Utilities:", help);
 
             Assert.Contains("• string Find(string namePattern", help);
             Assert.Contains("• string MissingScripts(", help);
             Assert.Contains("• string SceneState()", help);
+            Assert.Contains("• string CaptureCamera(string outputPath = \"Temp/unity_capture.png\", int width = 1024, int height = 768, Camera camera = null)", help);
+            Assert.Contains("• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)", help);
             Assert.Contains("• string Tests(string filter = null", help);
         }
 

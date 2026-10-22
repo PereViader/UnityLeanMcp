@@ -2525,6 +2525,202 @@ namespace UnityLeanMcp
             return LimitOutput(sb.ToString().TrimEnd());
         }
 
+        #region Visual Capture
+
+        /// <summary>
+        /// Captures a frame from a scene Camera or the Main Camera and writes it to disk as a PNG.
+        /// </summary>
+        public static string CaptureCamera(
+            string outputPath = "Temp/unity_capture.png",
+            int width = 1024,
+            int height = 768,
+            Camera camera = null)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                outputPath = "Temp/unity_capture.png";
+            }
+
+            if (camera == null)
+            {
+                try { camera = Camera.main; } catch { }
+            }
+
+            if (camera == null)
+            {
+                try
+                {
+                    if (Camera.allCamerasCount > 0)
+                    {
+                        camera = Camera.allCameras[0];
+                    }
+                }
+                catch { }
+            }
+
+            if (camera == null)
+            {
+                try
+                {
+#if UNITY_2023_1_OR_NEWER
+                    camera = UnityEngine.Object.FindFirstObjectByType<Camera>();
+#else
+                    camera = UnityEngine.Object.FindObjectOfType<Camera>();
+#endif
+                }
+                catch { }
+            }
+
+            if (camera == null)
+            {
+                return "(No active Camera found in scene to capture)";
+            }
+
+            string camName = "Camera";
+            try
+            {
+                camName = !string.IsNullOrEmpty(camera.name) ? camera.name : "Camera";
+            }
+            catch { }
+
+            return CaptureCameraToPng(camera, outputPath, width, height, $"camera \"{camName}\"");
+        }
+
+        /// <summary>
+        /// Captures the active SceneView camera and writes it to disk as a PNG.
+        /// </summary>
+        public static string CaptureSceneView(
+            string outputPath = "Temp/unity_sceneview.png",
+            int width = 1024,
+            int height = 768)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                outputPath = "Temp/unity_sceneview.png";
+            }
+
+            SceneView sceneView = null;
+            try
+            {
+                sceneView = SceneView.lastActiveSceneView;
+                if (sceneView == null && SceneView.sceneViews.Count > 0)
+                {
+                    sceneView = SceneView.sceneViews[0] as SceneView;
+                }
+            }
+            catch { }
+
+            if (sceneView == null)
+            {
+                return "(No active SceneView found in Editor to capture)";
+            }
+
+            Camera cam = null;
+            try
+            {
+                cam = sceneView.camera;
+            }
+            catch { }
+
+            if (cam == null)
+            {
+                return "(SceneView does not have an active Camera to capture)";
+            }
+
+            return CaptureCameraToPng(cam, outputPath, width, height, "SceneView");
+        }
+
+        private static string CaptureCameraToPng(
+            Camera camera,
+            string outputPath,
+            int width,
+            int height,
+            string targetName)
+        {
+            width = Mathf.Clamp(width, 16, 4096);
+            height = Mathf.Clamp(height, 16, 4096);
+
+            string normalizedPath = outputPath.Replace('\\', '/');
+            string fullPath = Path.GetFullPath(outputPath);
+            string dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            RenderTexture rt = null;
+            Texture2D tex = null;
+            RenderTexture prevTarget = camera.targetTexture;
+            RenderTexture prevActive = RenderTexture.active;
+
+            try
+            {
+                rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.Default, RenderTextureReadWrite.Default);
+                camera.targetTexture = rt;
+                RenderTexture.active = rt;
+
+                bool renderedViaRequest = false;
+                try
+                {
+                    if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null)
+                    {
+                        var req = new UnityEngine.Rendering.RenderPipeline.StandardRequest { destination = rt };
+                        if (UnityEngine.Rendering.RenderPipeline.SupportsRenderRequest(camera, req))
+                        {
+                            UnityEngine.Rendering.RenderPipeline.SubmitRenderRequest(camera, req);
+                            renderedViaRequest = true;
+                        }
+                    }
+                }
+                catch
+                {
+                    renderedViaRequest = false;
+                }
+
+                if (!renderedViaRequest)
+                {
+                    camera.Render();
+                }
+
+                tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+
+                byte[] pngBytes = tex.EncodeToPNG();
+                File.WriteAllBytes(fullPath, pngBytes);
+
+                long fileSizeBytes = pngBytes.LongLength;
+                return $"Captured {targetName} ({width}x{height}, {fileSizeBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes) to {normalizedPath}";
+            }
+            catch (Exception ex)
+            {
+                return $"(Failed to capture {targetName}: {ex.Message})";
+            }
+            finally
+            {
+                camera.targetTexture = prevTarget;
+                RenderTexture.active = prevActive;
+
+                if (rt != null)
+                {
+                    RenderTexture.ReleaseTemporary(rt);
+                }
+
+                if (tex != null)
+                {
+                    if (Application.isPlaying)
+                    {
+                        UnityEngine.Object.Destroy(tex);
+                    }
+                    else
+                    {
+                        UnityEngine.Object.DestroyImmediate(tex, false);
+                    }
+                }
+            }
+        }
+
+        #endregion
+
         /// <summary>
         /// Lists available tests in the loaded AppDomain via reflection without running them.
         /// </summary>
@@ -2708,6 +2904,7 @@ namespace UnityLeanMcp
                 ["Scene & Hierarchy"] = new List<MethodInfo>(),
                 ["Objects & Components"] = new List<MethodInfo>(),
                 ["Assets & Prefabs"] = new List<MethodInfo>(),
+                ["Visual Capture"] = new List<MethodInfo>(),
                 ["Editor & Tests"] = new List<MethodInfo>(),
                 ["Utilities"] = new List<MethodInfo>()
             };
@@ -2739,6 +2936,10 @@ namespace UnityLeanMcp
                     case nameof(FindAssets):
                     case nameof(FindPrefabs):
                         cat = "Assets & Prefabs";
+                        break;
+                    case nameof(CaptureCamera):
+                    case nameof(CaptureSceneView):
+                        cat = "Visual Capture";
                         break;
                     case nameof(Selection):
                     case nameof(MainCamera):
