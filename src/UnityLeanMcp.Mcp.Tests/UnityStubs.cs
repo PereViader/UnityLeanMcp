@@ -645,16 +645,31 @@ namespace UnityEditor
     public static class AssetDatabase
     {
         public static Func<string, string[]>? FindAssetsFunc;
+        public static Func<string, string[], string[]>? FindAssetsInFoldersFunc;
         public static Func<string, string>? GUIDToAssetPathFunc;
         public static Func<string, Type>? GetMainAssetTypeAtPathFunc;
         public static Func<UnityEngine.Object, string>? GetAssetPathFunc;
+        public static Func<string, UnityEngine.Object?>? LoadMainAssetAtPathFunc;
+        public static Func<string, string>? AssetPathToGUIDFunc;
+        public static Func<string, bool, string[]>? GetDependenciesFunc;
+        public static Func<string, bool>? IsValidFolderFunc;
 
         public static string[] FindAssets(string filter) => FindAssetsFunc?.Invoke(filter) ?? Array.Empty<string>();
+        public static string[] FindAssets(string filter, string[] searchInFolders) =>
+            FindAssetsInFoldersFunc != null ? FindAssetsInFoldersFunc(filter, searchInFolders) : (FindAssetsFunc?.Invoke(filter) ?? Array.Empty<string>());
         public static string GUIDToAssetPath(string guid) => GUIDToAssetPathFunc?.Invoke(guid) ?? string.Empty;
         public static Type GetMainAssetTypeAtPath(string path) => GetMainAssetTypeAtPathFunc?.Invoke(path) ?? typeof(UnityEngine.Object);
         public static string GetAssetPath(UnityEngine.Object obj) => GetAssetPathFunc?.Invoke(obj) ?? string.Empty;
-        public static UnityEngine.Object? LoadMainAssetAtPath(string path) => new UnityEngine.Object { name = System.IO.Path.GetFileNameWithoutExtension(path) };
-        public static string AssetPathToGUID(string path) => "test_guid_" + Math.Abs(path.GetHashCode()).ToString("x");
+        public static UnityEngine.Object? LoadMainAssetAtPath(string path) =>
+            LoadMainAssetAtPathFunc != null ? LoadMainAssetAtPathFunc(path) : new UnityEngine.Object { name = System.IO.Path.GetFileNameWithoutExtension(path) };
+        public static string AssetPathToGUID(string path) =>
+            AssetPathToGUIDFunc != null ? AssetPathToGUIDFunc(path) : "test_guid_" + Math.Abs(path.GetHashCode()).ToString("x");
+        public static string[] GetDependencies(string pathName, bool recursive = true) =>
+            GetDependenciesFunc?.Invoke(pathName, recursive) ?? Array.Empty<string>();
+        public static string[] GetDependencies(string pathName) =>
+            GetDependencies(pathName, true);
+        public static bool IsValidFolder(string path) =>
+            IsValidFolderFunc?.Invoke(path) ?? false;
     }
 
     public class PropertyModification

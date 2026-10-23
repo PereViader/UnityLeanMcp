@@ -28,9 +28,14 @@ namespace UnityLeanMcp.Mcp.Tests
             SceneView.lastActiveSceneView = null;
             SceneView.SceneViewsList.Clear();
             AssetDatabase.FindAssetsFunc = null;
+            AssetDatabase.FindAssetsInFoldersFunc = null;
             AssetDatabase.GUIDToAssetPathFunc = null;
             AssetDatabase.GetMainAssetTypeAtPathFunc = null;
             AssetDatabase.GetAssetPathFunc = null;
+            AssetDatabase.LoadMainAssetAtPathFunc = null;
+            AssetDatabase.AssetPathToGUIDFunc = null;
+            AssetDatabase.GetDependenciesFunc = null;
+            AssetDatabase.IsValidFolderFunc = null;
             PrefabUtility.IsPartOfAnyPrefabInstanceFunc = null;
             PrefabUtility.GetCorrespondingObjectFromSourceFunc = null;
             PrefabUtility.GetPropertyModificationsFunc = null;
@@ -53,9 +58,14 @@ namespace UnityLeanMcp.Mcp.Tests
             SceneView.lastActiveSceneView = null;
             SceneView.SceneViewsList.Clear();
             AssetDatabase.FindAssetsFunc = null;
+            AssetDatabase.FindAssetsInFoldersFunc = null;
             AssetDatabase.GUIDToAssetPathFunc = null;
             AssetDatabase.GetMainAssetTypeAtPathFunc = null;
             AssetDatabase.GetAssetPathFunc = null;
+            AssetDatabase.LoadMainAssetAtPathFunc = null;
+            AssetDatabase.AssetPathToGUIDFunc = null;
+            AssetDatabase.GetDependenciesFunc = null;
+            AssetDatabase.IsValidFolderFunc = null;
             PrefabUtility.IsPartOfAnyPrefabInstanceFunc = null;
             PrefabUtility.GetCorrespondingObjectFromSourceFunc = null;
             PrefabUtility.GetPropertyModificationsFunc = null;
@@ -683,6 +693,245 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("Asset: \"Test\"", result);
             Assert.Contains("Path: \"Assets/Prefabs/Test.prefab\"", result);
             Assert.Contains("GUID: test_guid_", result);
+        }
+
+        [Fact]
+        public void Dependencies_NullOrWhitespace_ReturnsMissingAssetPathDiagnostic()
+        {
+            Assert.Equal("(Missing asset path)", Inspect.Dependencies(null));
+            Assert.Equal("(Missing asset path)", Inspect.Dependencies(""));
+            Assert.Equal("(Missing asset path)", Inspect.Dependencies("   "));
+        }
+
+        [Fact]
+        public void Dependencies_AssetNotFound_ReturnsDiagnostic()
+        {
+            AssetDatabase.LoadMainAssetAtPathFunc = _ => null;
+            AssetDatabase.AssetPathToGUIDFunc = _ => "";
+
+            string pathResult = Inspect.Dependencies("Assets/Missing.prefab");
+            Assert.Equal("(Asset not found at path: \"Assets/Missing.prefab\")", pathResult);
+
+            AssetDatabase.FindAssetsFunc = _ => Array.Empty<string>();
+            string nameResult = Inspect.Dependencies("MissingName");
+            Assert.Equal("(Asset not found matching: \"MissingName\")", nameResult);
+        }
+
+        [Fact]
+        public void Dependencies_PathNormalization_HandlesBackslashesAndPrefixes()
+        {
+            AssetDatabase.GetDependenciesFunc = (path, recursive) =>
+            {
+                if (path == "Assets/Prefabs/Player.prefab")
+                {
+                    return new[] { "Assets\\Materials\\PlayerMat.mat", "Assets/Prefabs/Player.prefab" };
+                }
+                return Array.Empty<string>();
+            };
+            AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(UnityEngine.Material);
+
+            string r1 = Inspect.Dependencies("Assets\\Prefabs\\Player.prefab");
+            string r2 = Inspect.Dependencies("./Assets/Prefabs/Player.prefab");
+            string r3 = Inspect.Dependencies("/Assets/Prefabs/Player.prefab");
+
+            Assert.Contains("Dependencies found (1):", r1);
+            Assert.Contains("Assets/Materials/PlayerMat.mat [Material]", r1);
+            Assert.DoesNotContain("\\", r1);
+            Assert.DoesNotContain("Assets/Prefabs/Player.prefab [", r1);
+
+            Assert.Equal(r1, r2);
+            Assert.Equal(r1, r3);
+        }
+
+        [Fact]
+        public void Dependencies_ExcludesSelf_AndDeduplicatesAndSorts()
+        {
+            AssetDatabase.GetDependenciesFunc = (path, recursive) => new[]
+            {
+                "Assets/Prefabs/Player.prefab",
+                "Assets/Z_Item.asset",
+                "Assets/A_Item.asset",
+                "Assets/A_Item.asset"
+            };
+            AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(UnityEngine.Object);
+
+            string result = Inspect.Dependencies("Assets/Prefabs/Player.prefab");
+
+            Assert.Contains("Dependencies found (2):", result);
+            Assert.DoesNotContain("Player.prefab [", result);
+            int idxA = result.IndexOf("Assets/A_Item.asset", StringComparison.Ordinal);
+            int idxZ = result.IndexOf("Assets/Z_Item.asset", StringComparison.Ordinal);
+            Assert.True(idxA >= 0 && idxZ >= 0 && idxA < idxZ, "Dependencies should be sorted deterministically in ordinal order");
+        }
+
+        [Fact]
+        public void Dependencies_NoDependencies_ReturnsClearMessage()
+        {
+            AssetDatabase.GetDependenciesFunc = (path, recursive) => new[] { "Assets/Materials/Plain.mat" };
+
+            string result = Inspect.Dependencies("Assets/Materials/Plain.mat");
+
+            Assert.Equal("(No dependencies found for asset: \"Assets/Materials/Plain.mat\")", result);
+        }
+
+        [Fact]
+        public void Dependencies_PassesRecursiveParameter()
+        {
+            bool? passedRecursive = null;
+            AssetDatabase.GetDependenciesFunc = (path, recursive) =>
+            {
+                passedRecursive = recursive;
+                return new[] { "Assets/Tex.png" };
+            };
+
+            Inspect.Dependencies("Assets/Mat.mat", recursive: true);
+            Assert.True(passedRecursive);
+
+            Inspect.Dependencies("Assets/Mat.mat", recursive: false);
+            Assert.False(passedRecursive);
+        }
+
+        [Fact]
+        public void Dependencies_ItemTruncation_AppendsMarker()
+        {
+            AssetDatabase.GetDependenciesFunc = (path, recursive) => new[]
+            {
+                "Assets/Dep1.asset",
+                "Assets/Dep2.asset",
+                "Assets/Dep3.asset",
+                "Assets/Dep4.asset"
+            };
+            AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(UnityEngine.Object);
+
+            string result = Inspect.Dependencies("Assets/Root.asset", maxItems: 2);
+
+            Assert.Contains("Dependencies found (4):", result);
+            Assert.Contains("Assets/Dep1.asset", result);
+            Assert.Contains("Assets/Dep2.asset", result);
+            Assert.Contains("... (truncated: maximum item count reached)", result);
+            Assert.DoesNotContain("Assets/Dep3.asset", result);
+        }
+
+        [Fact]
+        public void Referencers_NullOrWhitespace_ReturnsMissingTargetAssetPathDiagnostic()
+        {
+            Assert.Equal("(Missing target asset path)", Inspect.Referencers(null));
+            Assert.Equal("(Missing target asset path)", Inspect.Referencers(""));
+            Assert.Equal("(Missing target asset path)", Inspect.Referencers("   "));
+        }
+
+        [Fact]
+        public void Referencers_TargetAssetNotFound_ReturnsDiagnostic()
+        {
+            AssetDatabase.LoadMainAssetAtPathFunc = _ => null;
+            AssetDatabase.AssetPathToGUIDFunc = _ => "";
+
+            string pathResult = Inspect.Referencers("Assets/Missing.prefab");
+            Assert.Equal("(Asset not found at path: \"Assets/Missing.prefab\")", pathResult);
+
+            AssetDatabase.FindAssetsFunc = _ => Array.Empty<string>();
+            string nameResult = Inspect.Referencers("MissingName");
+            Assert.Equal("(Asset not found matching: \"MissingName\")", nameResult);
+        }
+
+        [Fact]
+        public void Referencers_FolderNotFound_ReturnsDiagnostic()
+        {
+            AssetDatabase.IsValidFolderFunc = path => path != "Assets/NonExistent";
+
+            string result = Inspect.Referencers("Assets/Mat.mat", searchFolder: "Assets/NonExistent");
+
+            Assert.Equal("(Folder not found: \"Assets/NonExistent\")", result);
+        }
+
+        [Fact]
+        public void Referencers_FindsReferencersInFolder_WithNormalizedPathsAndTypes()
+        {
+            AssetDatabase.FindAssetsInFoldersFunc = (filter, folders) => new[] { "g_hero", "g_main", "g_other" };
+            AssetDatabase.GUIDToAssetPathFunc = guid =>
+            {
+                switch (guid)
+                {
+                    case "g_hero": return "Assets\\Prefabs\\Hero.prefab";
+                    case "g_main": return "Assets/Scenes/Main.unity";
+                    case "g_other": return "Assets/Prefabs/Other.prefab";
+                    default: return "";
+                }
+            };
+            AssetDatabase.GetMainAssetTypeAtPathFunc = path =>
+            {
+                if (path.EndsWith(".prefab")) return typeof(GameObject);
+                if (path.EndsWith(".unity")) return typeof(UnityEngine.SceneManagement.Scene);
+                return typeof(UnityEngine.Object);
+            };
+            AssetDatabase.GetDependenciesFunc = (path, recursive) =>
+            {
+                if (path == "Assets/Prefabs/Hero.prefab")
+                {
+                    return new[] { "Assets\\Materials\\Target.mat" };
+                }
+                if (path == "Assets/Scenes/Main.unity")
+                {
+                    return new[] { "Assets/Materials/Target.mat" };
+                }
+                return new[] { "Assets/Materials/Other.mat" };
+            };
+
+            string result = Inspect.Referencers("Assets\\Materials\\Target.mat", searchFolder: "Assets");
+
+            Assert.Contains("Referencers found (2):", result);
+            Assert.Contains("Assets/Prefabs/Hero.prefab [GameObject]", result);
+            Assert.Contains("Assets/Scenes/Main.unity [Scene]", result);
+            Assert.DoesNotContain("Other.prefab", result);
+            Assert.DoesNotContain("\\", result);
+        }
+
+        [Fact]
+        public void Referencers_ExcludesSelf()
+        {
+            AssetDatabase.FindAssetsInFoldersFunc = (filter, folders) => new[] { "g_target", "g_ref" };
+            AssetDatabase.GUIDToAssetPathFunc = guid => guid == "g_target" ? "Assets/Target.prefab" : "Assets/Ref.prefab";
+            AssetDatabase.GetDependenciesFunc = (path, recursive) =>
+            {
+                // Target reports target in its dependencies, ref also reports target
+                return new[] { "Assets/Target.prefab" };
+            };
+            AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(GameObject);
+
+            string result = Inspect.Referencers("Assets/Target.prefab");
+
+            Assert.Contains("Referencers found (1):", result);
+            Assert.Contains("Assets/Ref.prefab", result);
+            Assert.DoesNotContain("1. Assets/Target.prefab", result);
+        }
+
+        [Fact]
+        public void Referencers_NoReferencers_ReturnsClearMessage()
+        {
+            AssetDatabase.FindAssetsInFoldersFunc = (filter, folders) => new[] { "g_other" };
+            AssetDatabase.GUIDToAssetPathFunc = guid => "Assets/Other.prefab";
+            AssetDatabase.GetDependenciesFunc = (path, recursive) => new[] { "Assets/SomethingElse.mat" };
+
+            string result = Inspect.Referencers("Assets/Materials/Unused.mat");
+
+            Assert.Equal("(No referencers found for asset: \"Assets/Materials/Unused.mat\")", result);
+        }
+
+        [Fact]
+        public void Referencers_ItemTruncation_AppendsMarker()
+        {
+            AssetDatabase.FindAssetsInFoldersFunc = (filter, folders) => new[] { "g1", "g2", "g3", "g4" };
+            AssetDatabase.GUIDToAssetPathFunc = guid => $"Assets/Ref_{guid}.prefab";
+            AssetDatabase.GetDependenciesFunc = (path, recursive) => new[] { "Assets/Target.mat" };
+            AssetDatabase.GetMainAssetTypeAtPathFunc = path => typeof(GameObject);
+
+            string result = Inspect.Referencers("Assets/Target.mat", maxItems: 2);
+
+            Assert.Contains("Referencers found (4):", result);
+            Assert.Contains("Assets/Ref_g1.prefab", result);
+            Assert.Contains("Assets/Ref_g2.prefab", result);
+            Assert.Contains("... (truncated: maximum item count reached)", result);
+            Assert.DoesNotContain("Assets/Ref_g3.prefab", result);
         }
 
         #endregion
@@ -1967,7 +2216,7 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("• UnityLeanMcp.", allTests);
 
             // Filter matching this test class
-            string filtered = Inspect.Tests("UnityInspectUnitTests");
+            string filtered = Inspect.Tests("UnityInspectUnitTests", maxItems: 200);
             Assert.Contains("Available Tests", filtered);
             Assert.Contains("UnityInspectUnitTests", filtered);
             Assert.Contains("Tests_DiscoversTestsInLoadedAppDomain", filtered);
@@ -1992,6 +2241,8 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("• string Find(string namePattern", help);
             Assert.Contains("• string MissingScripts(", help);
             Assert.Contains("• string SceneState()", help);
+            Assert.Contains("• string Dependencies(string assetPath, bool recursive = false, int maxItems = 100)", help);
+            Assert.Contains("• string Referencers(string targetAssetPath, string searchFolder = \"Assets\", int maxItems = 100)", help);
             Assert.Contains("• string CaptureCamera(string outputPath = \"Temp/unity_capture.png\", int width = 1024, int height = 768, Camera camera = null)", help);
             Assert.Contains("• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)", help);
             Assert.Contains("• string Tests(string filter = null", help);

@@ -2048,6 +2048,312 @@ namespace UnityLeanMcp
             }
         }
 
+        private static bool TryResolveAssetPath(string inputPath, string missingDiagnostic, out string targetPath, out string error)
+        {
+            if (string.IsNullOrWhiteSpace(inputPath))
+            {
+                targetPath = null;
+                error = missingDiagnostic;
+                return false;
+            }
+
+            string clean = inputPath.Trim().Replace('\\', '/');
+            while (clean.StartsWith("./", StringComparison.Ordinal))
+            {
+                clean = clean.Substring(2);
+            }
+            while (clean.StartsWith("/", StringComparison.Ordinal) && clean.Length > 1)
+            {
+                clean = clean.TrimStart('/');
+            }
+
+            targetPath = clean;
+            if (!clean.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) &&
+                !clean.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase))
+            {
+                string[] guids = null;
+                try
+                {
+                    guids = AssetDatabase.FindAssets(clean);
+                }
+                catch (Exception ex)
+                {
+                    error = $"(Asset search failed: {ex.Message})";
+                    return false;
+                }
+
+                if (guids == null || guids.Length == 0)
+                {
+                    error = $"(Asset not found matching: \"{inputPath}\")";
+                    return false;
+                }
+
+                string foundPath = null;
+                for (int g = 0; g < guids.Length; g++)
+                {
+                    string p = null;
+                    try
+                    {
+                        p = AssetDatabase.GUIDToAssetPath(guids[g]);
+                    }
+                    catch { }
+                    if (!string.IsNullOrEmpty(p))
+                    {
+                        foundPath = p.Replace('\\', '/');
+                        break;
+                    }
+                }
+
+                if (string.IsNullOrEmpty(foundPath))
+                {
+                    error = $"(Asset not found matching: \"{inputPath}\")";
+                    return false;
+                }
+
+                targetPath = foundPath;
+            }
+
+            UnityEngine.Object assetObj = null;
+            try
+            {
+                assetObj = AssetDatabase.LoadMainAssetAtPath(targetPath);
+            }
+            catch { }
+
+            string guid = null;
+            try
+            {
+                guid = AssetDatabase.AssetPathToGUID(targetPath);
+            }
+            catch { }
+
+            if (assetObj == null && string.IsNullOrEmpty(guid))
+            {
+                error = $"(Asset not found at path: \"{targetPath}\")";
+                return false;
+            }
+
+            error = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Wraps AssetDatabase.GetDependencies with normalized paths, asset type annotations,
+        /// and strict item/output truncation limits.
+        /// </summary>
+        public static string Dependencies(string assetPath, bool recursive = false, int maxItems = DefaultMaxItems)
+        {
+            maxItems = Math.Max(1, maxItems);
+
+            if (!TryResolveAssetPath(assetPath, "(Missing asset path)", out string targetPath, out string error))
+            {
+                return error;
+            }
+
+            string[] rawDeps = null;
+            try
+            {
+                rawDeps = AssetDatabase.GetDependencies(targetPath, recursive);
+            }
+            catch (Exception ex)
+            {
+                return $"(Failed to get dependencies: {ex.Message})";
+            }
+
+            if (rawDeps == null || rawDeps.Length == 0)
+            {
+                return $"(No dependencies found for asset: \"{targetPath}\")";
+            }
+
+            var depList = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            seen.Add(targetPath);
+
+            for (int i = 0; i < rawDeps.Length; i++)
+            {
+                string raw = rawDeps[i];
+                if (string.IsNullOrEmpty(raw)) continue;
+                string normalized = raw.Replace('\\', '/');
+                if (seen.Add(normalized))
+                {
+                    depList.Add(normalized);
+                }
+            }
+
+            if (depList.Count == 0)
+            {
+                return $"(No dependencies found for asset: \"{targetPath}\")";
+            }
+
+            depList.Sort(StringComparer.Ordinal);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Dependencies found ({depList.Count}):");
+
+            int count = Math.Min(depList.Count, maxItems);
+            for (int i = 0; i < count; i++)
+            {
+                string dep = depList[i];
+                Type assetType = null;
+                try
+                {
+                    assetType = AssetDatabase.GetMainAssetTypeAtPath(dep);
+                }
+                catch { }
+
+                string typeName = assetType != null ? assetType.Name : "Asset";
+                sb.AppendLine($"  {i + 1}. {dep} [{typeName}]");
+            }
+
+            if (depList.Count > maxItems)
+            {
+                sb.AppendLine(ItemTruncationMarker);
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Queries project assets within searchFolder that depend on targetAssetPath,
+        /// returning a compact, token-bounded list of referencing asset paths.
+        /// </summary>
+        public static string Referencers(string targetAssetPath, string searchFolder = "Assets", int maxItems = DefaultMaxItems)
+        {
+            maxItems = Math.Max(1, maxItems);
+
+            if (!TryResolveAssetPath(targetAssetPath, "(Missing target asset path)", out string targetPath, out string error))
+            {
+                return error;
+            }
+
+            string folder = string.IsNullOrWhiteSpace(searchFolder) ? "Assets" : searchFolder.Trim().Replace('\\', '/');
+            while (folder.StartsWith("./", StringComparison.Ordinal))
+            {
+                folder = folder.Substring(2);
+            }
+            while (folder.EndsWith("/", StringComparison.Ordinal) && folder.Length > 1)
+            {
+                folder = folder.Substring(0, folder.Length - 1);
+            }
+
+            bool isValidFolder = false;
+            try
+            {
+                isValidFolder = AssetDatabase.IsValidFolder(folder) ||
+                                string.Equals(folder, "Assets", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(folder, "Packages", StringComparison.OrdinalIgnoreCase) ||
+                                Directory.Exists(folder);
+            }
+            catch { }
+
+            if (!isValidFolder)
+            {
+                return $"(Folder not found: \"{folder}\")";
+            }
+
+            string[] guids = null;
+            try
+            {
+                guids = AssetDatabase.FindAssets("", new[] { folder });
+            }
+            catch (Exception ex)
+            {
+                return $"(Asset search failed: {ex.Message})";
+            }
+
+            if (guids == null || guids.Length == 0)
+            {
+                return $"(No referencers found for asset: \"{targetPath}\")";
+            }
+
+            var referencers = new List<string>();
+            var seenCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            seenCandidates.Add(targetPath);
+
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string rawPath = null;
+                try
+                {
+                    rawPath = AssetDatabase.GUIDToAssetPath(guids[i]);
+                }
+                catch { }
+
+                if (string.IsNullOrEmpty(rawPath)) continue;
+                string candidatePath = rawPath.Replace('\\', '/');
+
+                if (!seenCandidates.Add(candidatePath)) continue;
+
+                bool isFolder = false;
+                try
+                {
+                    isFolder = AssetDatabase.IsValidFolder(candidatePath);
+                }
+                catch { }
+
+                if (isFolder) continue;
+
+                string[] deps = null;
+                try
+                {
+                    deps = AssetDatabase.GetDependencies(candidatePath, false);
+                }
+                catch { }
+
+                if (deps == null || deps.Length == 0) continue;
+
+                bool dependsOnTarget = false;
+                for (int d = 0; d < deps.Length; d++)
+                {
+                    string dep = deps[d];
+                    if (string.IsNullOrEmpty(dep)) continue;
+                    string normDep = dep.Replace('\\', '/');
+                    if (string.Equals(normDep, targetPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        dependsOnTarget = true;
+                        break;
+                    }
+                }
+
+                if (dependsOnTarget)
+                {
+                    referencers.Add(candidatePath);
+                }
+            }
+
+            if (referencers.Count == 0)
+            {
+                return $"(No referencers found for asset: \"{targetPath}\")";
+            }
+
+            referencers.Sort(StringComparer.Ordinal);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Referencers found ({referencers.Count}):");
+
+            int count = Math.Min(referencers.Count, maxItems);
+            for (int i = 0; i < count; i++)
+            {
+                string refPath = referencers[i];
+                Type assetType = null;
+                try
+                {
+                    assetType = AssetDatabase.GetMainAssetTypeAtPath(refPath);
+                }
+                catch { }
+
+                string typeName = assetType != null ? assetType.Name : "Asset";
+                sb.AppendLine($"  {i + 1}. {refPath} [{typeName}]");
+            }
+
+            if (referencers.Count > maxItems)
+            {
+                sb.AppendLine(ItemTruncationMarker);
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
         /// <summary>
         /// Inspects a prefab instance GameObject and returns its modifications, added components,
         /// and removed components relative to the source prefab asset.
@@ -2935,6 +3241,8 @@ namespace UnityLeanMcp
                     case nameof(FindAsset):
                     case nameof(FindAssets):
                     case nameof(FindPrefabs):
+                    case nameof(Dependencies):
+                    case nameof(Referencers):
                         cat = "Assets & Prefabs";
                         break;
                     case nameof(CaptureCamera):

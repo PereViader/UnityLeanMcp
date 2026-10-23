@@ -39,6 +39,8 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | **Assets & Prefabs** | `Inspect.FindAsset(nameOrPath)` | Resolves asset details (type, GUID, main path) by name or relative path. |
 | | `Inspect.FindAssets([filter], [type], [label], [maxItems])` | Searches project assets via AssetDatabase filters (`filter`, `t:type`, `l:label`). |
 | | `Inspect.FindPrefabs([filter], [maxItems])` | Finds prefabs in the project matching an optional filter. |
+| | `Inspect.Dependencies(assetPath, [recursive], [maxItems])` | Enumerates asset dependencies with normalized paths, type annotations, and truncation limits. |
+| | `Inspect.Referencers(targetAssetPath, [searchFolder], [maxItems])` | Queries project assets in a folder that reference or depend on the target asset. |
 | **Editor & Tests** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
 | | `Inspect.MainCamera()` | Properties of `Camera.main` (transform, clear flags, culling mask, FOV, clipping planes). |
 | | `Inspect.Tests([filter], [maxItems])` | Enumerates available EditMode and PlayMode tests with an optional name filter. |

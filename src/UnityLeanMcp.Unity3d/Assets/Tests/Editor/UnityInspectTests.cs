@@ -373,5 +373,136 @@ namespace UnityLeanMcpTests
             StringAssert.Contains("CaptureCamera", help);
             StringAssert.Contains("CaptureSceneView", help);
         }
+
+        [Test]
+        public void Dependencies_PathNormalization_AndTypeAnnotations()
+        {
+            string matPath = "Assets/TestInspectDepsMat.mat";
+            string texPath = "Assets/TestInspectDepsTex.asset";
+
+            var mat = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(mat, matPath);
+            var tex = new Texture2D(16, 16);
+            AssetDatabase.CreateAsset(tex, texPath);
+            mat.mainTexture = tex;
+            EditorUtility.SetDirty(mat);
+            AssetDatabase.SaveAssets();
+
+            try
+            {
+                // Test backslash normalization
+                string result = Inspect.Dependencies("Assets\\TestInspectDepsMat.mat");
+                StringAssert.Contains("Dependencies found (1):", result);
+                StringAssert.Contains("Assets/TestInspectDepsTex.asset [Texture2D]", result);
+                Assert.IsFalse(result.Contains("\\"));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(matPath);
+                AssetDatabase.DeleteAsset(texPath);
+                AssetDatabase.Refresh();
+            }
+        }
+
+        [Test]
+        public void Dependencies_MissingAndNonExistent_ReturnsDiagnostic()
+        {
+            Assert.AreEqual("(Missing asset path)", Inspect.Dependencies(""));
+            Assert.AreEqual("(Missing asset path)", Inspect.Dependencies("   "));
+            Assert.AreEqual("(Missing asset path)", Inspect.Dependencies(null));
+
+            string nonExistentPath = Inspect.Dependencies("Assets/NonExistentAsset_123.prefab");
+            Assert.AreEqual("(Asset not found at path: \"Assets/NonExistentAsset_123.prefab\")", nonExistentPath);
+
+            string nonExistentName = Inspect.Dependencies("NonExistentPattern_ZXY_987");
+            Assert.AreEqual("(Asset not found matching: \"NonExistentPattern_ZXY_987\")", nonExistentName);
+        }
+
+        [Test]
+        public void Dependencies_ItemTruncation_LimitsResults()
+        {
+            string matPath = "Assets/TestInspectTruncMat.mat";
+            string tex1Path = "Assets/TestInspectTruncTex1.asset";
+            string tex2Path = "Assets/TestInspectTruncTex2.asset";
+
+            var mat = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(mat, matPath);
+            var tex1 = new Texture2D(16, 16);
+            AssetDatabase.CreateAsset(tex1, tex1Path);
+            var tex2 = new Texture2D(16, 16);
+            AssetDatabase.CreateAsset(tex2, tex2Path);
+            mat.mainTexture = tex1;
+            mat.SetTexture("_EmissionMap", tex2);
+            EditorUtility.SetDirty(mat);
+            AssetDatabase.SaveAssets();
+
+            try
+            {
+                string result = Inspect.Dependencies(matPath, maxItems: 1);
+                StringAssert.Contains("Dependencies found (2):", result);
+                StringAssert.Contains("... (truncated: maximum item count reached)", result);
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(matPath);
+                AssetDatabase.DeleteAsset(tex1Path);
+                AssetDatabase.DeleteAsset(tex2Path);
+                AssetDatabase.Refresh();
+            }
+        }
+
+        [Test]
+        public void Referencers_FindsReferencingAssets_WithNormalizedPaths()
+        {
+            string matPath = "Assets/TestInspectRefMat.mat";
+            string texPath = "Assets/TestInspectRefTex.asset";
+
+            var mat = new Material(Shader.Find("Standard"));
+            AssetDatabase.CreateAsset(mat, matPath);
+            var tex = new Texture2D(16, 16);
+            AssetDatabase.CreateAsset(tex, texPath);
+            mat.mainTexture = tex;
+            EditorUtility.SetDirty(mat);
+            AssetDatabase.SaveAssets();
+
+            try
+            {
+                // Test backslash normalization
+                string result = Inspect.Referencers("Assets\\TestInspectRefTex.asset", searchFolder: "Assets");
+                StringAssert.Contains("Referencers found (1):", result);
+                StringAssert.Contains("Assets/TestInspectRefMat.mat [Material]", result);
+                Assert.IsFalse(result.Contains("\\"));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(matPath);
+                AssetDatabase.DeleteAsset(texPath);
+                AssetDatabase.Refresh();
+            }
+        }
+
+        [Test]
+        public void Referencers_MissingAndNonExistent_ReturnsDiagnostic()
+        {
+            Assert.AreEqual("(Missing target asset path)", Inspect.Referencers(""));
+            Assert.AreEqual("(Missing target asset path)", Inspect.Referencers("   "));
+            Assert.AreEqual("(Missing target asset path)", Inspect.Referencers(null));
+
+            string nonExistentPath = Inspect.Referencers("Assets/NonExistentAsset_123.prefab");
+            Assert.AreEqual("(Asset not found at path: \"Assets/NonExistentAsset_123.prefab\")", nonExistentPath);
+
+            string nonExistentFolder = Inspect.Referencers("Assets/Scenes/SampleScene.unity", "Assets/NonExistentFolder_123");
+            Assert.AreEqual("(Folder not found: \"Assets/NonExistentFolder_123\")", nonExistentFolder);
+        }
+
+        [Test]
+        public void Inspect_Help_IncludesDependenciesAndReferencersUnderAssetsAndPrefabs()
+        {
+            string help = Inspect.Help();
+
+            StringAssert.Contains("Assets & Prefabs:", help);
+            StringAssert.Contains("Dependencies", help);
+            StringAssert.Contains("Referencers", help);
+        }
     }
 }
