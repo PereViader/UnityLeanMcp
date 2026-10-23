@@ -265,7 +265,7 @@ public class UnityTools
 
 
     [McpServerTool(Name = "unity_test")]
-    [Description("Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
+    [Description("Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. To discover available tests or verify exact test names before running, evaluate Inspect.Tests(\"<filter>\") via unity_eval. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
     public async Task<CallToolResult> UnityTestAsync(
         [Description("Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.")]
         UnityTestMode mode,
@@ -623,10 +623,50 @@ public class UnityTools
                 headerOutput.AppendLine($"No tests found matching the specified test filter(s) (mode: {normalizedMode}).");
             }
 
-            string modeHint = normalizedMode == "editmode"
-                ? "Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'."
-                : "Hint: If the target tests are unit tests or editor utilities without runtime/player lifecycle, try running with mode 'editmode'.";
-            headerOutput.AppendLine(modeHint);
+            bool hasCustomHints = false;
+
+            if (result.OtherModeMatches is { Count: > 0 })
+            {
+                hasCustomHints = true;
+                string otherMode = normalizedMode == "editmode" ? "playmode" : "editmode";
+                string countStr = result.OtherModeMatches.Count > 1
+                    ? $"{result.OtherModeMatches.Count} matching tests exist"
+                    : "1 matching test exists";
+                headerOutput.AppendLine($"Matching tests were found in mode '{otherMode}' ({countStr}, e.g. '{result.OtherModeMatches[0]}'). Did you mean to run with mode '{otherMode}'?");
+            }
+
+            if (result.NearMatches is { Count: > 0 })
+            {
+                hasCustomHints = true;
+                headerOutput.AppendLine("Did you mean one of these tests?");
+                foreach (var match in result.NearMatches.Take(5))
+                {
+                    headerOutput.AppendLine($"  • {match}");
+                }
+            }
+
+            if (!hasCustomHints)
+            {
+                string modeHint = normalizedMode == "editmode"
+                    ? "Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'."
+                    : "Hint: If the target tests are unit tests or editor utilities without runtime/player lifecycle, try running with mode 'editmode'.";
+                headerOutput.AppendLine(modeHint);
+            }
+
+            string inspectFilter = testNames is { Length: > 0 } ? testNames[0]
+                : groupNames is { Length: > 0 } ? groupNames[0].Trim('^', '$', '.', '*')
+                : categoryNames is { Length: > 0 } ? categoryNames[0]
+                : assemblyNames is { Length: > 0 } ? assemblyNames[0]
+                : "";
+
+            if (!string.IsNullOrEmpty(inspectFilter))
+            {
+                headerOutput.AppendLine($"Hint: Use unity_eval with 'return Inspect.Tests(\"{inspectFilter}\");' to discover available tests in loaded assemblies.");
+            }
+            else
+            {
+                headerOutput.AppendLine("Hint: Use unity_eval with 'return Inspect.Tests();' to discover available tests in loaded assemblies.");
+            }
         }
         else if (result.Success)
         {

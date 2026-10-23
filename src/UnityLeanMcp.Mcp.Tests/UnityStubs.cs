@@ -1207,6 +1207,11 @@ namespace UnityLeanMcp
         public string message = "";
         public string resultState = "";
         public List<FailedTestInfo> failedTests = new();
+        public List<string> otherModeMatches = new();
+        public List<string> nearMatches = new();
+
+        public List<string> OtherModeMatches { get => otherModeMatches; set => otherModeMatches = value; }
+        public List<string> NearMatches { get => nearMatches; set => nearMatches = value; }
 
         public string operationId => runId;
         public bool interrupted =>

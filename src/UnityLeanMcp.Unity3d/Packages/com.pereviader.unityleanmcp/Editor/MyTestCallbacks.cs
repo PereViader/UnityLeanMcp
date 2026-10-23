@@ -240,6 +240,34 @@ namespace UnityLeanMcp
 
                 Debug.Log($"UnityLeanMcp: Finalizing test run. Success: {success}, ResultState: {resultState}, Message: {message}");
 
+                int totalTests = passCount + failCount + skipCount;
+                List<string> otherModeMatches = null;
+                List<string> nearMatches = null;
+
+                bool hasFilter = (state?.testNames != null && state.testNames.Length > 0) ||
+                                 (state?.groupNames != null && state.groupNames.Length > 0) ||
+                                 (state?.categoryNames != null && state.categoryNames.Length > 0) ||
+                                 (state?.assemblyNames != null && state.assemblyNames.Length > 0);
+
+                if (totalTests == 0 && hasFilter)
+                {
+                    try
+                    {
+                        TestDiscoveryHelper.DiscoverHints(
+                            state?.mode,
+                            state?.testNames,
+                            state?.groupNames,
+                            state?.categoryNames,
+                            state?.assemblyNames,
+                            out otherModeMatches,
+                            out nearMatches);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"UnityLeanMcp: Test discovery hints error: {ex.Message}");
+                    }
+                }
+
                 var runResult = new UnityTestRunResult
                 {
                     runId = runId ?? Guid.NewGuid().ToString("N"),
@@ -249,7 +277,9 @@ namespace UnityLeanMcp
                     skipCount = skipCount,
                     message = message,
                     resultState = resultState,
-                    failedTests = new List<FailedTestInfo>(m_FailedTests)
+                    failedTests = new List<FailedTestInfo>(m_FailedTests),
+                    otherModeMatches = otherModeMatches,
+                    nearMatches = nearMatches
                 };
 
                 string json = JsonUtility.ToJson(runResult, true);

@@ -3130,7 +3130,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     [Theory]
     [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler and asset import diagnostics. C# compiler errors persist across no-op refreshes, while non-C# diagnostics (shaders, import failures) are captured only during active imports and not re-emitted if assets are unchanged. Normal refresh is fast when unchanged; set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     [InlineData("unity_eval", "Evaluates C# top-level statements in the active Unity Editor with top-level await. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Call 'return Inspect.Help();' for cheatsheet.")]
-    [InlineData("unity_test", "Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
+    [InlineData("unity_test", "Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. To discover available tests or verify exact test names before running, evaluate Inspect.Tests(\"<filter>\") via unity_eval. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
     [InlineData("unity_coverage", "Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
     public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
     {
@@ -3537,6 +3537,207 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.DoesNotContain("TestMethodCommand", compacted);
         Assert.DoesNotContain("InternalInvoke", compacted);
         Assert.DoesNotContain("Assert.AreEqual", compacted);
+    }
+
+    // ==========================================
+    // Empty-filter diagnostic hints tests (#133)
+    // ==========================================
+
+    [Fact]
+    public async Task UnityTest_ZeroTests_WithOtherModeMatches_FormatsCrossModeHint()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0,
+                OtherModeMatches = ["MyCompany.GameplayTests.CombatTest"]
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: [".*Combat.*"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No tests found matching filter '.*Combat.*' (mode: editmode).", text);
+            Assert.Contains("Matching tests were found in mode 'playmode' (1 matching test exists, e.g. 'MyCompany.GameplayTests.CombatTest'). Did you mean to run with mode 'playmode'?", text);
+            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"Combat\");' to discover available tests in loaded assemblies.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityTest_ZeroTests_WithMultipleOtherModeMatches_FormatsCountAndExample()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0,
+                OtherModeMatches = ["Suite.Test1", "Suite.Test2", "Suite.Test3"]
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.PlayMode, testNames: ["Suite.Test1"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No tests found matching testNames 'Suite.Test1' (mode: playmode).", text);
+            Assert.Contains("Matching tests were found in mode 'editmode' (3 matching tests exist, e.g. 'Suite.Test1'). Did you mean to run with mode 'editmode'?", text);
+            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"Suite.Test1\");' to discover available tests in loaded assemblies.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityTest_ZeroTests_WithNearMatches_FormatsDidYouMeanSuggestions()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0,
+                NearMatches =
+                [
+                    "UnityLeanMcpTests.UnityInspectTests.Hierarchy_ActiveScene_ReturnsFormattedHierarchy",
+                    "UnityLeanMcpTests.UnityInspectTests.Hierarchy_TransformRoot_ReturnsFormattedHierarchy"
+                ]
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["UnityInspectTests"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No tests found matching testNames 'UnityInspectTests' (mode: editmode).", text);
+            Assert.Contains("Did you mean one of these tests?", text);
+            Assert.Contains("  • UnityLeanMcpTests.UnityInspectTests.Hierarchy_ActiveScene_ReturnsFormattedHierarchy", text);
+            Assert.Contains("  • UnityLeanMcpTests.UnityInspectTests.Hierarchy_TransformRoot_ReturnsFormattedHierarchy", text);
+            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"UnityInspectTests\");' to discover available tests in loaded assemblies.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityTest_ZeroTests_WithoutMatches_FormatsGenericModeHintAndInspectHint()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 0,
+                SkipCount = 0
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["NonExistentTest"]);
+
+            Assert.True(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("No tests found matching testNames 'NonExistentTest' (mode: editmode).", text);
+            Assert.Contains("Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'.", text);
+            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"NonExistentTest\");' to discover available tests in loaded assemblies.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void TestDiscoveryHelper_DiscoverHints_FindsCrossModeAndNearMatches()
+    {
+        var mockItems = new List<TestDiscoveryHelper.DiscoveredItem>
+        {
+            new()
+            {
+                FullName = "MyCompany.Tests.PlayModeCombatTests.AttackTest",
+                FixtureFullName = "MyCompany.Tests.PlayModeCombatTests",
+                Name = "AttackTest",
+                AssemblyName = "CombatTests",
+                Mode = "playmode"
+            },
+            new()
+            {
+                FullName = "MyCompany.Tests.EditModeTests.MovementTest",
+                FixtureFullName = "MyCompany.Tests.EditModeTests",
+                Name = "MovementTest",
+                AssemblyName = "EditTests",
+                Mode = "editmode"
+            },
+            new()
+            {
+                FullName = "MyCompany.Tests.EditModeTests.JumpTest",
+                FixtureFullName = "MyCompany.Tests.EditModeTests",
+                Name = "JumpTest",
+                AssemblyName = "EditTests",
+                Mode = "editmode"
+            }
+        };
+
+        // 1. Cross-mode: looking for AttackTest in editmode should find it in playmode
+        TestDiscoveryHelper.DiscoverHints(
+            currentMode: "editmode",
+            testNames: ["MyCompany.Tests.PlayModeCombatTests.AttackTest"],
+            groupNames: null,
+            categoryNames: null,
+            assemblyNames: null,
+            out var otherModeMatches,
+            out var nearMatches,
+            preloadedItems: mockItems);
+
+        Assert.Single(otherModeMatches);
+        Assert.Equal("MyCompany.Tests.PlayModeCombatTests.AttackTest", otherModeMatches[0]);
+
+        // 2. Near-match: looking for "Movement" in editmode should near-match "MyCompany.Tests.EditModeTests.MovementTest"
+        TestDiscoveryHelper.DiscoverHints(
+            currentMode: "editmode",
+            testNames: ["Movement"],
+            groupNames: null,
+            categoryNames: null,
+            assemblyNames: null,
+            out otherModeMatches,
+            out nearMatches,
+            preloadedItems: mockItems);
+
+        Assert.Empty(otherModeMatches);
+        Assert.Single(nearMatches);
+        Assert.Equal("MyCompany.Tests.EditModeTests.MovementTest", nearMatches[0]);
+
+        // 3. Near-match on fixture name: "EditModeTests" should find both MovementTest and JumpTest
+        TestDiscoveryHelper.DiscoverHints(
+            currentMode: "editmode",
+            testNames: ["EditModeTests"],
+            groupNames: null,
+            categoryNames: null,
+            assemblyNames: null,
+            out otherModeMatches,
+            out nearMatches,
+            preloadedItems: mockItems);
+
+        Assert.Equal(2, nearMatches.Count);
+        Assert.Contains("MyCompany.Tests.EditModeTests.MovementTest", nearMatches);
+        Assert.Contains("MyCompany.Tests.EditModeTests.JumpTest", nearMatches);
     }
 
     private sealed class CustomMockDiagnosticFormatter : IDiagnosticFormatter

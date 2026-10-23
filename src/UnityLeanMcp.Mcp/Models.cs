@@ -106,6 +106,12 @@ public class UnityTestRunResult : IOperationResult
 
     [JsonPropertyName("failedTests")]
     public List<FailedTestInfo> FailedTests { get; set; } = new();
+
+    [JsonPropertyName("otherModeMatches")]
+    public List<string> OtherModeMatches { get; set; } = new();
+
+    [JsonPropertyName("nearMatches")]
+    public List<string> NearMatches { get; set; } = new();
 }
 
 public class RunTestsArgs

@@ -16,7 +16,7 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 | :--- | :--- |
 | **`unity_refresh`** | Refreshes AssetDatabase and returns compiler and asset import diagnostics (including shader errors, import failures, and missing scripts). C# compiler errors persist across no-op refreshes. Normal refreshes are fast when unchanged; set `clean: true` only when a more expensive full script recompilation is needed to recover from a stale or corrupted compiler cache. |
 | **`unity_eval`** | Evaluates C# top-level statements in-memory against the active Unity Editor with top-level `await` and `return <value>;`. Pre-imports `Inspect.*` for token-bounded scene/object introspection (call `return Inspect.Help();` for cheatsheet). Include `using UnityEngine;` for Unity types. |
-| **`unity_test`** | Runs EditMode/PlayMode tests with failure diagnostics. Supports `coverage: true` to record in-memory code coverage without disk snapshots. |
+| **`unity_test`** | Runs EditMode/PlayMode tests with failure diagnostics. Automatically suggests near-matches and cross-mode hints if filters match 0 tests. Supports `coverage: true` to record in-memory code coverage without disk snapshots. |
 | **`unity_coverage`** | Queries in-memory code coverage for specified files or directories (recursively evaluating all contained C# scripts) from the latest test run without re-running tests. Reports line coverage percentages and lists uncovered line spans for each file. |
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts the Unity Editor in normal interactive mode first and keeps it running for subsequent commands.

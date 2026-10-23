@@ -90,6 +90,8 @@ namespace UnityLeanMcp
         public string message;
         public string resultState;
         public List<FailedTestInfo> failedTests;
+        public List<string> otherModeMatches;
+        public List<string> nearMatches;
 
         public string OperationId { get => runId; set => runId = value; }
         public bool Success { get => success; set => success = value; }
