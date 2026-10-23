@@ -44,6 +44,7 @@ namespace UnityLeanMcp.Mcp.Tests
             PrefabStageUtility.GetCurrentPrefabStageFunc = null;
             EditorSettings.prefabModeAllowAutoSave = true;
             SerializedObject.CustomProperties.Clear();
+            UnityEngine.UIElements.UIDocument.AllUIDocuments.Clear();
         }
 
         public void Dispose()
@@ -74,6 +75,7 @@ namespace UnityLeanMcp.Mcp.Tests
             PrefabStageUtility.GetCurrentPrefabStageFunc = null;
             EditorSettings.prefabModeAllowAutoSave = true;
             SerializedObject.CustomProperties.Clear();
+            UnityEngine.UIElements.UIDocument.AllUIDocuments.Clear();
 
             foreach (var file in _createdFiles)
             {
@@ -2246,6 +2248,279 @@ namespace UnityLeanMcp.Mcp.Tests
             Assert.Contains("• string CaptureCamera(string outputPath = \"Temp/unity_capture.png\", int width = 1024, int height = 768, Camera camera = null)", help);
             Assert.Contains("• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)", help);
             Assert.Contains("• string Tests(string filter = null", help);
+            Assert.Contains("UIDocument", help);
+        }
+
+        #endregion
+
+        #region UI Toolkit & uGUI Layout Inspection Tests
+
+        public class TestRaycastGraphic : Component
+        {
+            public bool raycastTarget { get; set; } = false;
+        }
+
+        public class TestTextElement : Component
+        {
+            public string text { get; set; } = "Start Game";
+            public bool raycastTarget { get; set; } = true;
+        }
+
+        [Fact]
+        public void GameObject_WithRectTransform_FormatsRectTransformMetrics()
+        {
+            var go = new GameObject("TestButton", typeof(RectTransform));
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = new Vector2(10f, 20f);
+            rt.sizeDelta = new Vector2(120f, 40f);
+            rt.rect = new Rect(-60f, -20f, 120f, 40f);
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+
+            string result = Inspect.GameObject(go);
+
+            Assert.Contains("RectTransform: anchoredPos=(10.00, 20.00), sizeDelta=(120.00, 40.00), rect=(120.00x40.00)", result);
+            Assert.Contains("anchors=[(0.50, 0.50) to (0.50, 0.50)]", result);
+            Assert.Contains("pivot=(0.50, 0.50)", result);
+        }
+
+        [Fact]
+        public void GameObject_WithCanvas_FormatsCanvasSettings()
+        {
+            var go = new GameObject("RootCanvas", typeof(RectTransform), typeof(Canvas));
+            var canvas = go.GetComponent<Canvas>()!;
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 5;
+            canvas.sortingLayerName = "UI";
+
+            string result = Inspect.GameObject(go);
+
+            Assert.Contains("Canvas: renderMode=ScreenSpaceOverlay, sortingOrder=5, sortingLayer=\"UI\"", result);
+        }
+
+        [Fact]
+        public void GameObject_WithUIDocument_FormatsUIDocumentHeader()
+        {
+            var go = new GameObject("UIDocHost", typeof(UnityEngine.UIElements.UIDocument));
+            var doc = go.GetComponent<UnityEngine.UIElements.UIDocument>()!;
+            doc.rootVisualElement = new UnityEngine.UIElements.VisualElement();
+            doc.rootVisualElement.Add(new UnityEngine.UIElements.Label("Hello"));
+            doc.sortingOrder = 2;
+
+            string result = Inspect.GameObject(go);
+
+            Assert.Contains("UIDocument: sortingOrder=2, rootVisualElement children=1", result);
+        }
+
+        [Fact]
+        public void Component_RectTransform_FormatsLayoutAndChildren()
+        {
+            var go = new GameObject("Panel", typeof(RectTransform));
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = new Vector2(0f, 0f);
+            rt.sizeDelta = new Vector2(400f, 300f);
+            rt.rect = new Rect(-200f, -150f, 400f, 300f);
+
+            string result = Inspect.Component(rt);
+
+            Assert.Contains("RectTransform: anchoredPos=(0.00, 0.00), sizeDelta=(400.00, 300.00), rect=(400.00x300.00)", result);
+        }
+
+        [Fact]
+        public void Component_Canvas_FormatsSettings()
+        {
+            var go = new GameObject("CanvasGo", typeof(Canvas));
+            var canvas = go.GetComponent<Canvas>()!;
+            canvas.renderMode = RenderMode.WorldSpace;
+            canvas.sortingOrder = 10;
+            canvas.sortingLayerName = "Overlay";
+
+            string result = Inspect.Component(canvas);
+
+            Assert.Contains("Canvas: renderMode=WorldSpace, sortingOrder=10, sortingLayer=\"Overlay\"", result);
+        }
+
+        [Fact]
+        public void Component_UIDocument_FormatsVisualTree()
+        {
+            var go = new GameObject("Host", typeof(UnityEngine.UIElements.UIDocument));
+            var doc = go.GetComponent<UnityEngine.UIElements.UIDocument>()!;
+            doc.sortingOrder = 1;
+            var root = new UnityEngine.UIElements.VisualElement { name = "container" };
+            root.AddToClassList("main-box");
+            root.Add(new UnityEngine.UIElements.Button(null) { text = "Press Me" });
+            doc.rootVisualElement = root;
+
+            string result = Inspect.Component(doc);
+
+            Assert.Contains("UIDocument: sortingOrder=1", result);
+            Assert.Contains("VisualTree:", result);
+            Assert.Contains("VisualElement #container .main-box", result);
+            Assert.Contains("Button (text: \"Press Me\")", result);
+        }
+
+        [Fact]
+        public void Selection_WithRectTransform_FormatsRectTransform()
+        {
+            var go = new GameObject("SelectedUI", typeof(RectTransform));
+            var rt = (RectTransform)go.transform;
+            rt.anchoredPosition = new Vector2(50f, 75f);
+            rt.sizeDelta = new Vector2(200f, 50f);
+            rt.rect = new Rect(-100f, -25f, 200f, 50f);
+            Selection.activeGameObject = go;
+
+            string result = Inspect.Selection();
+
+            Assert.Contains("RectTransform: anchoredPos=(50.00, 75.00), sizeDelta=(200.00, 50.00), rect=(200.00x50.00)", result);
+        }
+
+        [Fact]
+        public void Hierarchy_WithUiDetails_FormatsRectAndCanvasAndText()
+        {
+            var canvasGo = new GameObject("MainCanvas", typeof(RectTransform), typeof(Canvas));
+            var canvas = canvasGo.GetComponent<Canvas>()!;
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 0;
+            var canvasRt = (RectTransform)canvasGo.transform;
+            canvasRt.rect = new Rect(0, 0, 1920, 1080);
+
+            var buttonGo = new GameObject("StartBtn", typeof(RectTransform));
+            var btnRt = (RectTransform)buttonGo.transform;
+            btnRt.anchoredPosition = new Vector2(0, -100);
+            btnRt.rect = new Rect(-80, -20, 160, 40);
+            var textComp = buttonGo.AddComponent<TestTextElement>();
+            textComp.text = "Start Adventure";
+            canvasRt.AddChild(btnRt);
+
+            string result = Inspect.Hierarchy(canvasGo, includeUiDetails: true);
+
+            Assert.Contains("MainCanvas [active] [RectTransform, Canvas] (canvas: ScreenSpaceOverlay, order=0 | pos: 0, 0 | size: 1920x1080)", result);
+            Assert.Contains("StartBtn [active] [RectTransform, TestTextElement] (pos: 0, -100 | size: 160x40 | text: \"Start Adventure\")", result);
+        }
+
+        [Fact]
+        public void Hierarchy_WithUiDetails_IncludesRaycastFalse()
+        {
+            var panelGo = new GameObject("Panel", typeof(RectTransform));
+            var rt = (RectTransform)panelGo.transform;
+            rt.rect = new Rect(0, 0, 300, 200);
+            panelGo.AddComponent<TestRaycastGraphic>();
+
+            string result = Inspect.Hierarchy(panelGo, includeUiDetails: true);
+
+            Assert.Contains("(pos: 0, 0 | size: 300x200 | raycast: false)", result);
+        }
+
+        [Fact]
+        public void UIDocument_NoDocuments_ReturnsEmptyNotification()
+        {
+            string result = Inspect.UIDocument();
+            Assert.Contains("(No UIDocument found in loaded scenes or Prefab Stage)", result);
+        }
+
+        [Fact]
+        public void UIDocument_WithDocument_FormatsVisualElementTree()
+        {
+            var go = new GameObject("HUDDoc", typeof(UnityEngine.UIElements.UIDocument));
+            var doc = go.GetComponent<UnityEngine.UIElements.UIDocument>()!;
+            doc.name = "HUD";
+            doc.sortingOrder = 3;
+
+            var root = new UnityEngine.UIElements.VisualElement { name = "root-panel" };
+            root.layout = new Rect(0, 0, 1920, 1080);
+            root.AddToClassList("root-style");
+
+            var label = new UnityEngine.UIElements.Label("Score: 100") { name = "score-label" };
+            label.layout = new Rect(10, 10, 200, 30);
+            label.AddToClassList("label-style");
+            root.Add(label);
+
+            var button = new UnityEngine.UIElements.Button(null) { name = "pause-btn", visible = false, enabledSelf = false };
+            button.layout = new Rect(1800, 10, 50, 50);
+            button.text = "Pause";
+            root.Add(button);
+
+            doc.rootVisualElement = root;
+
+            string result = Inspect.UIDocument(doc);
+
+            Assert.Contains("=== UIDocument: \"HUD\" (GameObject: \"HUDDoc\", SortingOrder: 3) ===", result);
+            Assert.Contains("VisualElement #root-panel .root-style (size: 1920x1080)", result);
+            Assert.Contains("Label #score-label .label-style (pos: 10, 10 | size: 200x30 | text: \"Score: 100\")", result);
+            Assert.Contains("Button #pause-btn [hidden, disabled] (pos: 1800, 10 | size: 50x50 | text: \"Pause\")", result);
+        }
+
+        [Fact]
+        public void UIDocument_VisualElementRoot_FormatsSubtree()
+        {
+            var container = new UnityEngine.UIElements.VisualElement { name = "dialog" };
+            container.layout = new Rect(100, 100, 400, 250);
+            var btn = new UnityEngine.UIElements.Button(null) { text = "OK" };
+            btn.layout = new Rect(150, 180, 100, 40);
+            container.Add(btn);
+
+            string result = Inspect.UIDocument(container);
+
+            Assert.Contains("VisualElement #dialog (pos: 100, 100 | size: 400x250)", result);
+            Assert.Contains("Button (pos: 150, 180 | size: 100x40 | text: \"OK\")", result);
+        }
+
+        [Fact]
+        public void UIDocument_FromGameObject_ReturnsResultOrMissingNotification()
+        {
+            var emptyGo = new GameObject("EmptyObj");
+            string missingResult = Inspect.UIDocument(emptyGo);
+            Assert.Contains("(GameObject \"EmptyObj\" has no UIDocument component)", missingResult);
+
+            var docGo = new GameObject("DocObj", typeof(UnityEngine.UIElements.UIDocument));
+            var doc = docGo.GetComponent<UnityEngine.UIElements.UIDocument>()!;
+            doc.rootVisualElement = new UnityEngine.UIElements.VisualElement { name = "root" };
+            string foundResult = Inspect.UIDocument(docGo);
+            Assert.Contains("=== UIDocument:", foundResult);
+            Assert.Contains("VisualElement #root", foundResult);
+        }
+
+        [Fact]
+        public void UIDocument_TruncatesAtMaxDepthAndMaxItems()
+        {
+            var root = new UnityEngine.UIElements.VisualElement { name = "L0" };
+            var current = root;
+            for (int i = 1; i <= 10; i++)
+            {
+                var next = new UnityEngine.UIElements.VisualElement { name = $"L{i}" };
+                current.Add(next);
+                current = next;
+            }
+
+            string depthResult = Inspect.UIDocument(root, maxDepth: 3);
+            Assert.Contains("L0", depthResult);
+            Assert.Contains("L3", depthResult);
+            Assert.Contains("... (truncated: maximum depth reached)", depthResult);
+            Assert.DoesNotContain("L5", depthResult);
+
+            var wideRoot = new UnityEngine.UIElements.VisualElement { name = "Wide" };
+            for (int i = 0; i < 20; i++)
+            {
+                wideRoot.Add(new UnityEngine.UIElements.VisualElement { name = $"Child_{i}" });
+            }
+
+            string itemsResult = Inspect.UIDocument(wideRoot, maxItems: 5);
+            Assert.Contains("Wide", itemsResult);
+            Assert.Contains("... (truncated: maximum item count reached)", itemsResult);
+        }
+
+        [Fact]
+        public void Object_WithVisualElement_TraversesElementTree()
+        {
+            var ve = new UnityEngine.UIElements.VisualElement { name = "polyVE" };
+            ve.layout = new Rect(0, 0, 100, 100);
+            ve.Add(new UnityEngine.UIElements.Label("Polymorphic"));
+
+            string result = Inspect.Object(ve);
+
+            Assert.Contains("VisualElement #polyVE (size: 100x100)", result);
+            Assert.Contains("Label (text: \"Polymorphic\")", result);
         }
 
         #endregion

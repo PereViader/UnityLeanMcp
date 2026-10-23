@@ -4,6 +4,7 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UIElements;
 using UnityLeanMcp;
 
 namespace UnityLeanMcpTests
@@ -503,6 +504,86 @@ namespace UnityLeanMcpTests
             StringAssert.Contains("Assets & Prefabs:", help);
             StringAssert.Contains("Dependencies", help);
             StringAssert.Contains("Referencers", help);
+        }
+
+        [Test]
+        public void GameObject_WithRectTransform_FormatsLayout()
+        {
+            var go = CreateTestGameObject("TestUIElement");
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchoredPosition = new Vector2(25, 50);
+            rt.sizeDelta = new Vector2(200, 100);
+
+            string result = Inspect.GameObject(go);
+
+            StringAssert.Contains("RectTransform: anchoredPos=(25.00, 50.00), sizeDelta=(200.00, 100.00)", result);
+        }
+
+        [Test]
+        public void GameObject_WithCanvas_FormatsCanvasProperties()
+        {
+            var go = CreateTestGameObject("TestCanvas");
+            var canvas = go.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 7;
+
+            string result = Inspect.GameObject(go);
+
+            StringAssert.Contains("Canvas: renderMode=ScreenSpaceOverlay, sortingOrder=7", result);
+        }
+
+        [Test]
+        public void Hierarchy_WithUiDetails_IncludesRectAndCanvas()
+        {
+            var canvasGo = CreateTestGameObject("CanvasRoot");
+            var canvas = canvasGo.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            var panelGo = CreateTestGameObject("SubPanel");
+            var panelRt = panelGo.AddComponent<RectTransform>();
+            panelRt.SetParent(canvasGo.transform);
+            panelRt.anchoredPosition = new Vector2(0, 10);
+            panelRt.sizeDelta = new Vector2(100, 50);
+
+            string result = Inspect.Hierarchy(canvasGo, includeUiDetails: true);
+
+            StringAssert.Contains("CanvasRoot [active]", result);
+            StringAssert.Contains("canvas: ScreenSpaceOverlay", result);
+            StringAssert.Contains("SubPanel [active]", result);
+            StringAssert.Contains("pos: 0, 10", result);
+        }
+
+        [Test]
+        public void UIDocument_WithRealElements_FormatsTree()
+        {
+            var go = CreateTestGameObject("UIDocumentHost");
+            var doc = go.AddComponent<UIDocument>();
+            doc.sortingOrder = 2;
+
+            var root = new VisualElement { name = "hud" };
+            root.AddToClassList("hud-container");
+            var label = new Label("Health: 99") { name = "health-txt" };
+            root.Add(label);
+            var btn = new Button() { text = "Pause" };
+            root.Add(btn);
+
+            // In Editor tests, rootVisualElement may need manual visual tree or direct assignment
+            // UIDocument.rootVisualElement is read-only in real Unity, but we can inspect via Inspect.UIDocument(VisualElement)
+            string result = Inspect.UIDocument(root);
+
+            StringAssert.Contains("VisualElement #hud .hud-container", result);
+            StringAssert.Contains("Label #health-txt", result);
+            StringAssert.Contains("text: \"Health: 99\"", result);
+            StringAssert.Contains("Button", result);
+            StringAssert.Contains("text: \"Pause\"", result);
+        }
+
+        [Test]
+        public void Inspect_Help_IncludesUIDocument()
+        {
+            string help = Inspect.Help();
+            StringAssert.Contains("Scene & Hierarchy:", help);
+            StringAssert.Contains("UIDocument", help);
         }
     }
 }

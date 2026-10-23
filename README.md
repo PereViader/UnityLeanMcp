@@ -27,12 +27,13 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 
 | Category | Method | Description |
 | :--- | :--- | :--- |
-| **Scene & Hierarchy** | `Inspect.Hierarchy([root], [maxDepth], [maxItems])` | Formatted hierarchy tree of active/loaded scenes, open Prefab Stage, a root `GameObject`/`Transform`, or a scene/prefab by name. |
+| **Scene & Hierarchy** | `Inspect.Hierarchy([root], [maxDepth], [maxItems], [includeUiDetails])` | Formatted hierarchy tree of active/loaded scenes, open Prefab Stage, a root `GameObject`/`Transform`, or a scene/prefab by name (supports `includeUiDetails: true` for compact uGUI rect, canvas, text, and raycast tokens). |
+| | `Inspect.UIDocument([root], [maxDepth], [maxItems])` | Traverses UI Toolkit `UIDocument` instances or `VisualElement` trees with element types, classes, layout rects, and text content. |
 | | `Inspect.PrefabStage([maxDepth], [maxItems])` | Inspects active Prefab Stage (asset path, mode, root GameObject, dirty state, auto-save status, and contents hierarchy). |
 | | `Inspect.Find(namePattern, [includeInactive], [maxItems])` | Finds GameObjects across loaded scenes by exact name or wildcard glob pattern (e.g. `*Player*`). |
 | | `Inspect.MissingScripts([maxItems])` | Detects GameObjects with missing or unassigned MonoBehaviour scripts. |
 | | `Inspect.SceneState()` | Summarizes loaded scenes, active scene, active Prefab Stage (if open), root object count, and dirty state. |
-| **Objects & Components** | `Inspect.GameObject(gameObject, [maxItems])` | Detailed inspection of active state, tag, layer, components, and children. |
+| **Objects & Components** | `Inspect.GameObject(gameObject, [maxItems])` | Detailed inspection of active state, tag, layer, components, and children (`RectTransform` and `Canvas` aware). |
 | | `Inspect.Component(component, [maxItems])` | Serialized fields and properties without instantiating copies or mutating state. |
 | | `Inspect.Object(target, [maxDepth], [maxItems])` | General reflection-based inspection of arbitrary C# objects or collections. |
 | | `Inspect.PrefabOverrides(instance, [maxItems])` | Lists added/removed components and property deltas on a prefab instance relative to the source asset. |

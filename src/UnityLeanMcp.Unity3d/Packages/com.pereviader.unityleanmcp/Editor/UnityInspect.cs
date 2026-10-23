@@ -15,6 +15,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UIElements;
 
 namespace UnityLeanMcp
 {
@@ -56,21 +57,29 @@ namespace UnityLeanMcp
         /// </summary>
         public static string Hierarchy()
         {
-            return Hierarchy(root: (GameObject)null, maxDepth: DefaultMaxDepth, maxItems: DefaultMaxItems);
+            return Hierarchy(root: (GameObject)null, maxDepth: DefaultMaxDepth, maxItems: DefaultMaxItems, includeUiDetails: false);
         }
 
         /// <summary>
-        /// Inspects the hierarchy starting from a specific depth and item limit.
+        /// Inspects the active scene hierarchy, optionally including compact uGUI layout details (rects, anchors, raycast targets).
         /// </summary>
-        public static string Hierarchy(int maxDepth, int maxItems = DefaultMaxItems)
+        public static string Hierarchy(bool includeUiDetails)
         {
-            return Hierarchy(root: (GameObject)null, maxDepth: maxDepth, maxItems: maxItems);
+            return Hierarchy(root: (GameObject)null, maxDepth: DefaultMaxDepth, maxItems: DefaultMaxItems, includeUiDetails: includeUiDetails);
         }
 
         /// <summary>
-        /// Inspects the hierarchy starting from a specific root Transform.
+        /// Inspects the hierarchy starting from a specific depth and item limit, optionally including uGUI layout details.
         /// </summary>
-        public static string Hierarchy(Transform root, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        public static string Hierarchy(int maxDepth, int maxItems = DefaultMaxItems, bool includeUiDetails = false)
+        {
+            return Hierarchy(root: (GameObject)null, maxDepth: maxDepth, maxItems: maxItems, includeUiDetails: includeUiDetails);
+        }
+
+        /// <summary>
+        /// Inspects the hierarchy starting from a specific root Transform, optionally including uGUI layout details.
+        /// </summary>
+        public static string Hierarchy(Transform root, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems, bool includeUiDetails = false)
         {
             if (ReferenceEquals(root, null))
             {
@@ -90,17 +99,17 @@ namespace UnityLeanMcp
             {
                 return "(Transform has no GameObject)";
             }
-            return Hierarchy(go, maxDepth, maxItems);
+            return Hierarchy(go, maxDepth, maxItems, includeUiDetails);
         }
 
         /// <summary>
-        /// Inspects the hierarchy of a specific loaded scene by name or path, or the active Prefab Stage.
+        /// Inspects the hierarchy of a specific loaded scene by name or path, or the active Prefab Stage, optionally including uGUI layout details.
         /// </summary>
-        public static string Hierarchy(string sceneName, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        public static string Hierarchy(string sceneName, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems, bool includeUiDetails = false)
         {
             if (string.IsNullOrWhiteSpace(sceneName))
             {
-                return Hierarchy(root: (GameObject)null, maxDepth: maxDepth, maxItems: maxItems);
+                return Hierarchy(root: (GameObject)null, maxDepth: maxDepth, maxItems: maxItems, includeUiDetails: includeUiDetails);
             }
 
             string cleanQuery = sceneName.Trim().Replace('\\', '/');
@@ -126,7 +135,7 @@ namespace UnityLeanMcp
                     string.Equals(cleanNameWithoutExt, stageFileNameWithoutExt, StringComparison.OrdinalIgnoreCase) ||
                     (!string.IsNullOrEmpty(rootName) && string.Equals(cleanQuery, rootName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    return InspectPrefabStageHierarchy(stage, maxDepth, maxItems);
+                    return InspectPrefabStageHierarchy(stage, maxDepth, maxItems, includeUiDetails);
                 }
             }
 
@@ -166,13 +175,13 @@ namespace UnityLeanMcp
                 return $"(Scene \"{sceneName}\" is not currently loaded)";
             }
 
-            return InspectScene(targetScene, maxDepth, maxItems);
+            return InspectScene(targetScene, maxDepth, maxItems, includeUiDetails);
         }
 
         /// <summary>
-        /// Inspects the hierarchy starting from a specific root GameObject.
+        /// Inspects the hierarchy starting from a specific root GameObject, optionally including uGUI layout details.
         /// </summary>
-        public static string Hierarchy(GameObject root, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        public static string Hierarchy(GameObject root, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems, bool includeUiDetails = false)
         {
             if (!ReferenceEquals(root, null) && root == null)
             {
@@ -191,7 +200,7 @@ namespace UnityLeanMcp
             {
                 if (root.transform != null)
                 {
-                    TraverseHierarchy(root.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                    TraverseHierarchy(root.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
                 }
                 else
                 {
@@ -229,7 +238,7 @@ namespace UnityLeanMcp
 
                 if (stageRoot != null && stageRoot.transform != null)
                 {
-                    TraverseHierarchy(stageRoot.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                    TraverseHierarchy(stageRoot.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
                 }
                 else
                 {
@@ -293,7 +302,7 @@ namespace UnityLeanMcp
                     var rootGo = rootObjects[i];
                     if (rootGo != null && rootGo.transform != null)
                     {
-                        TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                        TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
                     }
                 }
             }
@@ -308,7 +317,7 @@ namespace UnityLeanMcp
             return LimitOutput(sb.ToString().TrimEnd());
         }
 
-        private static string InspectScene(Scene scene, int maxDepth, int maxItems)
+        private static string InspectScene(Scene scene, int maxDepth, int maxItems, bool includeUiDetails = false)
         {
             maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
             maxItems = Math.Max(1, maxItems);
@@ -351,7 +360,7 @@ namespace UnityLeanMcp
                 var rootGo = rootObjects[i];
                 if (rootGo != null && rootGo.transform != null)
                 {
-                    TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                    TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
                 }
             }
 
@@ -363,7 +372,7 @@ namespace UnityLeanMcp
             return LimitOutput(sb.ToString().TrimEnd());
         }
 
-        private static string InspectPrefabStageHierarchy(PrefabStage stage, int maxDepth, int maxItems)
+        private static string InspectPrefabStageHierarchy(PrefabStage stage, int maxDepth, int maxItems, bool includeUiDetails = false)
         {
             maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
             maxItems = Math.Max(1, maxItems);
@@ -384,7 +393,7 @@ namespace UnityLeanMcp
             int itemCount = 0;
             bool itemLimitReached = false;
             var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
-            TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+            TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
 
             return LimitOutput(sb.ToString().TrimEnd());
         }
@@ -397,7 +406,8 @@ namespace UnityLeanMcp
             ref int itemCount,
             ref bool itemLimitReached,
             HashSet<Transform> visited,
-            StringBuilder sb)
+            StringBuilder sb,
+            bool includeUiDetails = false)
         {
             if (current == null) return;
 
@@ -492,7 +502,8 @@ namespace UnityLeanMcp
                 }
 
                 string compListStr = compNames.Count > 0 ? string.Join(", ", compNames) : "No Components";
-                sb.AppendLine($"{indent}{goName} {activeStatus} [{compListStr}]");
+                string uiSuffix = includeUiDetails ? GetUiDetailsSuffix(current, comps) : "";
+                sb.AppendLine($"{indent}{goName} {activeStatus} [{compListStr}]{uiSuffix}");
 
                 int childCount = 0;
                 try
@@ -531,7 +542,7 @@ namespace UnityLeanMcp
 
                     if (child != null)
                     {
-                        TraverseHierarchy(child, depth + 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                        TraverseHierarchy(child, depth + 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
                     }
                 }
             }
@@ -539,6 +550,107 @@ namespace UnityLeanMcp
             {
                 visited.Remove(current);
             }
+        }
+
+        private static string GetUiDetailsSuffix(Transform current, Component[] comps)
+        {
+            if (current == null) return "";
+
+            var parts = new List<string>();
+
+            Canvas canvas = null;
+            if (comps != null)
+            {
+                for (int i = 0; i < comps.Length; i++)
+                {
+                    if (comps[i] is Canvas c)
+                    {
+                        canvas = c;
+                        break;
+                    }
+                }
+            }
+
+            if (canvas != null)
+            {
+                parts.Add($"canvas: {canvas.renderMode}, order={canvas.sortingOrder}");
+            }
+
+            if (current is RectTransform rt)
+            {
+                string posX = rt.anchoredPosition.x.ToString("F0", CultureInfo.InvariantCulture);
+                string posY = rt.anchoredPosition.y.ToString("F0", CultureInfo.InvariantCulture);
+                string sizeW = rt.rect.width.ToString("F0", CultureInfo.InvariantCulture);
+                string sizeH = rt.rect.height.ToString("F0", CultureInfo.InvariantCulture);
+                parts.Add($"pos: {posX}, {posY}");
+                parts.Add($"size: {sizeW}x{sizeH}");
+
+                if (rt.anchorMin.x != rt.anchorMax.x || rt.anchorMin.y != rt.anchorMax.y)
+                {
+                    string minX = rt.anchorMin.x.ToString("F1", CultureInfo.InvariantCulture);
+                    string minY = rt.anchorMin.y.ToString("F1", CultureInfo.InvariantCulture);
+                    string maxX = rt.anchorMax.x.ToString("F1", CultureInfo.InvariantCulture);
+                    string maxY = rt.anchorMax.y.ToString("F1", CultureInfo.InvariantCulture);
+                    parts.Add($"anchors: [{minX}, {minY} - {maxX}, {maxY}]");
+                }
+            }
+
+            if (comps != null)
+            {
+                for (int i = 0; i < comps.Length; i++)
+                {
+                    var comp = comps[i];
+                    if (comp == null) continue;
+
+                    // Check for raycastTarget = false on graphic components
+                    try
+                    {
+                        var rtProp = comp.GetType().GetProperty("raycastTarget", BindingFlags.Public | BindingFlags.Instance);
+                        if (rtProp != null && rtProp.PropertyType == typeof(bool))
+                        {
+                            bool isRaycast = (bool)rtProp.GetValue(comp);
+                            if (!isRaycast)
+                            {
+                                parts.Add("raycast: false");
+                            }
+                        }
+                    }
+                    catch { }
+
+                    // Check for text content
+                    try
+                    {
+                        var textProp = comp.GetType().GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
+                        if (textProp != null && textProp.PropertyType == typeof(string) && !comp.GetType().Name.Contains("InputField"))
+                        {
+                            string txt = textProp.GetValue(comp) as string;
+                            if (!string.IsNullOrEmpty(txt))
+                            {
+                                parts.Add($"text: \"{FormatTextSummary(txt, 25)}\"");
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            if (parts.Count > 0)
+            {
+                return $" ({string.Join(" | ", parts)})";
+            }
+
+            return "";
+        }
+
+        private static string FormatTextSummary(string text, int maxLength = 30)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            string singleLine = text.Replace("\r", "").Replace("\n", "\\n");
+            if (singleLine.Length > maxLength)
+            {
+                singleLine = singleLine.Substring(0, maxLength) + "...";
+            }
+            return singleLine;
         }
 
         /// <summary>
@@ -1074,6 +1186,301 @@ namespace UnityLeanMcp
 
         #endregion
 
+        #region UI Toolkit Inspection
+
+        /// <summary>
+        /// Inspects active UI Toolkit UIDocument instances and their VisualElement layout trees.
+        /// </summary>
+        /// <param name="maxDepth">The maximum hierarchy depth to traverse.</param>
+        /// <param name="maxItems">The maximum number of VisualElement nodes to display.</param>
+        /// <returns>A formatted summary of UIDocument instances and their VisualElement trees.</returns>
+        public static string UIDocument(int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        {
+            maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
+            maxItems = Math.Max(1, maxItems);
+
+            UIDocument[] docs = null;
+            try
+            {
+#if UNITY_2023_1_OR_NEWER
+                docs = UnityEngine.Object.FindObjectsByType<UIDocument>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+                docs = UnityEngine.Object.FindObjectsOfType<UIDocument>();
+#endif
+            }
+            catch { }
+
+            if (docs == null || docs.Length == 0)
+            {
+                return "(No UIDocument found in loaded scenes or Prefab Stage)";
+            }
+
+            var sb = new StringBuilder();
+            int itemCount = 0;
+            bool itemLimitReached = false;
+            var visited = new HashSet<VisualElement>(ReferenceIdentityComparer<VisualElement>.Instance);
+
+            for (int i = 0; i < docs.Length; i++)
+            {
+                if (itemCount >= maxItems)
+                {
+                    break;
+                }
+
+                var doc = docs[i];
+                if (doc == null) continue;
+
+                string docName = doc.name;
+                string goName = doc.gameObject != null ? doc.gameObject.name : "null";
+                sb.AppendLine($"=== UIDocument: \"{docName}\" (GameObject: \"{goName}\", SortingOrder: {doc.sortingOrder.ToString("F0", CultureInfo.InvariantCulture)}) ===");
+
+                if (doc.rootVisualElement == null)
+                {
+                    sb.AppendLine("(rootVisualElement is null)");
+                    continue;
+                }
+
+                TraverseVisualElement(doc.rootVisualElement, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                if (i < docs.Length - 1 && itemCount < maxItems)
+                {
+                    sb.AppendLine();
+                }
+            }
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Inspects a specific UI Toolkit UIDocument and traverses its rootVisualElement tree.
+        /// </summary>
+        public static string UIDocument(UIDocument document, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        {
+            if (!ReferenceEquals(document, null) && document == null)
+            {
+                return "(UIDocument is destroyed)";
+            }
+            if (document == null)
+            {
+                return "null";
+            }
+
+            maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
+            maxItems = Math.Max(1, maxItems);
+
+            var sb = new StringBuilder();
+            string docName = document.name;
+            string goName = document.gameObject != null ? document.gameObject.name : "null";
+            sb.AppendLine($"=== UIDocument: \"{docName}\" (GameObject: \"{goName}\", SortingOrder: {document.sortingOrder.ToString("F0", CultureInfo.InvariantCulture)}) ===");
+
+            if (document.rootVisualElement == null)
+            {
+                sb.AppendLine("(rootVisualElement is null)");
+                return sb.ToString().TrimEnd();
+            }
+
+            int itemCount = 0;
+            bool itemLimitReached = false;
+            var visited = new HashSet<VisualElement>(ReferenceIdentityComparer<VisualElement>.Instance);
+            TraverseVisualElement(document.rootVisualElement, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Inspects a specific UI Toolkit VisualElement and traverses its children.
+        /// </summary>
+        public static string UIDocument(VisualElement root, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        {
+            if (root == null)
+            {
+                return "null";
+            }
+
+            maxDepth = Math.Max(0, Math.Min(maxDepth, 1000));
+            maxItems = Math.Max(1, maxItems);
+
+            var sb = new StringBuilder();
+            int itemCount = 0;
+            bool itemLimitReached = false;
+            var visited = new HashSet<VisualElement>(ReferenceIdentityComparer<VisualElement>.Instance);
+            TraverseVisualElement(root, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Inspects the UI Toolkit UIDocument component on the specified GameObject.
+        /// </summary>
+        public static string UIDocument(GameObject gameObject, int maxDepth = DefaultMaxDepth, int maxItems = DefaultMaxItems)
+        {
+            if (!ReferenceEquals(gameObject, null) && gameObject == null)
+            {
+                return "(GameObject is destroyed)";
+            }
+            if (gameObject == null)
+            {
+                return "null";
+            }
+
+            UIDocument doc = null;
+            try
+            {
+                doc = gameObject.GetComponent<UIDocument>();
+            }
+            catch { }
+
+            if (doc == null)
+            {
+                return $"(GameObject \"{gameObject.name}\" has no UIDocument component)";
+            }
+
+            return UIDocument(doc, maxDepth, maxItems);
+        }
+
+        private static void TraverseVisualElement(
+            VisualElement current,
+            int depth,
+            int maxDepth,
+            int maxItems,
+            ref int itemCount,
+            ref bool itemLimitReached,
+            HashSet<VisualElement> visited,
+            StringBuilder sb,
+            string prefix = "")
+        {
+            if (current == null) return;
+
+            string indent = prefix + new string(' ', depth * 2);
+
+            if (depth > maxDepth)
+            {
+                sb.AppendLine($"{indent}{DepthTruncationMarker}");
+                return;
+            }
+
+            if (!visited.Add(current))
+            {
+                sb.AppendLine($"{indent}{CycleTruncationMarker}");
+                return;
+            }
+
+            try
+            {
+                if (itemCount >= maxItems)
+                {
+                    if (!itemLimitReached)
+                    {
+                        itemLimitReached = true;
+                        sb.AppendLine($"{indent}{ItemTruncationMarker}");
+                    }
+                    return;
+                }
+
+                itemCount++;
+
+                string typeName = current.GetType().Name;
+                string nameStr = !string.IsNullOrEmpty(current.name) ? $" #{current.name}" : "";
+
+                var classes = current.GetClasses();
+                string classStr = "";
+                if (classes != null)
+                {
+                    var classList = classes.ToList();
+                    if (classList.Count > 0)
+                    {
+                        classStr = " ." + string.Join(".", classList);
+                    }
+                }
+
+                var flags = new List<string>();
+                if (!current.visible) flags.Add("hidden");
+                if (!current.enabledSelf) flags.Add("disabled");
+                string flagStr = flags.Count > 0 ? $" [{string.Join(", ", flags)}]" : "";
+
+                var layout = current.layout;
+                var layoutParts = new List<string>();
+                if (!float.IsNaN(layout.x) && !float.IsNaN(layout.y) && (layout.x != 0 || layout.y != 0))
+                {
+                    layoutParts.Add($"pos: {layout.x.ToString("F0", CultureInfo.InvariantCulture)}, {layout.y.ToString("F0", CultureInfo.InvariantCulture)}");
+                }
+                if (!float.IsNaN(layout.width) && !float.IsNaN(layout.height) && (layout.width != 0 || layout.height != 0))
+                {
+                    layoutParts.Add($"size: {layout.width.ToString("F0", CultureInfo.InvariantCulture)}x{layout.height.ToString("F0", CultureInfo.InvariantCulture)}");
+                }
+
+                if (current is TextElement te && !string.IsNullOrEmpty(te.text))
+                {
+                    layoutParts.Add($"text: \"{FormatTextSummary(te.text, 30)}\"");
+                }
+                else
+                {
+                    try
+                    {
+                        var textProp = current.GetType().GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
+                        if (textProp != null && textProp.PropertyType == typeof(string))
+                        {
+                            string t = textProp.GetValue(current) as string;
+                            if (!string.IsNullOrEmpty(t))
+                            {
+                                layoutParts.Add($"text: \"{FormatTextSummary(t, 30)}\"");
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                string detailsStr = layoutParts.Count > 0 ? $" ({string.Join(" | ", layoutParts)})" : "";
+                sb.AppendLine($"{indent}{typeName}{nameStr}{classStr}{flagStr}{detailsStr}");
+
+                int childCount = 0;
+                try
+                {
+                    childCount = current.childCount;
+                }
+                catch { }
+
+                if (depth >= maxDepth)
+                {
+                    if (childCount > 0)
+                    {
+                        sb.AppendLine($"{indent}  {DepthTruncationMarker}");
+                    }
+                    return;
+                }
+
+                for (int i = 0; i < childCount; i++)
+                {
+                    if (itemCount >= maxItems)
+                    {
+                        if (!itemLimitReached)
+                        {
+                            itemLimitReached = true;
+                            sb.AppendLine($"{indent}  {ItemTruncationMarker}");
+                        }
+                        break;
+                    }
+
+                    VisualElement child = null;
+                    try
+                    {
+                        child = current[i];
+                    }
+                    catch { }
+
+                    if (child != null)
+                    {
+                        TraverseVisualElement(child, depth + 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, prefix);
+                    }
+                }
+            }
+            finally
+            {
+                visited.Remove(current);
+            }
+        }
+
+        #endregion
+
         #region Object & Component Inspection
 
         /// <summary>
@@ -1153,6 +1560,13 @@ namespace UnityLeanMcp
                 if (target is GameObject go)
                 {
                     InspectGameObject(go, maxItems, visited, sb);
+                }
+                else if (target is VisualElement ve)
+                {
+                    int itemCount = 0;
+                    bool itemLimitReached = false;
+                    var visitedElements = new HashSet<VisualElement>(ReferenceIdentityComparer<VisualElement>.Instance);
+                    TraverseVisualElement(ve, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visitedElements, sb);
                 }
                 else if (target is Component comp)
                 {
@@ -1302,10 +1716,32 @@ namespace UnityLeanMcp
             {
                 try
                 {
-                    string pos = go.transform.localPosition.ToString("F2", CultureInfo.InvariantCulture);
-                    string rot = go.transform.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
-                    string scale = go.transform.localScale.ToString("F2", CultureInfo.InvariantCulture);
-                    sb.AppendLine($"  Transform: localPos={pos}, localRot={rot}, localScale={scale}");
+                    if (go.transform is RectTransform rt)
+                    {
+                        string anchoredPos = rt.anchoredPosition.ToString("F2", CultureInfo.InvariantCulture);
+                        string sizeDelta = rt.sizeDelta.ToString("F2", CultureInfo.InvariantCulture);
+                        string rectW = rt.rect.width.ToString("F2", CultureInfo.InvariantCulture);
+                        string rectH = rt.rect.height.ToString("F2", CultureInfo.InvariantCulture);
+                        string anchorMin = rt.anchorMin.ToString("F2", CultureInfo.InvariantCulture);
+                        string anchorMax = rt.anchorMax.ToString("F2", CultureInfo.InvariantCulture);
+                        string pivot = rt.pivot.ToString("F2", CultureInfo.InvariantCulture);
+
+                        sb.AppendLine($"  RectTransform: anchoredPos={anchoredPos}, sizeDelta={sizeDelta}, rect=({rectW}x{rectH}), anchors=[{anchorMin} to {anchorMax}], pivot={pivot}");
+                        if (rt.localEulerAngles.x != 0 || rt.localEulerAngles.y != 0 || rt.localEulerAngles.z != 0 ||
+                            rt.localScale.x != 1 || rt.localScale.y != 1 || rt.localScale.z != 1)
+                        {
+                            string rot = rt.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
+                            string scale = rt.localScale.ToString("F2", CultureInfo.InvariantCulture);
+                            sb.AppendLine($"    Transform: localRot={rot}, localScale={scale}");
+                        }
+                    }
+                    else
+                    {
+                        string pos = go.transform.localPosition.ToString("F2", CultureInfo.InvariantCulture);
+                        string rot = go.transform.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
+                        string scale = go.transform.localScale.ToString("F2", CultureInfo.InvariantCulture);
+                        sb.AppendLine($"  Transform: localPos={pos}, localRot={rot}, localScale={scale}");
+                    }
 
                     int childCount = go.transform.childCount;
                     if (childCount > 0)
@@ -1322,6 +1758,28 @@ namespace UnityLeanMcp
                 }
                 catch { }
             }
+
+            try
+            {
+                var canvasComp = go.GetComponent<Canvas>();
+                if (canvasComp != null)
+                {
+                    sb.AppendLine($"  Canvas: renderMode={canvasComp.renderMode}, sortingOrder={canvasComp.sortingOrder}, sortingLayer=\"{canvasComp.sortingLayerName}\"");
+                }
+            }
+            catch { }
+
+            try
+            {
+                var uiDocComp = go.GetComponent<UIDocument>();
+                if (uiDocComp != null && uiDocComp.rootVisualElement != null)
+                {
+                    int elemCount = 0;
+                    try { elemCount = uiDocComp.rootVisualElement.childCount; } catch { }
+                    sb.AppendLine($"  UIDocument: sortingOrder={uiDocComp.sortingOrder.ToString("F0", CultureInfo.InvariantCulture)}, rootVisualElement children={elemCount}");
+                }
+            }
+            catch { }
 
             Component[] comps = null;
             try
@@ -1375,7 +1833,35 @@ namespace UnityLeanMcp
 
             try
             {
-                if (comp is Transform tr)
+                if (comp is RectTransform rt)
+                {
+                    string anchoredPos = rt.anchoredPosition.ToString("F2", CultureInfo.InvariantCulture);
+                    string sizeDelta = rt.sizeDelta.ToString("F2", CultureInfo.InvariantCulture);
+                    string rectW = rt.rect.width.ToString("F2", CultureInfo.InvariantCulture);
+                    string rectH = rt.rect.height.ToString("F2", CultureInfo.InvariantCulture);
+                    string anchorMin = rt.anchorMin.ToString("F2", CultureInfo.InvariantCulture);
+                    string anchorMax = rt.anchorMax.ToString("F2", CultureInfo.InvariantCulture);
+                    string pivot = rt.pivot.ToString("F2", CultureInfo.InvariantCulture);
+                    sb.AppendLine($"  RectTransform: anchoredPos={anchoredPos}, sizeDelta={sizeDelta}, rect=({rectW}x{rectH}), anchors=[{anchorMin} to {anchorMax}], pivot={pivot}, children={rt.childCount}");
+                }
+                else if (comp is Canvas canvas)
+                {
+                    sb.AppendLine($"  Canvas: renderMode={canvas.renderMode}, sortingOrder={canvas.sortingOrder}, sortingLayer=\"{canvas.sortingLayerName}\"");
+                }
+                else if (comp is UIDocument uiDoc)
+                {
+                    sb.AppendLine($"  UIDocument: sortingOrder={uiDoc.sortingOrder.ToString("F0", CultureInfo.InvariantCulture)}");
+                    if (uiDoc.rootVisualElement != null)
+                    {
+                        sb.AppendLine("  VisualTree:");
+                        int itemCount = 0;
+                        bool itemLimitReached = false;
+                        var visitedElements = new HashSet<VisualElement>(ReferenceIdentityComparer<VisualElement>.Instance);
+                        TraverseVisualElement(uiDoc.rootVisualElement, 0, DefaultMaxDepth, maxItems, ref itemCount, ref itemLimitReached, visitedElements, sb, "    ");
+                        return;
+                    }
+                }
+                else if (comp is Transform tr)
                 {
                     string pos = tr.localPosition.ToString("F2", CultureInfo.InvariantCulture);
                     string rot = tr.localEulerAngles.ToString("F2", CultureInfo.InvariantCulture);
@@ -2654,10 +3140,24 @@ namespace UnityLeanMcp
                     try
                     {
                         var t = activeGo.transform;
-                        string pos = t.position.ToString("F2", CultureInfo.InvariantCulture);
-                        string rot = t.eulerAngles.ToString("F2", CultureInfo.InvariantCulture);
-                        string scale = t.localScale.ToString("F2", CultureInfo.InvariantCulture);
-                        sb.AppendLine($"  World Pos: {pos} | World Rot: {rot} | Scale: {scale}");
+                        if (t is RectTransform rt)
+                        {
+                            string anchoredPos = rt.anchoredPosition.ToString("F2", CultureInfo.InvariantCulture);
+                            string sizeDelta = rt.sizeDelta.ToString("F2", CultureInfo.InvariantCulture);
+                            string rectW = rt.rect.width.ToString("F2", CultureInfo.InvariantCulture);
+                            string rectH = rt.rect.height.ToString("F2", CultureInfo.InvariantCulture);
+                            string anchorMin = rt.anchorMin.ToString("F2", CultureInfo.InvariantCulture);
+                            string anchorMax = rt.anchorMax.ToString("F2", CultureInfo.InvariantCulture);
+                            string pivot = rt.pivot.ToString("F2", CultureInfo.InvariantCulture);
+                            sb.AppendLine($"  RectTransform: anchoredPos={anchoredPos}, sizeDelta={sizeDelta}, rect=({rectW}x{rectH}), anchors=[{anchorMin} to {anchorMax}], pivot={pivot}");
+                        }
+                        else
+                        {
+                            string pos = t.position.ToString("F2", CultureInfo.InvariantCulture);
+                            string rot = t.eulerAngles.ToString("F2", CultureInfo.InvariantCulture);
+                            string scale = t.localScale.ToString("F2", CultureInfo.InvariantCulture);
+                            sb.AppendLine($"  World Pos: {pos} | World Rot: {rot} | Scale: {scale}");
+                        }
                     }
                     catch { }
                 }
@@ -3230,6 +3730,7 @@ namespace UnityLeanMcp
                     case nameof(MissingScripts):
                     case nameof(SceneState):
                     case nameof(PrefabStage):
+                    case nameof(UIDocument):
                         cat = "Scene & Hierarchy";
                         break;
                     case nameof(GameObject):

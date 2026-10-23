@@ -92,6 +92,16 @@ namespace UnityEngine
                 return res.ToArray();
             }
 
+            if (typeof(T) == typeof(UnityEngine.UIElements.UIDocument) || typeof(T).IsSubclassOf(typeof(UnityEngine.UIElements.UIDocument)))
+            {
+                var res = new List<T>();
+                foreach (var d in UnityEngine.UIElements.UIDocument.AllUIDocuments)
+                {
+                    if (d is T t && !d._isDestroyed) res.Add(t);
+                }
+                return res.ToArray();
+            }
+
             return Array.Empty<T>();
         }
     }
@@ -105,6 +115,10 @@ namespace UnityEngine
         public Vector2(float x, float y) { this.x = x; this.y = y; }
         public override string ToString() => $"({x.ToString("F2", CultureInfo.InvariantCulture)}, {y.ToString("F2", CultureInfo.InvariantCulture)})";
         public string ToString(string format, IFormatProvider provider) => $"({x.ToString(format, provider)}, {y.ToString(format, provider)})";
+        public static bool operator ==(Vector2 a, Vector2 b) => a.x == b.x && a.y == b.y;
+        public static bool operator !=(Vector2 a, Vector2 b) => !(a == b);
+        public override bool Equals(object? obj) => obj is Vector2 other && this == other;
+        public override int GetHashCode() => HashCode.Combine(x, y);
     }
 
     public struct Vector3
@@ -244,6 +258,18 @@ namespace UnityEngine
         public System.Collections.IEnumerator GetEnumerator() => _children.GetEnumerator();
     }
 
+    public class RectTransform : Transform
+    {
+        public Vector2 anchoredPosition { get; set; }
+        public Vector2 sizeDelta { get; set; }
+        public Rect rect { get; set; }
+        public Vector2 anchorMin { get; set; } = new Vector2(0.5f, 0.5f);
+        public Vector2 anchorMax { get; set; } = new Vector2(0.5f, 0.5f);
+        public Vector2 pivot { get; set; } = new Vector2(0.5f, 0.5f);
+        public Vector2 offsetMin { get; set; }
+        public Vector2 offsetMax { get; set; }
+    }
+
     public class Component : Object
     {
         public GameObject gameObject { get; internal set; } = null!;
@@ -261,6 +287,23 @@ namespace UnityEngine
     public class AudioSource : Behaviour { }
     public class Rigidbody : Component { }
     public class Material : Object { }
+
+    public enum RenderMode
+    {
+        ScreenSpaceOverlay = 0,
+        ScreenSpaceCamera = 1,
+        WorldSpace = 2
+    }
+
+    public class Canvas : Behaviour
+    {
+        public RenderMode renderMode { get; set; } = RenderMode.ScreenSpaceOverlay;
+        public int sortingOrder { get; set; }
+        public string sortingLayerName { get; set; } = "Default";
+        public bool isRootCanvas { get; set; } = true;
+        public float scaleFactor { get; set; } = 1f;
+        public Rect pixelRect { get; set; } = new Rect(0, 0, 1920, 1080);
+    }
 
     public static class Mathf
     {
@@ -343,7 +386,7 @@ namespace UnityEngine
         }
         public string tag { get; set; } = "Untagged";
         public int layer { get; set; } = 0;
-        public Transform transform { get; }
+        public Transform transform { get; internal set; }
 
         public GameObject(string name = "")
         {
@@ -352,8 +395,45 @@ namespace UnityEngine
             _components.Add(transform);
         }
 
+        public GameObject(string name, params Type[] components)
+        {
+            this.name = name;
+            if (components != null && components.Any(t => typeof(RectTransform).IsAssignableFrom(t)))
+            {
+                var rt = new RectTransform { gameObject = this, name = name };
+                transform = rt;
+                _components.Add(rt);
+            }
+            else
+            {
+                transform = new Transform { gameObject = this, name = name };
+                _components.Add(transform);
+            }
+
+            if (components != null)
+            {
+                foreach (var t in components)
+                {
+                    if (typeof(Transform).IsAssignableFrom(t)) continue;
+                    var comp = (Component)Activator.CreateInstance(t)!;
+                    comp.gameObject = this;
+                    comp.name = t.Name;
+                    _components.Add(comp);
+                }
+            }
+        }
+
         public T AddComponent<T>() where T : Component, new()
         {
+            if (typeof(RectTransform).IsAssignableFrom(typeof(T)))
+            {
+                var rt = new RectTransform { gameObject = this, name = typeof(T).Name };
+                _components.Remove(transform);
+                transform = rt;
+                _components.Insert(0, rt);
+                return (T)(Component)rt;
+            }
+
             var comp = new T { gameObject = this, name = typeof(T).Name };
             _components.Add(comp);
             return comp;
@@ -1162,5 +1242,69 @@ namespace UnityLeanMcp
     public class CoverageResponsePayload
     {
         public List<CoverageFileReport> files = new();
+    }
+}
+
+namespace UnityEngine.UIElements
+{
+    public class VisualElement
+    {
+        private readonly List<VisualElement> _children = new();
+        private readonly List<string> _classes = new();
+
+        public string name { get; set; } = string.Empty;
+        public bool visible { get; set; } = true;
+        public bool enabledSelf { get; set; } = true;
+        public bool enabledInHierarchy { get; set; } = true;
+        public Rect layout { get; set; }
+        public Rect worldBound { get; set; }
+
+        public int childCount => _children.Count;
+        public VisualElement this[int index] => _children[index];
+
+        public void Add(VisualElement child)
+        {
+            _children.Add(child);
+        }
+
+        public void AddToClassList(string className)
+        {
+            if (!_classes.Contains(className)) _classes.Add(className);
+        }
+
+        public IEnumerable<string> GetClasses() => _classes;
+        public IEnumerable<VisualElement> Children() => _children;
+    }
+
+    public class TextElement : VisualElement
+    {
+        public string text { get; set; } = string.Empty;
+    }
+
+    public class Label : TextElement
+    {
+        public Label() { }
+        public Label(string text) { this.text = text; }
+    }
+
+    public class Button : TextElement
+    {
+        public Button() { }
+        public Button(Action? clickEvent) { }
+    }
+
+    public class UIDocument : Component
+    {
+        public static readonly List<UIDocument> AllUIDocuments = new();
+
+        public VisualElement? rootVisualElement { get; set; }
+        public float sortingOrder { get; set; }
+        public Object? visualTreeAsset { get; set; }
+        public Object? panelSettings { get; set; }
+
+        public UIDocument()
+        {
+            AllUIDocuments.Add(this);
+        }
     }
 }
