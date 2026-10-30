@@ -823,7 +823,8 @@ public class CoverageFormattingTests
             UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
             GetCoverageHandler.CaptureCoverage("run-compiling-test");
 
-            UnityEditor.EditorApplication.isCompiling = true;
+            // Simulate compilation starting in progress
+            UnityLeanMcpCompilationTracker.IncrementCompilationEpoch();
 
             using var stream = new MemoryStream();
             using var writer = new StreamWriter(stream) { AutoFlush = true };
@@ -835,7 +836,6 @@ public class CoverageFormattingTests
         finally
         {
             UnityEngine.TestTools.Coverage.enabled = origCoverage;
-            UnityEditor.EditorApplication.isCompiling = false;
             GetCoverageHandler.ClearCapturedCoverage();
             try { Directory.Delete(projectRoot, true); } catch { }
         }

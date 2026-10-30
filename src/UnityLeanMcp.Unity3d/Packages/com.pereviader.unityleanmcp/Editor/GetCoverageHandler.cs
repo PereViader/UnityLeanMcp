@@ -131,7 +131,7 @@ namespace UnityLeanMcp
             }
 
             int currentEpoch = SessionState.GetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
-            if (captured.compilationEpoch != currentEpoch || UnityLeanMcpCompilationTracker.IsCompiling || EditorApplication.isCompiling)
+            if (captured.compilationEpoch != currentEpoch)
             {
                 writer.WriteLine("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
                 return;
