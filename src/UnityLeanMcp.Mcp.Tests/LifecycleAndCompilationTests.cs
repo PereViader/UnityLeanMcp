@@ -369,6 +369,53 @@ public class LifecycleAndCompilationTests
         }
     }
 
+    [Fact]
+    public async Task TestRefresh_AfterFixingScriptCompileErrors_ReturnsCleanRefreshWithoutStaleDiagnostics()
+    {
+        var client = _fixture.SharedClient;
+        string scriptPath = Path.Combine(_fixture.UnityRoot, "Assets", "Tests", "Editor", "TemporaryBrokenScript.cs");
+        string metaPath = scriptPath + ".meta";
+
+        try
+        {
+            // 1. Introduce a compilation error in a script
+            await File.WriteAllTextAsync(scriptPath, "public class TemporaryBrokenScript { invalid syntax }");
+            File.SetLastWriteTimeUtc(scriptPath, DateTime.UtcNow);
+
+            var firstRefresh = await client.CallToolAsync("unity_refresh");
+            Assert.True(firstRefresh.IsError, firstRefresh.Text);
+            Assert.Contains("TemporaryBrokenScript.cs", firstRefresh.Text);
+
+            // 2. Fix the error by replacing with valid code
+            await File.WriteAllTextAsync(scriptPath, "public class TemporaryBrokenScript { public static int Value = 42; }");
+            File.SetLastWriteTimeUtc(scriptPath, DateTime.UtcNow);
+
+            var secondRefresh = await client.CallToolAsync("unity_refresh");
+            Assert.False(secondRefresh.IsError, secondRefresh.Text);
+            Assert.Contains("AssetDatabase refresh completed with 0 errors", secondRefresh.Text);
+            Assert.DoesNotContain("error CS", secondRefresh.Text);
+
+            // 3. Delete script and refresh again; must remain clean
+            if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            if (File.Exists(metaPath)) File.Delete(metaPath);
+
+            var thirdRefresh = await client.CallToolAsync("unity_refresh");
+            Assert.False(thirdRefresh.IsError, thirdRefresh.Text);
+            Assert.Contains("AssetDatabase refresh completed with 0 errors", thirdRefresh.Text);
+            Assert.DoesNotContain("error CS", thirdRefresh.Text);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+                if (File.Exists(metaPath)) File.Delete(metaPath);
+                await client.CallToolAsync("unity_refresh");
+            }
+            catch { }
+        }
+    }
+
     private static void DeleteFileWithRetry(string path, int maxRetries = 10, int delayMs = 50)
     {
         for (int i = 0; i < maxRetries; i++)

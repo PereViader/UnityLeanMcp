@@ -250,11 +250,27 @@ namespace UnityLeanMcp
                 if (operationId == null)
                 {
                     var active = UnityCommandGate.ReadSnapshot();
-                    operationId = active?.OperationId;
+                    if (active != null && (active.Kind == OperationKinds.Refresh || active.Kind == OperationKinds.Recompile))
+                    {
+                        operationId = active.OperationId;
+                    }
+                    else if (s_ActiveCapture != null && !string.IsNullOrEmpty(s_ActiveCapture.m_OperationId))
+                    {
+                        operationId = s_ActiveCapture.m_OperationId;
+                    }
                 }
 
                 if (s_ScopedDiagnostics.messages != null &&
-                    (string.IsNullOrEmpty(operationId) || string.IsNullOrEmpty(s_ScopedDiagnostics.operationId) || s_ScopedDiagnostics.operationId == operationId))
+                    !string.IsNullOrEmpty(operationId) &&
+                    (string.IsNullOrEmpty(s_ScopedDiagnostics.operationId) || s_ScopedDiagnostics.operationId == operationId))
+                {
+                    return new List<string>(s_ScopedDiagnostics.messages);
+                }
+
+                if (s_ScopedDiagnostics.messages != null &&
+                    string.IsNullOrEmpty(operationId) &&
+                    string.IsNullOrEmpty(s_ScopedDiagnostics.operationId) &&
+                    s_ActiveCapture != null)
                 {
                     return new List<string>(s_ScopedDiagnostics.messages);
                 }

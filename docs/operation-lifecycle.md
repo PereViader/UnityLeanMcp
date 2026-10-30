@@ -94,7 +94,7 @@ Most Unity object APIs require the main thread, but a blanket prohibition on all
 
 A `READY` probe can precede Unity noticing an external edit. `isCompiling == false` can also occur before or between compilation phases. Use the correlated refresh barrier and pending-request tracking, not a single idle observation or a presumed millisecond scheduling bound. Current settlement counts consecutive idle updates; update cadence varies.
 
-Capture compiler messages in `assemblyCompilationFinished` so they can survive reload. No-op refreshes may emit no assembly callbacks: clearing the previous compiler map at admission loses still-current errors. Conversely, old gameplay Console errors must not contaminate the current import window. Capture non-C# error severity during the operation, not by matching words such as `AssetPostprocessor` in historical logs.
+Capture compiler messages in `assemblyCompilationFinished` so they can survive reload. No-op refreshes and cache-hit rebuilds (e.g. reverted source edits satisfied by the Bee build cache) emit no assembly compilation callbacks; clearing the entire compiler map at admission loses still-current warnings, but retaining failed-assembly diagnostics when `!EditorUtility.scriptCompilationFailed` traps resolved errors. Prune stale assembly error diagnostics upon domain reload and settled refresh operations whenever Unity reports clean compilation (`!EditorUtility.scriptCompilationFailed`), while preserving warnings on valid assemblies. Conversely, old gameplay Console errors must not contaminate the current import window. Capture non-C# error severity during the operation, not by matching words such as `AssetPostprocessor` in historical logs.
 
 ### Completion and cancellation races
 

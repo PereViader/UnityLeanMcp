@@ -250,15 +250,55 @@ namespace UnityLeanMcp
 
                 // Persist the per-assembly replacement, including removal of old
                 // diagnostics, before Unity can reload the managed domain.
-                var state = new AssemblyDiagnosticsState();
-                foreach (var entry in s_AssemblyDiagnostics)
-                    state.assemblies.Add(new AssemblyDiagnosticsEntry { path = entry.Key, messages = entry.Value });
-                SessionState.SetString(AssemblyDiagnosticsKey, JsonUtility.ToJson(state));
+                PersistAssemblyDiagnosticsUnderLock();
             }
 
             // Persist at the authoritative compiler callback. A domain reload
             // can begin before compilationFinished or the next Editor update.
             WriteCapturedDiagnosticsSnapshot();
+        }
+
+        private static void PersistAssemblyDiagnosticsUnderLock()
+        {
+            var state = new AssemblyDiagnosticsState();
+            foreach (var entry in s_AssemblyDiagnostics)
+                state.assemblies.Add(new AssemblyDiagnosticsEntry { path = entry.Key, messages = entry.Value });
+            SessionState.SetString(AssemblyDiagnosticsKey, JsonUtility.ToJson(state));
+        }
+
+        internal static void PruneAssemblyErrorDiagnostics()
+        {
+            lock (s_DiagnosticsLock)
+            {
+                if (PruneAssemblyErrorDiagnosticsUnderLock())
+                {
+                    PersistAssemblyDiagnosticsUnderLock();
+                }
+            }
+        }
+
+        private static bool PruneAssemblyErrorDiagnosticsUnderLock()
+        {
+            if (s_AssemblyDiagnostics.Count == 0) return false;
+
+            List<string> keysToRemove = null;
+            foreach (var entry in s_AssemblyDiagnostics)
+            {
+                if (entry.Value == null || entry.Value.Count == 0 || entry.Value.Any(d => s_IsErrorRegex.IsMatch(d)))
+                {
+                    if (keysToRemove == null) keysToRemove = new List<string>();
+                    keysToRemove.Add(entry.Key);
+                }
+            }
+
+            if (keysToRemove == null) return false;
+
+            foreach (string key in keysToRemove)
+            {
+                s_AssemblyDiagnostics.Remove(key);
+            }
+
+            return true;
         }
 
         internal static void RestoreAssemblyDiagnostics()
@@ -273,6 +313,11 @@ namespace UnityLeanMcp
                 {
                     if (entry != null && entry.path != null && entry.messages != null && entry.messages.Count > 0)
                         s_AssemblyDiagnostics[entry.path] = entry.messages;
+                }
+
+                if (!EditorApplication.isCompiling && !EditorUtility.scriptCompilationFailed && PruneAssemblyErrorDiagnosticsUnderLock())
+                {
+                    PersistAssemblyDiagnosticsUnderLock();
                 }
             }
         }
@@ -305,6 +350,10 @@ namespace UnityLeanMcp
             if (diagnostics.Count > 0)
             {
                 WriteDiagnosticsFileAtomically(UnityLeanMcpPaths.DiagnosticsFile, diagnostics);
+            }
+            else if (!EditorUtility.scriptCompilationFailed)
+            {
+                DeleteDiagnosticsFile();
             }
         }
 
@@ -468,6 +517,11 @@ namespace UnityLeanMcp
                 return;
             }
 
+            if (!EditorUtility.scriptCompilationFailed)
+            {
+                PruneAssemblyErrorDiagnostics();
+            }
+
             var diagnostics = WriteActiveErrorsToFile();
             bool hasErrors = EditorUtility.scriptCompilationFailed || diagnostics.Any(d => s_IsErrorRegex.IsMatch(d));
 
@@ -482,6 +536,7 @@ namespace UnityLeanMcp
             UnityCommandGate.PublishResult(UnityCommandGate.ReadSnapshot()?.Kind, snap.OperationId,
                 UnityLeanMcpPaths.GetRefreshResultFile(snap.OperationId), json);
             RefreshErrorLogCapture.StopActiveCapture();
+            RefreshErrorLogCapture.Clear();
             s_AwaitingCompilationStart = false;
             s_CompilationInProgress = false;
             s_CompilationFinished = false;

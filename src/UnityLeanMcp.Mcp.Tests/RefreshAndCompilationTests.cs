@@ -61,6 +61,165 @@ namespace UnityLeanMcp.Mcp.Tests
         }
 
         [Fact]
+        public void AssemblyErrorDiagnostics_PrunedOnCacheHitCompilationPassAndDomainReloadWhenCompilationSucceeded()
+        {
+            const string key = UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey;
+            string previous = UnityEditor.SessionState.GetString(key, "")!;
+            var onAssemblyFinished = typeof(UnityLeanMcpCompilationTracker).GetMethod("OnAssemblyCompilationFinished",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var onCompilationStarted = typeof(UnityLeanMcpCompilationTracker).GetMethod("OnCompilationStarted",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var onCompilationFinished = typeof(UnityLeanMcpCompilationTracker).GetMethod("OnCompilationFinished",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var diagnostics = (System.Collections.IDictionary)typeof(UnityLeanMcpCompilationTracker).GetField("s_AssemblyDiagnostics",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+            var previousMap = new Dictionary<string, List<string>>((Dictionary<string, List<string>>)diagnostics);
+            UnityCommandGate.ForceReset();
+            RefreshErrorLogCapture.Clear();
+            try
+            {
+                diagnostics.Clear();
+                UnityEditor.EditorUtility.scriptCompilationFailed = true;
+
+                // Assembly-Warning compiled with a warning; Assembly-Broken1 and Assembly-Broken2 failed with errors.
+                onAssemblyFinished.Invoke(null, new object[] { "Assembly-Warning", new[] { new UnityEditor.Compilation.CompilerMessage
+                {
+                    message = "CS0219: unused variable",
+                    file = "Assets/Warning.cs", line = 10, column = 5,
+                    type = UnityEditor.Compilation.CompilerMessageType.Warning
+                } } });
+                onAssemblyFinished.Invoke(null, new object[] { "Assembly-Broken1", new[] { new UnityEditor.Compilation.CompilerMessage
+                {
+                    message = "CS1002: ; expected",
+                    file = "Assets/Broken1.cs", line = 4, column = 12,
+                    type = UnityEditor.Compilation.CompilerMessageType.Error
+                } } });
+                onAssemblyFinished.Invoke(null, new object[] { "Assembly-Broken2", new[] { new UnityEditor.Compilation.CompilerMessage
+                {
+                    message = "CS0103: The name 'foo' does not exist",
+                    file = "Assets/Broken2.cs", line = 8, column = 9,
+                    type = UnityEditor.Compilation.CompilerMessageType.Error
+                } } });
+
+                // 1. Partial fix where Assembly-Broken1 is fixed and compiled with no errors,
+                // while Assembly-Broken2 still fails in the compilation pass.
+                onCompilationStarted.Invoke(null, new object?[] { null });
+                onAssemblyFinished.Invoke(null, new object[] { "Assembly-Broken1", Array.Empty<UnityEditor.Compilation.CompilerMessage>() });
+                onAssemblyFinished.Invoke(null, new object[] { "Assembly-Broken2", new[] { new UnityEditor.Compilation.CompilerMessage
+                {
+                    message = "CS0103: The name 'foo' does not exist",
+                    file = "Assets/Broken2.cs", line = 8, column = 9,
+                    type = UnityEditor.Compilation.CompilerMessageType.Error
+                } } });
+                onCompilationFinished.Invoke(null, new object?[] { null });
+
+                var afterPartialFix = UnityLeanMcpCompilationTracker.WriteActiveErrorsToFile();
+                Assert.DoesNotContain(afterPartialFix, d => d.Contains("Broken1.cs"));
+                Assert.Contains(afterPartialFix, d => d.Contains("Assets/Broken2.cs(8,9): error CS0103"));
+                Assert.Contains(afterPartialFix, d => d.Contains("Assets/Warning.cs(10,5): warning CS0219"));
+
+                // 2. Remaining error in Assembly-Broken2 is fixed on Unity side via cache hit (0 items updated -> no OnAssemblyCompilationFinished)
+                // followed by domain reload where scriptCompilationFailed is false.
+                UnityEditor.EditorUtility.scriptCompilationFailed = false;
+                UnityEditor.EditorApplication.isCompiling = false;
+                diagnostics.Clear();
+                UnityLeanMcpCompilationTracker.RestoreAssemblyDiagnostics();
+
+                var afterFullFixReload = UnityLeanMcpCompilationTracker.WriteActiveErrorsToFile();
+                Assert.DoesNotContain(afterFullFixReload, d => d.Contains("Broken2.cs"));
+                Assert.Contains(afterFullFixReload, d => d.Contains("Assets/Warning.cs(10,5): warning CS0219"));
+                Assert.DoesNotContain("Broken2.cs", UnityEditor.SessionState.GetString(key, "")!);
+            }
+            finally
+            {
+                UnityEditor.EditorUtility.scriptCompilationFailed = false;
+                UnityEditor.EditorApplication.isCompiling = false;
+                UnityLeanMcpCompilationTracker.IsCompiling = false;
+                UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+                UnityLeanMcpCompilationTracker.CompilationFinished = false;
+                UnityEditor.SessionState.SetString(key, previous);
+                diagnostics.Clear();
+                foreach (var entry in previousMap) diagnostics.Add(entry.Key, entry.Value);
+            }
+        }
+
+        [Fact]
+        public void ObserveOperationUntilSettled_AfterErrorsResolvedInUnity_DoesNotReturnStaleCompilerOrScopedDiagnostics()
+        {
+            const string key = UnityLeanMcpCompilationTracker.AssemblyDiagnosticsKey;
+            string previous = UnityEditor.SessionState.GetString(key, "")!;
+            var onAssemblyFinished = typeof(UnityLeanMcpCompilationTracker).GetMethod("OnAssemblyCompilationFinished",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var diagnostics = (System.Collections.IDictionary)typeof(UnityLeanMcpCompilationTracker).GetField("s_AssemblyDiagnostics",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+            var previousMap = new Dictionary<string, List<string>>((Dictionary<string, List<string>>)diagnostics);
+            UnityCommandGate.ForceReset();
+            RefreshErrorLogCapture.Clear();
+            try
+            {
+                diagnostics.Clear();
+
+                // First refresh fails with a C# compile error and a scoped log error.
+                UnityEditor.EditorUtility.scriptCompilationFailed = true;
+                UnityLeanMcpCompilationTracker.ScriptCompilationFailed = true;
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Refresh, "refresh-fail-1", OperationStatus.Refreshing, out _));
+                RefreshErrorLogCapture.StartCapture("refresh-fail-1");
+                RefreshErrorLogCapture.RecordError("Shader error in 'Custom/Broken': syntax error at Assets/Broken.shader(3)", "", LogType.Error);
+                onAssemblyFinished.Invoke(null, new object[] { "Assembly-CSharp", new[] { new UnityEditor.Compilation.CompilerMessage
+                {
+                    message = "CS1002: ; expected",
+                    file = "Assets/BrokenScript.cs", line = 12, column = 1,
+                    type = UnityEditor.Compilation.CompilerMessageType.Error
+                } } });
+
+                for (int i = 0; i < 5; i++)
+                {
+                    UnityLeanMcpCompilationTracker.ObserveOperationUntilSettled();
+                }
+
+                string failResultFile = UnityLeanMcpPaths.GetRefreshResultFile("refresh-fail-1");
+                Assert.True(File.Exists(failResultFile));
+                var failResult = JsonUtility.FromJson<UnityLeanMcp.UnityRefreshResult>(File.ReadAllText(failResultFile))!;
+                Assert.False(failResult.success);
+                Assert.Contains("Assets/BrokenScript.cs(12,1): error CS1002", failResult.message);
+                Assert.Contains("Assets/Broken.shader(3): error", failResult.message);
+                File.Delete(failResultFile);
+
+                // User fixes all issues on the Unity side; Unity finishes compiling via cache hit (no OnAssemblyCompilationFinished).
+                UnityEditor.EditorUtility.scriptCompilationFailed = false;
+                UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+
+                // Subsequent unity_refresh runs and settles.
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Refresh, "refresh-clean-2", OperationStatus.Refreshing, out _));
+                RefreshErrorLogCapture.StartCapture("refresh-clean-2");
+                for (int i = 0; i < 5; i++)
+                {
+                    UnityLeanMcpCompilationTracker.ObserveOperationUntilSettled();
+                }
+
+                string cleanResultFile = UnityLeanMcpPaths.GetRefreshResultFile("refresh-clean-2");
+                Assert.True(File.Exists(cleanResultFile));
+                var cleanResult = JsonUtility.FromJson<UnityLeanMcp.UnityRefreshResult>(File.ReadAllText(cleanResultFile))!;
+                Assert.True(cleanResult.success);
+                Assert.Equal("", cleanResult.message);
+                Assert.False(UnityLeanMcpCompilationTracker.RefreshRequired);
+                Assert.False(File.Exists(UnityLeanMcpPaths.DiagnosticsFile));
+                File.Delete(cleanResultFile);
+            }
+            finally
+            {
+                UnityEditor.EditorUtility.scriptCompilationFailed = false;
+                UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+                UnityLeanMcpCompilationTracker.RefreshRequired = true;
+                RefreshErrorLogCapture.Clear();
+                UnityCommandGate.ForceReset();
+                UnityEditor.SessionState.SetString(key, previous);
+                diagnostics.Clear();
+                foreach (var entry in previousMap) diagnostics.Add(entry.Key, entry.Value);
+            }
+        }
+
+        [Fact]
         public void RefreshErrorLogCapture_StartAndStopCapture_CapturesOnlyErrorsAndExceptions()
         {
             UnityCommandGate.ForceReset();
