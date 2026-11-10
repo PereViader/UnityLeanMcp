@@ -536,7 +536,17 @@ namespace UnityEngine.TestTools
 
     public static class Coverage
     {
-        public static bool enabled { get; set; }
+        private static bool s_Enabled;
+        public static Action<bool>? SetEnabledAction;
+        public static bool enabled
+        {
+            get => s_Enabled;
+            set
+            {
+                SetEnabledAction?.Invoke(value);
+                s_Enabled = value;
+            }
+        }
         public static Func<System.Reflection.MethodBase, CoveredSequencePoint[]>? GetSequencePointsForFunc;
         public static CoveredSequencePoint[] GetSequencePointsFor(System.Reflection.MethodBase method) =>
             GetSequencePointsForFunc?.Invoke(method) ?? Array.Empty<CoveredSequencePoint>();
@@ -571,6 +581,8 @@ namespace UnityEngine.SceneManagement
 
 namespace UnityEditor
 {
+    public enum ImportAssetOptions { Default = 0, ForceSynchronousImport = 1 }
+
     public class InitializeOnLoadAttribute : System.Attribute { }
     public class InitializeOnLoadMethodAttribute : System.Attribute { }
     public static class AssemblyReloadEvents
@@ -724,6 +736,7 @@ namespace UnityEditor
 
     public static class AssetDatabase
     {
+        public static Action<ImportAssetOptions>? RefreshFunc;
         public static Func<string, string[]>? FindAssetsFunc;
         public static Func<string, string[], string[]>? FindAssetsInFoldersFunc;
         public static Func<string, string>? GUIDToAssetPathFunc;
@@ -750,6 +763,7 @@ namespace UnityEditor
             GetDependencies(pathName, true);
         public static bool IsValidFolder(string path) =>
             IsValidFolderFunc?.Invoke(path) ?? false;
+        public static void Refresh(ImportAssetOptions options = ImportAssetOptions.Default) => RefreshFunc?.Invoke(options);
     }
 
     public class PropertyModification
@@ -860,7 +874,25 @@ namespace UnityEditor
             public string outputPath { get; set; } = string.Empty;
             public string[] sourceFiles { get; set; } = System.Array.Empty<string>();
             public string[] compiledAssemblyReferences { get; set; } = System.Array.Empty<string>();
+            public Assembly[] assemblyReferences { get; set; } = System.Array.Empty<Assembly>();
+            public string[] defines { get; set; } = System.Array.Empty<string>();
+            public int flags { get; set; }
+            public ScriptCompilerOptions compilerOptions { get; set; } = new ScriptCompilerOptions();
             public string[] allReferences { get; set; } = System.Array.Empty<string>();
+        }
+
+        public class ScriptCompilerOptions
+        {
+            public string[] AdditionalCompilerArguments { get; set; } = System.Array.Empty<string>();
+            public bool AllowUnsafeCode { get; set; }
+            public string AnalyzerConfigPath { get; set; } = string.Empty;
+            public string ApiCompatibilityLevel { get; set; } = string.Empty;
+            public string CodeOptimization { get; set; } = string.Empty;
+            public string LanguageVersion { get; set; } = string.Empty;
+            public string[] ResponseFiles { get; set; } = System.Array.Empty<string>();
+            public string[] RoslynAdditionalFilePaths { get; set; } = System.Array.Empty<string>();
+            public string[] RoslynAnalyzerDllPaths { get; set; } = System.Array.Empty<string>();
+            public string RoslynAnalyzerRulesetPath { get; set; } = string.Empty;
         }
 
         public static class CompilationPipeline
@@ -877,6 +909,8 @@ namespace UnityEditor
 
             public static CodeOptimization codeOptimization { get; set; } = CodeOptimization.Debug;
             public static Func<Assembly[]>? GetAssembliesFunc;
+            public static Func<string[]>? GetPrecompiledAssemblyPathsFunc;
+            public static Action? RequestScriptCompilationAction;
 
             public static event Action<object>? compilationStarted { add { } remove { } }
             public static event Action<object>? compilationFinished { add { } remove { } }
@@ -884,8 +918,9 @@ namespace UnityEditor
 
             public static Assembly[] GetAssemblies() => GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
             public static Assembly[] GetAssemblies(AssembliesType assembliesType) => GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
-            public static string[] GetPrecompiledAssemblyPaths(PrecompiledAssemblySources sources) => System.Array.Empty<string>();
+            public static string[] GetPrecompiledAssemblyPaths(PrecompiledAssemblySources sources) => GetPrecompiledAssemblyPathsFunc?.Invoke() ?? System.Array.Empty<string>();
             public static string? GetPrecompiledAssemblyPathFromAssemblyName(string assemblyName) => null;
+            public static void RequestScriptCompilation() => RequestScriptCompilationAction?.Invoke();
         }
     }
 
@@ -973,6 +1008,16 @@ namespace UnityEditor
             }
             public static void CancelTestRun(string guid) => OnCancelTestRun?.Invoke(guid);
             internal static object? IsRunActive() => ActiveStateKnown ? (object)Active : null;
+        }
+    }
+
+    namespace PackageManager
+    {
+        public class PackageInfo
+        {
+            public string resolvedPath { get; set; } = string.Empty;
+            public static Func<PackageInfo[]>? GetAllRegisteredPackagesFunc;
+            public static PackageInfo[] GetAllRegisteredPackages() => GetAllRegisteredPackagesFunc?.Invoke() ?? System.Array.Empty<PackageInfo>();
         }
     }
 }
@@ -1185,6 +1230,7 @@ namespace UnityLeanMcp
         public string[]? groupNames;
         public string[]? categoryNames;
         public string[]? assemblyNames;
+        public bool coverage;
         public string status = "";
         public string jobGuid = "";
         public string startedUtc = "";
@@ -1206,6 +1252,8 @@ namespace UnityLeanMcp
         public int skipCount;
         public string message = "";
         public string resultState = "";
+        public string? coverageStatus;
+        public string? coverageMessage;
         public List<FailedTestInfo> failedTests = new();
         public List<string> otherModeMatches = new();
         public List<string> nearMatches = new();

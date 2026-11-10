@@ -17,12 +17,14 @@ namespace UnityLeanMcp
         private int m_FailCount = 0;
         private int m_SkipCount = 0;
         private string m_CurrentTestName = "";
+        private bool m_TerminalResultClaimed;
 
         public bool IsRunning => m_IsRunning || RunTestsHandler.ReadRunningState() != null;
 
         internal void Reset()
         {
             m_IsRunning = false;
+            m_TerminalResultClaimed = false;
             m_RunId = null;
             m_FailedTests.Clear();
             m_TotalTests = 0;
@@ -36,6 +38,8 @@ namespace UnityLeanMcp
 
         internal void BindRun(string runId)
         {
+            if (m_RunId != runId)
+                m_TerminalResultClaimed = false;
             m_RunId = runId;
             var state = RunTestsHandler.ReadRunningState();
             if (state != null && state.runId == runId)
@@ -51,6 +55,8 @@ namespace UnityLeanMcp
 
         public void RunStarted(ITestAdaptor testsToRun)
         {
+            if (m_TerminalResultClaimed)
+                return;
             if (string.IsNullOrEmpty(m_RunId) || !UnityCommandGate.IsOwnedBy(m_RunId, OperationKinds.Test))
             {
                 m_IsRunning = false;
@@ -59,6 +65,7 @@ namespace UnityLeanMcp
 
             m_FailedTests.Clear();
             m_IsRunning = true;
+            RunTestsHandler.MarkCoverageRunStarted(m_RunId);
             m_TotalTests = testsToRun != null ? testsToRun.TestCaseCount : 0;
             m_CompletedTests = 0;
             m_PassCount = 0;
@@ -99,7 +106,8 @@ namespace UnityLeanMcp
         {
             try
             {
-                if (!IsRunning)
+                if (m_TerminalResultClaimed || !IsRunning ||
+                    GetCoverageHandler.IsCoverageTerminalResultClaimed(m_RunId))
                 {
                     return;
                 }
@@ -150,7 +158,11 @@ namespace UnityLeanMcp
 
                 m_FailedTests.Clear();
                 CollectFailures(result);
-                FinalizeTestRun(success, failCount, passCount, skipCount, message, resultState);
+                bool coverageComplete = !isCancelled &&
+                    (result.TestStatus == TestStatus.Passed || result.TestStatus == TestStatus.Failed) &&
+                    (passCount + failCount + skipCount > 0);
+                FinalizeTestRun(success, failCount, passCount, skipCount, message, resultState,
+                    coverageComplete: coverageComplete);
             }
             catch (Exception ex)
             {
@@ -201,8 +213,11 @@ namespace UnityLeanMcp
             }
         }
 
-        private void FinalizeTestRun(bool success, int failCount, int passCount, int skipCount, string message, string resultState)
+        private void FinalizeTestRun(bool success, int failCount, int passCount, int skipCount, string message, string resultState, bool coverageComplete = false)
         {
+            if (m_TerminalResultClaimed)
+                return;
+
             string runId = null;
             try
             {
@@ -231,11 +246,13 @@ namespace UnityLeanMcp
                     var existing = JsonUtility.FromJson<UnityTestRunResult>(CommandHelper.ReadFileWithRetry(resultsPath, maxRetries: 3, delayMs: 10));
                     if (existing != null && existing.runId == runId)
                     {
+                        m_TerminalResultClaimed = true;
                         m_IsRunning = false;
                         return;
                     }
                 }
 
+                m_TerminalResultClaimed = true;
                 m_IsRunning = false;
 
                 Debug.Log($"UnityLeanMcp: Finalizing test run. Success: {success}, ResultState: {resultState}, Message: {message}");
@@ -282,6 +299,7 @@ namespace UnityLeanMcp
                     nearMatches = nearMatches
                 };
 
+                RunTestsHandler.MarkCoverageRunCompleted(runId, coverageComplete);
                 string json = JsonUtility.ToJson(runResult, true);
                 UnityCommandGate.PublishResult(OperationKinds.Test, runResult.runId, resultsPath, json);
                 m_RunId = null;

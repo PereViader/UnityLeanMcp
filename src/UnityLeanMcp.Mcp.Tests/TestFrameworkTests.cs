@@ -162,4 +162,69 @@ public class TestFrameworkTests
         Assert.Contains("Failures:", failedRun.Text);
         Assert.Contains("FailTest", failedRun.Text);
     }
+
+    [Fact]
+    public async Task TestEditModeCoverage_WhenCoverageInitiallyDisabled_RemainsValidAfterProfilerRestoration()
+    {
+        var client = _fixture.SharedClient;
+
+        var initResult = await client.CallToolAsync("unity_eval", new
+        {
+            code = @"
+                bool wasRelease = UnityEditor.Compilation.CompilationPipeline.codeOptimization == UnityEditor.Compilation.CodeOptimization.Release;
+                if (wasRelease)
+                {
+                    UnityEditor.Compilation.CompilationPipeline.codeOptimization = UnityEditor.Compilation.CodeOptimization.Debug;
+                }
+                UnityEngine.TestTools.Coverage.enabled = false;
+                return wasRelease;
+            "
+        });
+        Assert.False(initResult.IsError, initResult.Text);
+        bool restoreRelease = initResult.Text.Contains("true", StringComparison.OrdinalIgnoreCase);
+
+        try
+        {
+            var testResult = await client.CallToolAsync("unity_test", new
+            {
+                mode = "editmode",
+                groupNames = new[] { "SpecificTargetTest" },
+                coverage = true
+            }, timeout: TimeSpan.FromSeconds(120));
+            Assert.False(testResult.IsError, testResult.Text);
+            Assert.Contains("Tests Passed: 1 passed", testResult.Text);
+            Assert.Contains("Coverage captured.", testResult.Text);
+
+            var coverageResult = await client.CallToolAsync("unity_coverage", new
+            {
+                paths = new[] { "Assets/Tests/Editor/DummyTest.cs" }
+            });
+            Assert.False(coverageResult.IsError, coverageResult.Text);
+            Assert.Contains("DummyTest.cs", coverageResult.Text);
+
+            var repeatedCoverageResult = await client.CallToolAsync("unity_coverage", new
+            {
+                paths = new[] { "Assets/Tests/Editor/DummyTest.cs" }
+            });
+            Assert.False(repeatedCoverageResult.IsError, repeatedCoverageResult.Text);
+            Assert.Contains("DummyTest.cs", repeatedCoverageResult.Text);
+
+            var restoredCheck = await client.CallToolAsync("unity_eval", new
+            {
+                code = "return UnityEngine.TestTools.Coverage.enabled;"
+            });
+            Assert.False(restoredCheck.IsError, restoredCheck.Text);
+            Assert.Contains("false", restoredCheck.Text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (restoreRelease)
+            {
+                await client.CallToolAsync("unity_eval", new
+                {
+                    code = "UnityEditor.Compilation.CompilationPipeline.codeOptimization = UnityEditor.Compilation.CodeOptimization.Release;"
+                });
+            }
+        }
+    }
 }

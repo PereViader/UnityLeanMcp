@@ -3,7 +3,6 @@ using System.IO;
 using System.Text;
 using NUnit.Framework;
 using UnityEditor;
-using Coverage = UnityEngine.TestTools.Coverage;
 using UnityLeanMcp;
 
 namespace UnityLeanMcpTests
@@ -42,69 +41,5 @@ namespace UnityLeanMcpTests
             }
         }
 
-        [Test]
-        public void NonOwnedCoverageCleanupLeavesDeveloperProfilerEnabled()
-        {
-            bool original = Coverage.enabled;
-            try
-            {
-                Coverage.enabled = true;
-                RunTestsHandler.RestoreCoverage("not-an-owned-run");
-                Assert.That(Coverage.enabled, Is.True);
-            }
-            finally { Coverage.enabled = original; }
-        }
-
-        [TestCase(false)]
-        [TestCase(true)]
-        public void CoverageInitializationEnablesNativeProfilerBeforeResetAndRestoresPriorSetting(bool originallyEnabled)
-        {
-            bool original = Coverage.enabled;
-            string previousOwner = SessionState.GetString("UnityLeanMcp_CoverageOwner", "");
-            string previousSnapshot = SessionState.GetString(GetCoverageHandler.CapturedCoverageKey, "");
-            string runId = Guid.NewGuid().ToString("N");
-            try
-            {
-                Coverage.enabled = originallyEnabled;
-                Assert.DoesNotThrow(() => RunTestsHandler.InitializeCoverage(runId));
-                Assert.That(Coverage.enabled, Is.True);
-                Assert.That(SessionState.GetString("UnityLeanMcp_CoverageOwner", ""),
-                    Is.EqualTo(runId + (originallyEnabled ? ":enabled" : ":disabled")));
-                RunTestsHandler.RestoreCoverage(runId);
-                Assert.That(Coverage.enabled, Is.EqualTo(originallyEnabled));
-                Assert.That(SessionState.GetString("UnityLeanMcp_CoverageOwner", ""), Is.Empty);
-            }
-            finally
-            {
-                Coverage.enabled = original;
-                SessionState.SetString("UnityLeanMcp_CoverageOwner", previousOwner);
-                SessionState.SetString(GetCoverageHandler.CapturedCoverageKey, previousSnapshot);
-            }
-        }
-
-        [TestCase(false)]
-        [TestCase(true)]
-        public void OwnedCoverageRestoresOriginalFlagOnce(bool originallyEnabled)
-        {
-            bool original = Coverage.enabled;
-            string previousOwner = SessionState.GetString("UnityLeanMcp_CoverageOwner", "");
-            string previousSnapshot = SessionState.GetString(GetCoverageHandler.CapturedCoverageKey, "");
-            try
-            {
-                SessionState.SetString("UnityLeanMcp_CoverageOwner", "coverage-regression" + (originallyEnabled ? ":enabled" : ":disabled"));
-                Coverage.enabled = true;
-                RunTestsHandler.RestoreCoverage("coverage-regression");
-                Assert.That(Coverage.enabled, Is.EqualTo(originallyEnabled));
-                Coverage.enabled = !originallyEnabled;
-                RunTestsHandler.RestoreCoverage("coverage-regression");
-                Assert.That(Coverage.enabled, Is.EqualTo(!originallyEnabled));
-            }
-            finally
-            {
-                Coverage.enabled = original;
-                SessionState.SetString("UnityLeanMcp_CoverageOwner", previousOwner);
-                SessionState.SetString(GetCoverageHandler.CapturedCoverageKey, previousSnapshot);
-            }
-        }
     }
 }

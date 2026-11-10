@@ -272,6 +272,7 @@ namespace UnityLeanMcpTests
             private readonly Dictionary<FieldInfo, object> managed = new Dictionary<FieldInfo, object>();
             private readonly FieldInfo updateField = typeof(EditorApplication).GetField("update", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             private readonly object previousUpdate;
+            private readonly ICommandHandler previousPollTestsHandler;
             public string Root { get; } = Path.Combine(Path.GetTempPath(), "operation-regression-" + Guid.NewGuid().ToString("N"));
             public string Id { get; } = Guid.NewGuid().ToString("N");
             public IsolatedOperation(string kind)
@@ -280,6 +281,11 @@ namespace UnityLeanMcpTests
                 previousSnapshot = snapshot.GetValue(null);
                 previousRun = cachedRun.GetValue(null);
                 previousUpdate = updateField.GetValue(null);
+                UnityLeanMcpServer.TryGetHandler("POLL_TESTS", out previousPollTestsHandler);
+                if (previousRun is UnityTestRunState outerRun && !string.IsNullOrEmpty(outerRun.runId))
+                {
+                    UnityLeanMcpServer.RegisterHandler("POLL_TESTS", new OuterRunPollTestsShield(outerRun, previousPollTestsHandler));
+                }
                 foreach (string name in new[] { "s_PendingResult", "s_LastRetryTicks" })
                 {
                     var field = typeof(UnityCommandGate).GetField(name, Flags);
@@ -292,13 +298,12 @@ namespace UnityLeanMcpTests
                     managed.Add(field, field.GetValue(null));
                     field.SetValue(null, null);
                 }
-                foreach (var field in typeof(UnityLeanMcpPaths).GetFields(Flags).Where(f => f.FieldType == typeof(string)))
+                foreach (var field in typeof(UnityLeanMcpPaths).GetFields(Flags).Where(f => f.FieldType == typeof(string) && f.Name != "s_ProjectRoot"))
                 {
                     paths.Add(field, field.GetValue(null));
                     field.SetValue(null, Path.Combine(Root, field.Name + ".json"));
                 }
                 SetPath("s_TempDir", Root);
-                SetPath("s_ProjectRoot", Root);
                 var owner = new ActiveOperationSnapshot(kind, Id);
                 snapshot.SetValue(null, owner);
                 SessionState.SetString("UnityLeanMcp_ActiveOp", JsonUtility.ToJson(owner));
@@ -315,7 +320,40 @@ namespace UnityLeanMcpTests
                 SessionState.SetString("UnityLeanMcp_ActiveOp", previousOwner);
                 SessionState.SetString("UnityLeanMcp_PendingResult", previousPending);
                 foreach (var pair in paths) pair.Key.SetValue(null, pair.Value);
+                if (previousPollTestsHandler != null)
+                {
+                    UnityLeanMcpServer.RegisterHandler("POLL_TESTS", previousPollTestsHandler);
+                }
                 Directory.Delete(Root, true);
+            }
+
+            private sealed class OuterRunPollTestsShield : ICommandHandler
+            {
+                private readonly string _outerRunId;
+                private readonly string _escapedOuterStateJson;
+                private readonly ICommandHandler _fallback;
+
+                public OuterRunPollTestsShield(UnityTestRunState outerRun, ICommandHandler fallback)
+                {
+                    _outerRunId = outerRun.runId;
+                    _escapedOuterStateJson = ProtocolCodec.EscapeLine(JsonUtility.ToJson(outerRun));
+                    _fallback = fallback;
+                }
+
+                public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.WorkerThread;
+                public bool IsMutating => false;
+                public bool RequiresCompilationSettled => false;
+
+                public void Handle(string payload, StreamWriter writer)
+                {
+                    string requestedId = payload?.Trim();
+                    if (string.IsNullOrEmpty(requestedId) || string.Equals(requestedId, _outerRunId, StringComparison.Ordinal))
+                    {
+                        writer.WriteLine($"RUNNING {_escapedOuterStateJson}");
+                        return;
+                    }
+                    _fallback?.Handle(payload, writer);
+                }
             }
         }
     }

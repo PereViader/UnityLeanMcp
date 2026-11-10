@@ -25,7 +25,7 @@ For an admitted operation:
 4. Atomically publish the correlated result. If publication fails, retain ownership and retry on paced Editor updates, including after domain reload.
 5. Clean up running state and release ownership only after successful publication.
 
-Backing-work completion and result delivery are separate phases. Restore temporary profiler settings when the backing test finishes, even if result publication must retry. A `finally` block must not release an admitted operation whose terminal result has not been published.
+Backing-work completion and result delivery are separate phases. For coverage-enabled tests, freezing the report, restoring the profiler setting, and settling any resulting compilation are part of backing-work completion and precede result publication. Restore temporary profiler settings when the backing test finishes, even if result publication must retry. A `finally` block must not release an admitted operation whose terminal result has not been published. See [tests and coverage](evaluation-tests-coverage.md#tests-and-coverage) for the coverage transaction and snapshot rules.
 
 `SessionState` survives domain reload, not Editor process exit. Atomic file visibility is not a guarantee of recovery from process crashes or power loss. Reload recovery restores pending publication before deciding whether interrupted work can resume. Eval cannot survive managed reload; tests require a known runner state before recovery can declare interruption. Lifecycle handlers own command-specific cancellation, reload, and quitting behavior.
 

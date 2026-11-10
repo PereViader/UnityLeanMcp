@@ -155,6 +155,13 @@ namespace UnityLeanMcp
             EditorApplication.update -= RecoverTestRun;
             if (!isActive)
             {
+                string coveragePhase = GetCoverageHandler.GetCoverageAttemptPhase(operation.OperationId);
+                if (coveragePhase == "baseline-preparing" || coveragePhase == "enabling" || coveragePhase == "preparing")
+                {
+                    RunTestsHandler.ScheduleCoveragePreparation(operation.OperationId);
+                    return;
+                }
+
                 if (operation.Status == OperationStatus.Cancelling || RunTestsHandler.IsCancellationRequested(operation.OperationId))
                 {
                     RunTestsHandler.WriteCancelledResult(operation.OperationId);
@@ -310,6 +317,8 @@ namespace UnityLeanMcp
                 EditorApplication.update -= RetryPendingResult;
                 EditorApplication.update -= RecoverTestRun;
                 SessionState.EraseString(PendingResultKey);
+                SessionState.EraseString(GetCoverageHandler.CoverageAttemptKey);
+                GetCoverageHandler.ClearCapturedCoverage();
                 s_PendingResult = null;
                 s_LastRetryTicks = 0;
                 SessionState.EraseString(SessionKey);
@@ -354,6 +363,17 @@ namespace UnityLeanMcp
             var pending = s_PendingResult;
             if (pending == null) return;
 
+            if (pending.Kind == OperationKinds.Test)
+            {
+                string coverageOutcome = RunTestsHandler.CompleteCoverageForTerminalResult(pending.OperationId);
+                if (coverageOutcome != null)
+                {
+                    if (coverageOutcome.StartsWith("pending|", StringComparison.Ordinal))
+                        return;
+                    IncludeCoverageOutcome(pending, coverageOutcome);
+                }
+            }
+
             long now = Stopwatch.GetTimestamp();
             if (RetryThrottleMs > 0 && s_LastRetryTicks > 0)
             {
@@ -365,11 +385,6 @@ namespace UnityLeanMcp
 
             try
             {
-                // The payload is already recoverable in SessionState. Capture
-                // coverage and restore profiling before exposing terminal output,
-                // independently of any file publication contention.
-                if (pending.Kind == OperationKinds.Test)
-                    RunTestsHandler.RestoreCoverage(pending.OperationId);
                 System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(pending.Path));
                 WriteAtomic(pending.Path, pending.Json, pending.OperationId, attempts: 1);
                 if (pending.Kind == OperationKinds.Test)
@@ -398,6 +413,23 @@ namespace UnityLeanMcp
                 WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile,
                     "Terminal result publication will retry for " + pending.Kind + " " + pending.OperationId + ": " + ex.Message);
             }
+        }
+
+        private static void IncludeCoverageOutcome(PendingResult pending, string outcome)
+        {
+            int separator = outcome.IndexOf('|');
+            if (separator < 0) return;
+            string status = outcome.Substring(0, separator);
+            string message = outcome.Substring(separator + 1);
+            UnityTestRunResult result;
+            try { result = JsonUtility.FromJson<UnityTestRunResult>(pending.Json); }
+            catch { return; }
+            if (result == null || (result.coverageStatus == status && result.coverageMessage == message))
+                return;
+            result.coverageStatus = status;
+            result.coverageMessage = message;
+            pending.Json = JsonUtility.ToJson(result, true);
+            SessionState.SetString(PendingResultKey, JsonUtility.ToJson(pending));
         }
 
 #nullable enable

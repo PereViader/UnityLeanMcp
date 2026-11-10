@@ -101,6 +101,12 @@ public class UnityTestRunResult : IOperationResult
     [JsonPropertyName("resultState")]
     public string ResultState { get; set; } = "";
 
+    [JsonPropertyName("coverageStatus")]
+    public string? CoverageStatus { get; set; }
+
+    [JsonPropertyName("coverageMessage")]
+    public string? CoverageMessage { get; set; }
+
     [JsonPropertyName("duration")]
     public double Duration { get; set; }
 

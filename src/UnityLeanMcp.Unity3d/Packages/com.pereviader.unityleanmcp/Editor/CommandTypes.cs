@@ -60,6 +60,7 @@ namespace UnityLeanMcp
         public string[] groupNames;
         public string[] categoryNames;
         public string[] assemblyNames;
+        public bool coverage;
         public string status;
         public string jobGuid;
         public string startedUtc;
@@ -89,6 +90,8 @@ namespace UnityLeanMcp
         public int skipCount;
         public string message;
         public string resultState;
+        public string coverageStatus;
+        public string coverageMessage;
         public List<FailedTestInfo> failedTests;
         public List<string> otherModeMatches;
         public List<string> nearMatches;

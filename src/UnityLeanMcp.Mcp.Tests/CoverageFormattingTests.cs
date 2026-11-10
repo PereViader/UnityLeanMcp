@@ -740,30 +740,33 @@ public class CoverageFormattingTests
     }
 
     [Fact]
-    public void GetCoverageHandler_WriteCoverage_WhenScriptsRecompiled_ReturnsObsoleteFailure()
+    public void GetCoverageHandler_WriteCoverage_ProfilerRecompilationWithUnchangedInputsRemainsValid()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_epoch_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(projectRoot);
+        string originalProjectRoot = UnityLeanMcpPaths.ProjectRoot;
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Assets"));
+        string csFile = Path.Combine(projectRoot, "Assets", "Foo.cs");
+        File.WriteAllText(csFile, "public class Foo {}");
         bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+        bool wasCompiling = UnityLeanMcpCompilationTracker.IsCompiling;
         try
         {
-            UnityEngine.TestTools.Coverage.enabled = true;
+            CreateCompletedCoverageSnapshot(projectRoot, "run-unchanged-inputs");
             UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 5);
-            GetCoverageHandler.CaptureCoverage("run-epoch-test");
-
-            // Simulate recompilation occurring after capture
             UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 6);
 
             using var stream = new MemoryStream();
             using var writer = new StreamWriter(stream) { AutoFlush = true };
-            GetCoverageHandler.WriteCoverage([Path.Combine(projectRoot, "Assets/Foo.cs")], projectRoot, writer);
+            GetCoverageHandler.WriteCoverage([csFile], projectRoot, writer);
 
             string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
-            Assert.StartsWith("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded.", response);
+            Assert.StartsWith("SUCCESS ", response);
         }
         finally
         {
             UnityEngine.TestTools.Coverage.enabled = origCoverage;
+            UnityLeanMcpCompilationTracker.IsCompiling = wasCompiling;
+            UnityLeanMcpPaths.ProjectRoot = originalProjectRoot;
             GetCoverageHandler.ClearCapturedCoverage();
             try { Directory.Delete(projectRoot, true); } catch { }
         }
@@ -773,72 +776,204 @@ public class CoverageFormattingTests
     public void GetCoverageHandler_WriteCoverage_WhenQueriedFileModified_ReturnsObsoleteFailure()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_stale_" + Guid.NewGuid().ToString("N"));
+        string originalProjectRoot = UnityLeanMcpPaths.ProjectRoot;
         string assetsDir = Path.Combine(projectRoot, "Assets");
         Directory.CreateDirectory(assetsDir);
         string csFile = Path.Combine(assetsDir, "Player.cs");
         File.WriteAllText(csFile, "public class Player {}");
         bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+        bool wasCompiling = UnityLeanMcpCompilationTracker.IsCompiling;
 
         try
         {
-            UnityEngine.TestTools.Coverage.enabled = true;
-            UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
-
-            // Mock sequence point for Player.cs
-            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = _ => new[]
-            {
-                new UnityEngine.TestTools.CoveredSequencePoint { filename = csFile, line = 1, hitCount = 1 }
-            };
-
-            GetCoverageHandler.CaptureCoverage("run-stale-test");
-
-            // Simulate file edit after capture: set file write time to 1 hour in the future
-            File.SetLastWriteTimeUtc(csFile, DateTime.UtcNow.AddHours(1));
+            CreateCompletedCoverageSnapshot(projectRoot, "run-content-change");
+            DateTime originalWriteTime = File.GetLastWriteTimeUtc(csFile);
+            File.WriteAllText(csFile, "public class Player { public int Value => 2; }");
+            File.SetLastWriteTimeUtc(csFile, originalWriteTime);
 
             using var stream = new MemoryStream();
             using var writer = new StreamWriter(stream) { AutoFlush = true };
             GetCoverageHandler.WriteCoverage([csFile], projectRoot, writer);
 
             string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
-            Assert.StartsWith("FAILURE Coverage data for 'Assets/Player.cs' is obsolete because the file was modified since coverage was recorded.", response);
+            Assert.StartsWith("FAILURE Coverage data is obsolete because compilation inputs changed during or after the test run.", response);
         }
         finally
         {
             UnityEngine.TestTools.Coverage.enabled = origCoverage;
+            UnityLeanMcpCompilationTracker.IsCompiling = wasCompiling;
+            UnityLeanMcpPaths.ProjectRoot = originalProjectRoot;
             UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = null;
             GetCoverageHandler.ClearCapturedCoverage();
             try { Directory.Delete(projectRoot, true); } catch { }
         }
     }
 
-    [Fact]
-    public void GetCoverageHandler_WriteCoverage_WhenCompilingInProgress_ReturnsObsoleteFailure()
+    [Theory]
+    [InlineData("new-source")]
+    [InlineData("plugin-dll")]
+    [InlineData("plugin-meta")]
+    [InlineData("analyzer-config")]
+    [InlineData("assembly-defines")]
+    [InlineData("external-package-source")]
+    public void GetCoverageHandler_WriteCoverage_DetectsCompilationInputChangesBeforeImport(string inputKind)
     {
-        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_compiling_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(projectRoot);
-        bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_input_" + Guid.NewGuid().ToString("N"));
+        string originalProjectRoot = UnityLeanMcpPaths.ProjectRoot;
+        string assets = Path.Combine(projectRoot, "Assets");
+        Directory.CreateDirectory(assets);
+        string source = Path.Combine(assets, "Player.cs");
+        File.WriteAllText(source, "public class Player {}");
+        string? packageRoot = null;
+        UnityEditor.Compilation.Assembly assembly = new() { name = "coverage-config", defines = new[] { "BASELINE" } };
         try
         {
-            UnityEngine.TestTools.Coverage.enabled = true;
-            UnityEditor.SessionState.SetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
-            GetCoverageHandler.CaptureCoverage("run-compiling-test");
+            UnityLeanMcpPaths.ProjectRoot = projectRoot;
+            UnityEditor.Compilation.CompilationPipeline.GetAssembliesFunc = () => new[] { assembly };
+            UnityEditor.Compilation.CompilationPipeline.GetPrecompiledAssemblyPathsFunc = () => Array.Empty<string>();
 
-            // Simulate compilation starting in progress
-            UnityLeanMcpCompilationTracker.IncrementCompilationEpoch();
+            if (inputKind == "plugin-meta")
+            {
+                string plugins = Path.Combine(assets, "Plugins");
+                Directory.CreateDirectory(plugins);
+                File.WriteAllBytes(Path.Combine(plugins, "Plugin.dll"), [1, 2, 3]);
+                File.WriteAllText(Path.Combine(plugins, "Plugin.dll.meta"), "PluginImporter:\n  autoReferenced: 1\n");
+            }
+            else if (inputKind == "external-package-source")
+            {
+                packageRoot = Path.Combine(Path.GetDirectoryName(projectRoot)!, "external-package-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(packageRoot);
+                File.WriteAllText(Path.Combine(packageRoot, "package.json"), "{\"name\":\"local.external\"}");
+                File.WriteAllText(Path.Combine(packageRoot, "Existing.cs"), "public class Existing {}");
+                UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackagesFunc = () => new[]
+                {
+                    new UnityEditor.PackageManager.PackageInfo { resolvedPath = packageRoot }
+                };
+            }
+
+            CreateCompletedCoverageSnapshot(projectRoot, "run-input-" + inputKind);
+
+            switch (inputKind)
+            {
+                case "new-source":
+                    File.WriteAllText(Path.Combine(assets, "Added.cs"), "public class Added {}");
+                    break;
+                case "plugin-dll":
+                    string plugins = Path.Combine(assets, "Plugins");
+                    Directory.CreateDirectory(plugins);
+                    File.WriteAllBytes(Path.Combine(plugins, "Added.dll"), [4, 5, 6]);
+                    File.WriteAllText(Path.Combine(plugins, "Added.dll.meta"), "PluginImporter:\n  autoReferenced: 1\n");
+                    break;
+                case "plugin-meta":
+                    File.WriteAllText(Path.Combine(assets, "Plugins", "Plugin.dll.meta"), "PluginImporter:\n  autoReferenced: 0\n");
+                    break;
+                case "analyzer-config":
+                    File.WriteAllText(Path.Combine(assets, "Assembly-CSharp.globalconfig"), "is_global = true\n");
+                    break;
+                case "assembly-defines":
+                    assembly.defines = new[] { "BASELINE", "FEATURE_SWITCH" };
+                    break;
+                case "external-package-source":
+                    File.WriteAllText(Path.Combine(packageRoot!, "Added.cs"), "public class Added {}");
+                    break;
+            }
 
             using var stream = new MemoryStream();
             using var writer = new StreamWriter(stream) { AutoFlush = true };
-            GetCoverageHandler.WriteCoverage([Path.Combine(projectRoot, "Assets/Foo.cs")], projectRoot, writer);
+            GetCoverageHandler.WriteCoverage(new List<string> { source }, projectRoot, writer);
+            string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+            Assert.StartsWith("FAILURE Coverage data is obsolete because compilation inputs changed during or after the test run.", response);
+        }
+        finally
+        {
+            UnityLeanMcpPaths.ProjectRoot = originalProjectRoot;
+            UnityEngine.TestTools.Coverage.enabled = false;
+            UnityEditor.Compilation.CompilationPipeline.GetAssembliesFunc = null;
+            UnityEditor.Compilation.CompilationPipeline.GetPrecompiledAssemblyPathsFunc = null;
+            UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackagesFunc = null;
+            GetCoverageHandler.ClearCapturedCoverage();
+            try { Directory.Delete(projectRoot, true); } catch { }
+            if (packageRoot != null) try { Directory.Delete(packageRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void GetCoverageHandler_WriteCoverage_DuringUnchangedCompilationRemainsValid()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_compiling_" + Guid.NewGuid().ToString("N"));
+        string originalProjectRoot = UnityLeanMcpPaths.ProjectRoot;
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Assets"));
+        string csFile = Path.Combine(projectRoot, "Assets", "Foo.cs");
+        File.WriteAllText(csFile, "public class Foo {}");
+        bool origCoverage = UnityEngine.TestTools.Coverage.enabled;
+        bool wasCompiling = UnityLeanMcpCompilationTracker.IsCompiling;
+        try
+        {
+            CreateCompletedCoverageSnapshot(projectRoot, "run-profiler-compile");
+            UnityLeanMcpCompilationTracker.IncrementCompilationEpoch();
+            UnityLeanMcpCompilationTracker.IsCompiling = true;
+
+            using var stream = new MemoryStream();
+            using var writer = new StreamWriter(stream) { AutoFlush = true };
+            GetCoverageHandler.WriteCoverage([csFile], projectRoot, writer);
 
             string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
-            Assert.StartsWith("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded.", response);
+            Assert.StartsWith("SUCCESS ", response);
         }
         finally
         {
             UnityEngine.TestTools.Coverage.enabled = origCoverage;
+            UnityLeanMcpCompilationTracker.IsCompiling = wasCompiling;
+            UnityLeanMcpPaths.ProjectRoot = originalProjectRoot;
             GetCoverageHandler.ClearCapturedCoverage();
             try { Directory.Delete(projectRoot, true); } catch { }
         }
+    }
+
+    private static void CreateCompletedCoverageSnapshot(string projectRoot, string runId)
+    {
+        UnityLeanMcpPaths.ProjectRoot = projectRoot;
+        UnityEditor.EditorApplication.isCompiling = false;
+        UnityEditor.EditorApplication.isUpdating = false;
+        UnityLeanMcpCompilationTracker.IsCompiling = false;
+        UnityLeanMcpCompilationTracker.IsUpdating = false;
+        UnityLeanMcpCompilationTracker.RefreshRequired = false;
+        UnityLeanMcpCompilationTracker.RefreshPending = false;
+        UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
+        UnityLeanMcpCompilationTracker.CompilationInProgress = false;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+        UnityEngine.TestTools.Coverage.enabled = true;
+        GetCoverageHandler.ClearCapturedCoverage();
+        GetCoverageHandler.BeginCoverageAttempt(runId);
+        GetCoverageHandler.ObserveCompilationStarted();
+        GetCoverageHandler.ObserveCompilationFinished();
+        for (int i = 0; i < 5; i++)
+            Assert.Equal(i == 4, GetCoverageHandler.AdvanceCoverageLifecycle(runId, restoration: false));
+        Assert.True(GetCoverageHandler.CoverageBaselineDiskInputsMatch(runId));
+        Assert.True(GetCoverageHandler.EstablishCoverageBaseline(runId));
+        RunTestsHandler.MarkCoverageRunStarted(runId);
+        RunTestsHandler.MarkCoverageRunCompleted(runId, complete: true);
+        string? outcome = "";
+        string lifecycleState = "";
+        for (int i = 0; i < 6; i++)
+        {
+            outcome = GetCoverageHandler.CompleteCoverageAttempt(runId);
+            lifecycleState = string.Join(";", new[]
+            {
+                UnityEditor.SessionState.GetString(GetCoverageHandler.CoverageAttemptKey, ""),
+                "editorCompiling=" + UnityEditor.EditorApplication.isCompiling,
+                "editorUpdating=" + UnityEditor.EditorApplication.isUpdating,
+                "trackerCompiling=" + UnityLeanMcpCompilationTracker.IsCompiling,
+                "trackerUpdating=" + UnityLeanMcpCompilationTracker.IsUpdating,
+                "refreshPending=" + UnityLeanMcpCompilationTracker.RefreshPending,
+                "awaiting=" + UnityLeanMcpCompilationTracker.AwaitingCompilationStart,
+                "inProgress=" + UnityLeanMcpCompilationTracker.CompilationInProgress,
+                "refreshRequired=" + UnityLeanMcpCompilationTracker.RefreshRequired
+            });
+            if (outcome == null || !outcome.StartsWith("pending|", StringComparison.Ordinal)) break;
+        }
+        Assert.True(outcome != null && outcome.StartsWith("available|", StringComparison.Ordinal),
+            lifecycleState);
     }
 
     private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()

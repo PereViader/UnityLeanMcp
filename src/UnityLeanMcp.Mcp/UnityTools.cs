@@ -713,6 +713,20 @@ public class UnityTools
             }
         }
 
+        if (string.Equals(result.CoverageStatus, "unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            headerOutput.Append("Coverage unavailable: ");
+            headerOutput.AppendTrimmedBounded(
+                result.CoverageMessage,
+                McpOutputLimits.MaxFailureMessageCharacters,
+                McpOutputLimits.FailureMessageTruncationMarker);
+            headerOutput.AppendLine();
+        }
+        else if (string.Equals(result.CoverageStatus, "available", StringComparison.OrdinalIgnoreCase))
+        {
+            headerOutput.AppendLine("Coverage captured.");
+        }
+
         return headerOutput.ToString();
     }
 

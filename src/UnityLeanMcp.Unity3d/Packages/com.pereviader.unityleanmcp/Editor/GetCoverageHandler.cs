@@ -4,10 +4,13 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
 using UnityEngine.TestTools;
+using UnityPackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace UnityLeanMcp
 {
@@ -20,19 +23,66 @@ namespace UnityLeanMcp
         internal static StringComparer PathComparer => Path.DirectorySeparatorChar == '\\'
             ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
-        // Native counters can be lost when Coverage.enabled becomes false. Keep
-        // the completed report in native session state before restoring the flag:
-        // Test Runner cleanup can unlock a pending reload after RunFinished.
+        // One completed report is retained in native session state for this Editor
+        // session. A separate attempt record is recovery state for the active test.
         internal const string CapturedCoverageKey = "UnityLeanMcp_CapturedCoverage";
+        internal const string CoverageAttemptKey = "UnityLeanMcp_CoverageAttempt";
 
         [Serializable]
         private sealed class CapturedCoverage
         {
             public string runId;
-            public int compilationEpoch;
-            public long capturedAtUtcTicks;
+            public string inputIdentity;
+            public bool inputsChangedDuringRun;
             public List<CoverageFileReport> files;
         }
+
+        [Serializable]
+        private sealed class CoverageAttempt
+        {
+            public string runId;
+            public bool previousProfilerEnabled;
+            public string inputIdentity;
+            public string baselineDiskIdentity;
+            public string phase;
+            public bool baselineCompilationExpected;
+            public bool baselineCompilationStarted;
+            public bool baselineCompilationFinished;
+            public bool baselineRequestIssued;
+            public int baselineIdleUpdates;
+            public bool enableCompilationExpected;
+            public bool enableCompilationStarted;
+            public bool enableCompilationFinished;
+            public bool enableSettingApplied;
+            public bool enableRequestIssued;
+            public int enableIdleUpdates;
+            public bool restoreCompilationExpected;
+            public bool restoreCompilationStarted;
+            public bool restoreCompilationFinished;
+            public bool restoreRefreshRequested;
+            public bool restoreRefreshCompleted;
+            public bool restoreRefreshIssued;
+            public bool restoreSettingApplied;
+            public bool restoreRequestIssued;
+            public string restoreFailureMessage;
+            public bool runnerStarted;
+            public bool terminalResultClaimed;
+            public bool testCompleted;
+            public bool captureAttempted;
+            public string captureStatus;
+            public string captureMessage;
+            public int restoreIdleUpdates;
+        }
+
+        private struct CachedFileDigest
+        {
+            public long Length;
+            public long LastWriteUtcTicks;
+            public string Digest;
+        }
+
+        private static readonly Dictionary<string, CachedFileDigest> s_ImmutablePackageFileDigestCache =
+            new Dictionary<string, CachedFileDigest>(PathComparer);
 
         public CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.MainThread;
         public bool IsMutating => false;
@@ -130,10 +180,20 @@ namespace UnityLeanMcp
                 return;
             }
 
-            int currentEpoch = SessionState.GetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
-            if (captured.compilationEpoch != currentEpoch)
+            string currentIdentity;
+            try
             {
-                writer.WriteLine("FAILURE Coverage data is obsolete because scripts were recompiled since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
+                currentIdentity = ComputeCompilationInputIdentity();
+            }
+            catch (Exception ex)
+            {
+                writer.WriteLine($"FAILURE Could not verify whether coverage matches current compilation inputs: {ex.Message} Run 'unity_test' with coverage: true to measure the current code.");
+                return;
+            }
+
+            if (captured.inputsChangedDuringRun || !string.Equals(captured.inputIdentity, currentIdentity, StringComparison.Ordinal))
+            {
+                writer.WriteLine("FAILURE Coverage data is obsolete because compilation inputs changed during or after the test run. Run 'unity_test' with coverage: true to measure the current code.");
                 return;
             }
 
@@ -160,38 +220,6 @@ namespace UnityLeanMcp
 
             var reports = captured.files.Where(r => MatchesAnyFilter(r.path, normalizedFilters)).ToList();
 
-            if (captured.capturedAtUtcTicks > 0)
-            {
-                var checkedPaths = new HashSet<string>(PathComparer);
-                foreach (var fullPath in resolvedPaths)
-                {
-                    if (File.Exists(fullPath) && !Directory.Exists(fullPath) && checkedPaths.Add(fullPath))
-                    {
-                        long lastWriteTicks = File.GetLastWriteTimeUtc(fullPath).Ticks;
-                        if (lastWriteTicks > captured.capturedAtUtcTicks)
-                        {
-                            string relPath = NormalizePathRelativeToProject(fullPath, projectRoot);
-                            writer.WriteLine($"FAILURE Coverage data for '{relPath}' is obsolete because the file was modified since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
-                            return;
-                        }
-                    }
-                }
-
-                foreach (var report in reports)
-                {
-                    if (string.IsNullOrEmpty(report.path)) continue;
-                    string fullPath = Path.Combine(projectRoot, report.path);
-                    if (File.Exists(fullPath) && checkedPaths.Add(fullPath))
-                    {
-                        long lastWriteTicks = File.GetLastWriteTimeUtc(fullPath).Ticks;
-                        if (lastWriteTicks > captured.capturedAtUtcTicks)
-                        {
-                            writer.WriteLine($"FAILURE Coverage data for '{report.path}' is obsolete because the file was modified since coverage was recorded. Run 'unity_test' with coverage: true to measure the current code.");
-                            return;
-                        }
-                    }
-                }
-            }
             foreach (string filter in normalizedFilters)
             {
                 if (filter.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
@@ -210,15 +238,553 @@ namespace UnityLeanMcp
 
         internal static void ClearCapturedCoverage() => SessionState.EraseString(CapturedCoverageKey);
 
-        internal static void CaptureCoverage(string runId)
+        internal static void BeginCoverageAttempt(string runId)
+        {
+            // Invalidate the single prior report as soon as a new attempt is
+            // admitted. A later setup failure must not expose stale coverage.
+            ClearCapturedCoverage();
+
+            var attempt = new CoverageAttempt
+            {
+                runId = runId,
+                previousProfilerEnabled = Coverage.enabled,
+                phase = "baseline-preparing",
+                baselineCompilationExpected = true
+            };
+            attempt.baselineDiskIdentity = ComputeCompilationInputFilesIdentity();
+            SessionState.SetString(CoverageAttemptKey, JsonUtility.ToJson(attempt));
+
+            // Reconcile disk imports and request compilation only after the
+            // recovery record is durable. The baseline is finalized after this
+            // compiler lifecycle, so a file edited after the last host refresh
+            // cannot be mistaken for the source that produced loaded assemblies.
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            UnityLeanMcpCompilationTracker.RefreshRequired = false;
+            CompilationPipeline.RequestScriptCompilation();
+            var latest = ReadCoverageAttempt() ?? attempt;
+            if (latest.runId == runId)
+            {
+                latest.baselineRequestIssued = true;
+                WriteCoverageAttempt(latest);
+            }
+        }
+
+        internal static bool EstablishCoverageBaseline(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId || attempt.phase != "baseline-preparing") return false;
+            string inputIdentity = ComputeCompilationInputIdentity(out string currentDiskIdentity);
+            if (!string.Equals(attempt.baselineDiskIdentity, currentDiskIdentity, StringComparison.Ordinal))
+                return false;
+
+            attempt.inputIdentity = inputIdentity;
+            attempt.baselineCompilationExpected = false;
+            UnityLeanMcpCompilationTracker.RefreshRequired = false;
+            attempt.phase = attempt.previousProfilerEnabled ? "preparing" : "enabling";
+            attempt.enableCompilationExpected = !attempt.previousProfilerEnabled;
+            attempt.enableCompilationStarted = false;
+            attempt.enableCompilationFinished = false;
+            attempt.enableSettingApplied = attempt.previousProfilerEnabled;
+            attempt.enableRequestIssued = false;
+            attempt.enableIdleUpdates = 0;
+            WriteCoverageAttempt(attempt);
+
+            // Persist the expected instrumentation compile before changing the
+            // native setting, which may reload this domain.
+            if (!attempt.previousProfilerEnabled)
+            {
+                Coverage.enabled = true;
+                var latest = ReadCoverageAttempt() ?? attempt;
+                if (latest.runId == runId)
+                {
+                    latest.enableSettingApplied = true;
+                    WriteCoverageAttempt(latest);
+                }
+            }
+            return true;
+        }
+
+        internal static void MarkCoverageInstrumentationSettled(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId || attempt.phase != "enabling")
+                throw new InvalidOperationException("Coverage instrumentation preparation state was lost.");
+            attempt.enableCompilationExpected = false;
+            UnityLeanMcpCompilationTracker.RefreshRequired = false;
+            attempt.phase = "preparing";
+            WriteCoverageAttempt(attempt);
+        }
+
+        internal static bool CoverageBaselineDiskInputsMatch(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            return attempt != null && attempt.runId == runId &&
+                string.Equals(attempt.baselineDiskIdentity, ComputeCompilationInputFilesIdentity(), StringComparison.Ordinal);
+        }
+
+        internal static void AbortCoveragePreparation(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId) return;
+            if (!IsEditorCompilationActive())
+            {
+                if (attempt.phase == "baseline-preparing" && !attempt.baselineCompilationStarted)
+                    attempt.baselineCompilationExpected = false;
+                if (attempt.phase == "enabling" && !attempt.enableCompilationStarted)
+                    attempt.enableCompilationExpected = false;
+            }
+            WriteCoverageAttempt(attempt);
+        }
+
+        internal static void ObserveCompilationStarted()
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null) return;
+            if (attempt.phase == "baseline-preparing" && attempt.baselineCompilationExpected)
+            {
+                attempt.baselineCompilationStarted = true;
+                attempt.baselineCompilationFinished = false;
+                attempt.baselineIdleUpdates = 0;
+            }
+            else if (attempt.phase == "enabling" && attempt.enableCompilationExpected)
+            {
+                attempt.enableCompilationStarted = true;
+                attempt.enableCompilationFinished = false;
+                attempt.enableIdleUpdates = 0;
+            }
+            else if (attempt.phase == "restoring" && attempt.restoreCompilationExpected)
+            {
+                attempt.restoreCompilationStarted = true;
+                attempt.restoreCompilationFinished = false;
+            }
+            else if (attempt.phase == "restoring" && attempt.baselineCompilationExpected)
+            {
+                attempt.baselineCompilationStarted = true;
+                attempt.baselineCompilationFinished = false;
+            }
+            else if (attempt.phase == "restoring" && attempt.enableCompilationExpected)
+            {
+                attempt.enableCompilationStarted = true;
+                attempt.enableCompilationFinished = false;
+            }
+            else return;
+            WriteCoverageAttempt(attempt);
+        }
+
+        internal static void ObserveCompilationFinished()
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null) return;
+            if (attempt.phase == "baseline-preparing" && attempt.baselineCompilationExpected && attempt.baselineCompilationStarted)
+                attempt.baselineCompilationFinished = true;
+            else if (attempt.phase == "enabling" && attempt.enableCompilationExpected && attempt.enableCompilationStarted)
+                attempt.enableCompilationFinished = true;
+            else if (attempt.phase == "restoring" && attempt.restoreCompilationExpected && attempt.restoreCompilationStarted)
+                attempt.restoreCompilationFinished = true;
+            else if (attempt.phase == "restoring" && attempt.baselineCompilationExpected && attempt.baselineCompilationStarted)
+                attempt.baselineCompilationFinished = true;
+            else if (attempt.phase == "restoring" && attempt.enableCompilationExpected && attempt.enableCompilationStarted)
+                attempt.enableCompilationFinished = true;
+            else return;
+            WriteCoverageAttempt(attempt);
+        }
+
+        internal static bool AdvanceCoverageLifecycle(string runId, bool restoration)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId) return false;
+            if (!IsEditorCompilationActive())
+            {
+                if (!restoration && attempt.phase == "baseline-preparing" && attempt.baselineCompilationExpected &&
+                    !attempt.baselineCompilationStarted && !attempt.baselineCompilationFinished && !attempt.baselineRequestIssued)
+                {
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                    UnityLeanMcpCompilationTracker.RefreshRequired = false;
+                    attempt.baselineDiskIdentity = ComputeCompilationInputFilesIdentity();
+                    WriteCoverageAttempt(attempt);
+                    CompilationPipeline.RequestScriptCompilation();
+                    var latest = ReadCoverageAttempt() ?? attempt;
+                    if (latest.runId == runId)
+                    {
+                        latest.baselineRequestIssued = true;
+                        WriteCoverageAttempt(latest);
+                    }
+                    return false;
+                }
+                if (!restoration && attempt.phase == "enabling" && attempt.enableCompilationExpected &&
+                    !attempt.enableCompilationStarted && !attempt.enableCompilationFinished)
+                {
+                    if (!attempt.enableSettingApplied || !Coverage.enabled)
+                    {
+                        Coverage.enabled = true;
+                        var latest = ReadCoverageAttempt() ?? attempt;
+                        if (latest.runId == runId)
+                        {
+                            latest.enableSettingApplied = true;
+                            WriteCoverageAttempt(latest);
+                        }
+                        return false;
+                    }
+                    if (!attempt.enableRequestIssued)
+                    {
+                        CompilationPipeline.RequestScriptCompilation();
+                        var latest = ReadCoverageAttempt() ?? attempt;
+                        if (latest.runId == runId)
+                        {
+                            latest.enableRequestIssued = true;
+                            WriteCoverageAttempt(latest);
+                        }
+                        return false;
+                    }
+                    return false;
+                }
+            }
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating ||
+                UnityLeanMcpCompilationTracker.IsCompiling || UnityLeanMcpCompilationTracker.IsUpdating ||
+                UnityLeanMcpCompilationTracker.RefreshPending || UnityLeanMcpCompilationTracker.AwaitingCompilationStart ||
+                UnityLeanMcpCompilationTracker.CompilationInProgress)
+            {
+                if (restoration) attempt.restoreIdleUpdates = 0;
+                else if (attempt.phase == "baseline-preparing") attempt.baselineIdleUpdates = 0;
+                else if (attempt.phase == "enabling") attempt.enableIdleUpdates = 0;
+                WriteCoverageAttempt(attempt);
+                return false;
+            }
+
+            if (restoration)
+            {
+                if (attempt.baselineCompilationExpected && !attempt.baselineCompilationFinished) return false;
+                if (attempt.enableCompilationExpected && !attempt.enableCompilationFinished) return false;
+                if (attempt.restoreCompilationExpected && !attempt.restoreCompilationFinished) return false;
+                attempt.restoreIdleUpdates++;
+                WriteCoverageAttempt(attempt);
+                return attempt.restoreIdleUpdates >= 5;
+            }
+
+            if (attempt.phase == "baseline-preparing")
+            {
+                if (attempt.baselineCompilationExpected && !attempt.baselineCompilationFinished) return false;
+                attempt.baselineIdleUpdates++;
+                WriteCoverageAttempt(attempt);
+                return attempt.baselineIdleUpdates >= 5;
+            }
+
+            if (attempt.phase == "enabling")
+            {
+                if (attempt.enableCompilationExpected && !attempt.enableCompilationFinished) return false;
+                attempt.enableIdleUpdates++;
+                WriteCoverageAttempt(attempt);
+                return attempt.enableIdleUpdates >= 5;
+            }
+
+            return true;
+        }
+
+        private static bool IsEditorCompilationActive() =>
+            EditorApplication.isCompiling || EditorApplication.isUpdating ||
+            UnityLeanMcpCompilationTracker.IsCompiling || UnityLeanMcpCompilationTracker.IsUpdating ||
+            UnityLeanMcpCompilationTracker.RefreshPending || UnityLeanMcpCompilationTracker.AwaitingCompilationStart ||
+            UnityLeanMcpCompilationTracker.CompilationInProgress;
+
+        internal static bool IsCoverageTerminalResultClaimed(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            return attempt != null && attempt.runId == runId && attempt.terminalResultClaimed;
+        }
+
+        internal static bool IsCoverageAttempt(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            return attempt != null && attempt.runId == runId;
+        }
+
+        internal static string GetCoverageAttemptPhase(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            return attempt != null && attempt.runId == runId ? attempt.phase : null;
+        }
+
+        internal static string GetCoverageAttemptRunId() => ReadCoverageAttempt()?.runId;
+
+        internal static bool CoverageInputsMatchAttempt(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            return attempt != null && attempt.runId == runId &&
+                string.Equals(attempt.inputIdentity, ComputeCompilationInputIdentity(), StringComparison.Ordinal);
+        }
+
+        internal static bool TryMarkCoverageRunnerStarted(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId || attempt.terminalResultClaimed)
+                return false;
+            attempt.runnerStarted = true;
+            attempt.phase = "running";
+            WriteCoverageAttempt(attempt);
+            return true;
+        }
+
+        internal static void MarkCoverageTestCompleted(string runId, bool complete)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId || attempt.terminalResultClaimed)
+                return;
+            attempt.terminalResultClaimed = true;
+            attempt.testCompleted = complete && attempt.runnerStarted;
+            attempt.phase = attempt.testCompleted ? "completed" : "partial";
+            WriteCoverageAttempt(attempt);
+        }
+
+        internal static void MarkCoverageExecutionStarting(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId)
+                throw new InvalidOperationException("Coverage preparation state was lost.");
+            attempt.phase = "starting";
+            WriteCoverageAttempt(attempt);
+        }
+
+        internal static void ResetCoverageCounters()
+        {
+            if (!Coverage.enabled)
+                throw new InvalidOperationException("Coverage must be enabled before resetting counters.");
+            Coverage.ResetAll();
+        }
+
+        internal static void RestoreCoverageProfiler(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId)
+                return;
+
+            // Editor shutdown has no next domain or query to finish settlement.
+            attempt.phase = "restoring";
+            attempt.restoreCompilationExpected = Coverage.enabled != attempt.previousProfilerEnabled;
+            attempt.restoreCompilationStarted = false;
+            attempt.restoreCompilationFinished = false;
+            WriteCoverageAttempt(attempt);
+            if (Coverage.enabled != attempt.previousProfilerEnabled)
+                Coverage.enabled = attempt.previousProfilerEnabled;
+            attempt.restoreSettingApplied = true;
+            WriteCoverageAttempt(attempt);
+            SessionState.EraseString(CoverageAttemptKey);
+        }
+
+        internal static void RestoreAnyCoverageProfiler()
+        {
+            string runId = GetCoverageAttemptRunId();
+            if (!string.IsNullOrEmpty(runId)) RestoreCoverageProfiler(runId);
+        }
+
+        internal static string CompleteCoverageAttempt(string runId)
+        {
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId)
+            {
+                if (CapturedCoverageRunId() == runId) return "available|Coverage report was captured.";
+                var runState = RunTestsHandler.ReadRunningState();
+                return runState != null && runState.runId == runId && runState.coverage
+                    ? "unavailable|Coverage preparation did not produce a report."
+                    : null;
+            }
+
+            if (attempt.phase != "restoring")
+            {
+                attempt.terminalResultClaimed = true;
+                if (attempt.testCompleted && attempt.runnerStarted)
+                {
+                    try
+                    {
+                        attempt.captureStatus = CaptureCoverage(runId) ? "available" : "unavailable";
+                        attempt.captureMessage = attempt.captureStatus == "available"
+                            ? "Coverage report captured for the completed test run."
+                            : "Coverage counters were unavailable when the test run completed.";
+                    }
+                    catch (Exception ex)
+                    {
+                        attempt.captureStatus = "unavailable";
+                        attempt.captureMessage = "Coverage capture failed: " + ex.Message;
+                    }
+                }
+                else
+                {
+                    attempt.captureStatus = "unavailable";
+                    attempt.captureMessage = "Coverage was not captured because the test run did not complete.";
+                }
+
+                attempt.phase = "restoring";
+                attempt.restoreIdleUpdates = 0;
+                attempt.restoreCompilationExpected = Coverage.enabled != attempt.previousProfilerEnabled;
+                attempt.restoreCompilationStarted = false;
+                attempt.restoreCompilationFinished = false;
+                attempt.restoreRefreshRequested = UnityLeanMcpCompilationTracker.RefreshRequired;
+                attempt.restoreRefreshCompleted = false;
+                attempt.restoreRefreshIssued = false;
+                attempt.restoreSettingApplied = false;
+                attempt.restoreRequestIssued = false;
+                attempt.restoreFailureMessage = null;
+                if (UnityLeanMcpCompilationTracker.RefreshPending || UnityLeanMcpCompilationTracker.AwaitingCompilationStart ||
+                    UnityLeanMcpCompilationTracker.CompilationInProgress)
+                    attempt.restoreCompilationExpected = true;
+                if (attempt.restoreRefreshRequested) attempt.restoreCompilationExpected = true;
+                WriteCoverageAttempt(attempt);
+            }
+
+            try
+            {
+                ApplyCoverageRestoration(attempt);
+                if (!AdvanceCoverageLifecycle(runId, restoration: true))
+                    return "pending|Waiting for profiler restoration to settle.";
+                attempt = ReadCoverageAttempt() ?? attempt;
+                attempt.restoreFailureMessage = null;
+                WriteCoverageAttempt(attempt);
+            }
+            catch (Exception ex)
+            {
+                attempt = ReadCoverageAttempt() ?? attempt;
+                if (!string.Equals(attempt.restoreFailureMessage, ex.Message, StringComparison.Ordinal))
+                {
+                    attempt.restoreFailureMessage = ex.Message;
+                    WriteCoverageAttempt(attempt);
+                    WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile,
+                        "Coverage restoration will retry for test " + runId + ": " + ex.Message);
+                }
+                return "pending|Could not restore coverage yet: " + ex.Message;
+            }
+
+            if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed || EditorUtility.scriptCompilationFailed)
+            {
+                ClearCapturedCoverage();
+                attempt.captureStatus = "unavailable";
+                attempt.captureMessage = "Profiler restoration compilation failed; coverage cannot be used until the project compiles successfully.";
+            }
+            else if (attempt.captureStatus == "available" && !CapturedCoverageMatchesCurrentInputs(runId))
+            {
+                ClearCapturedCoverage();
+                attempt.captureStatus = "unavailable";
+                attempt.captureMessage = "Compilation inputs changed during the test or profiler restoration, so the captured coverage is obsolete.";
+            }
+
+            string outcome = (attempt.captureStatus ?? "unavailable") + "|" +
+                (attempt.captureMessage ?? "Coverage was not available for this test run.");
+            SessionState.EraseString(CoverageAttemptKey);
+            return outcome;
+        }
+
+        private static void ApplyCoverageRestoration(CoverageAttempt attempt)
+        {
+            if (UnityLeanMcpCompilationTracker.RefreshRequired && !attempt.restoreRefreshRequested)
+            {
+                attempt.restoreCompilationExpected = true;
+                attempt.restoreCompilationStarted = false;
+                attempt.restoreCompilationFinished = false;
+                attempt.restoreRefreshRequested = true;
+                attempt.restoreRefreshCompleted = false;
+                attempt.restoreRefreshIssued = false;
+                attempt.restoreRequestIssued = false;
+                attempt.restoreIdleUpdates = 0;
+                WriteCoverageAttempt(attempt);
+            }
+
+            if (attempt.restoreRefreshRequested && !attempt.restoreRefreshCompleted &&
+                !attempt.restoreCompilationStarted && !IsEditorCompilationActive())
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                UnityLeanMcpCompilationTracker.RefreshRequired = false;
+                attempt.restoreRefreshCompleted = true;
+                WriteCoverageAttempt(attempt);
+            }
+
+            if (!attempt.restoreSettingApplied)
+            {
+                if (Coverage.enabled != attempt.previousProfilerEnabled)
+                    Coverage.enabled = attempt.previousProfilerEnabled;
+                attempt.restoreSettingApplied = true;
+                WriteCoverageAttempt(attempt);
+            }
+
+            if (attempt.restoreRefreshRequested && !attempt.restoreRefreshIssued)
+            {
+                if (attempt.restoreCompilationStarted)
+                {
+                    attempt.restoreRefreshIssued = true;
+                    WriteCoverageAttempt(attempt);
+                }
+                else if (!IsEditorCompilationActive())
+                {
+                    CompilationPipeline.RequestScriptCompilation();
+                    var latest = ReadCoverageAttempt() ?? attempt;
+                    if (latest.runId == attempt.runId)
+                    {
+                        latest.restoreRefreshIssued = true;
+                        latest.restoreRequestIssued = true;
+                        WriteCoverageAttempt(latest);
+                    }
+                }
+            }
+            else if (attempt.restoreCompilationExpected && !attempt.restoreCompilationStarted &&
+                !attempt.restoreCompilationFinished && !attempt.restoreRequestIssued && !IsEditorCompilationActive())
+            {
+                CompilationPipeline.RequestScriptCompilation();
+                var latest = ReadCoverageAttempt() ?? attempt;
+                if (latest.runId == attempt.runId)
+                {
+                    latest.restoreRequestIssued = true;
+                    WriteCoverageAttempt(latest);
+                }
+            }
+        }
+
+        private static string CapturedCoverageRunId()
+        {
+            string json = SessionState.GetString(CapturedCoverageKey, "");
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JsonUtility.FromJson<CapturedCoverage>(json)?.runId; }
+            catch { return null; }
+        }
+
+        internal static bool CapturedCoverageMatchesCurrentInputs(string runId)
+        {
+            string json = SessionState.GetString(CapturedCoverageKey, "");
+            if (string.IsNullOrEmpty(json)) return false;
+            try
+            {
+                var captured = JsonUtility.FromJson<CapturedCoverage>(json);
+                return captured != null && captured.runId == runId && !captured.inputsChangedDuringRun &&
+                    string.Equals(captured.inputIdentity, ComputeCompilationInputIdentity(), StringComparison.Ordinal);
+            }
+            catch { return false; }
+        }
+
+        private static CoverageAttempt ReadCoverageAttempt()
+        {
+            string json = SessionState.GetString(CoverageAttemptKey, "");
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JsonUtility.FromJson<CoverageAttempt>(json); }
+            catch { return null; }
+        }
+
+        private static void WriteCoverageAttempt(CoverageAttempt attempt) =>
+            SessionState.SetString(CoverageAttemptKey, JsonUtility.ToJson(attempt));
+
+        internal static bool CaptureCoverage(string runId)
         {
             string previousJson = SessionState.GetString(CapturedCoverageKey, "");
             if (!string.IsNullOrEmpty(previousJson) &&
                 JsonUtility.FromJson<CapturedCoverage>(previousJson)?.runId == runId)
-                return;
+                return true;
+
+            var attempt = ReadCoverageAttempt();
+            if (attempt == null || attempt.runId != runId || !attempt.terminalResultClaimed || !attempt.testCompleted || !attempt.runnerStarted || attempt.captureAttempted)
+                return false;
+
+            // Claim the capture before consulting native counters. A reload or
+            // publication retry must never recapture counters after restoration.
+            attempt.captureAttempted = true;
+            WriteCoverageAttempt(attempt);
 
             if (!Coverage.enabled)
-                return;
+                return false;
 
             string projectRoot = UnityLeanMcpPaths.ProjectRoot.Replace('\\', '/').TrimEnd('/') + "/";
             var normalizedFilters = new List<string> { "" };
@@ -379,16 +945,310 @@ namespace UnityLeanMcp
 
             reports = reports.OrderBy(r => r.path, PathComparer).ToList();
 
-            int epoch = SessionState.GetInt(UnityLeanMcpCompilationTracker.CompilationEpochKey, 0);
-            long nowTicks = DateTime.UtcNow.Ticks;
+            string currentIdentity = ComputeCompilationInputIdentity();
 
             SessionState.SetString(CapturedCoverageKey, JsonUtility.ToJson(new CapturedCoverage
             {
                 runId = runId,
-                compilationEpoch = epoch,
-                capturedAtUtcTicks = nowTicks,
+                inputIdentity = attempt.inputIdentity,
+                inputsChangedDuringRun = !string.Equals(attempt.inputIdentity, currentIdentity, StringComparison.Ordinal),
                 files = reports
             }));
+            return true;
+        }
+
+        internal static string ComputeCompilationInputIdentity() =>
+            ComputeCompilationInputIdentity(out _);
+
+        internal static string ComputeCompilationInputIdentity(out string diskFilesIdentity)
+        {
+            string projectRoot = Path.GetFullPath(UnityLeanMcpPaths.ProjectRoot);
+            var manifest = new StringBuilder();
+            var diskManifest = new StringBuilder();
+            var diskPaths = CollectCompilationInputFiles(projectRoot);
+            var contentPaths = new SortedSet<string>(diskPaths, PathComparer);
+
+            AppendIdentity(manifest, "unity", Application.unityVersion);
+            AppendIdentity(manifest, "optimization", CompilationPipeline.codeOptimization.ToString());
+
+            var assemblies = CompilationPipeline.GetAssemblies() ?? new UnityEditor.Compilation.Assembly[0];
+            foreach (var assembly in assemblies.OrderBy(a => a?.name, StringComparer.Ordinal))
+            {
+                if (assembly == null) continue;
+                AppendIdentity(manifest, "assembly", assembly.name);
+                AppendIdentity(manifest, "flags", assembly.flags);
+                AppendIdentity(manifest, "defines", string.Join("\u001f", assembly.defines.OrderBy(d => d, StringComparer.Ordinal)));
+
+                foreach (string source in assembly.sourceFiles.OrderBy(p => p, PathComparer))
+                {
+                    string path = ResolveCompilerPath(source, projectRoot);
+                    AppendIdentity(manifest, "source", path);
+                    contentPaths.Add(path);
+                }
+
+                foreach (var reference in assembly.assemblyReferences.OrderBy(r => r.name, StringComparer.Ordinal))
+                {
+                    AppendIdentity(manifest, "assembly-reference", reference.name);
+                }
+
+                foreach (string reference in assembly.compiledAssemblyReferences.OrderBy(p => p, PathComparer))
+                {
+                    AppendIdentity(manifest, "compiled-reference", NormalizeCompilerPath(reference, projectRoot));
+                }
+
+                var compilerOptions = assembly.compilerOptions;
+                AppendIdentity(manifest, "compiler-allow-unsafe", compilerOptions.AllowUnsafeCode);
+                AppendIdentity(manifest, "compiler-api-compatibility", compilerOptions.ApiCompatibilityLevel);
+                AppendIdentity(manifest, "compiler-optimization", compilerOptions.CodeOptimization);
+                AppendIdentity(manifest, "compiler-language-version", compilerOptions.LanguageVersion);
+                AppendIdentity(manifest, "compiler-arguments", string.Join("\u001f", compilerOptions.AdditionalCompilerArguments ?? new string[0]));
+                AddCompilerOptionFiles(manifest, contentPaths, "compiler-response", compilerOptions.ResponseFiles, projectRoot);
+                AddCompilerOptionFiles(manifest, contentPaths, "compiler-analyzer-config", new[] { compilerOptions.AnalyzerConfigPath }, projectRoot);
+                AddCompilerOptionFiles(manifest, contentPaths, "compiler-analyzer-additional", compilerOptions.RoslynAdditionalFilePaths, projectRoot);
+                AddCompilerOptionFiles(manifest, contentPaths, "compiler-analyzer-dll", compilerOptions.RoslynAnalyzerDllPaths, projectRoot);
+                AddCompilerOptionFiles(manifest, contentPaths, "compiler-analyzer-rules", new[] { compilerOptions.RoslynAnalyzerRulesetPath }, projectRoot);
+            }
+
+            string[] userPrecompiled = CompilationPipeline.GetPrecompiledAssemblyPaths(CompilationPipeline.PrecompiledAssemblySources.UserAssembly) ?? new string[0];
+            foreach (string path in userPrecompiled.Select(p => ResolveCompilerPath(p, projectRoot)).OrderBy(p => p, PathComparer))
+            {
+                AppendIdentity(manifest, "user-binary", path);
+                contentPaths.Add(path);
+            }
+
+            using (var sha = SHA256.Create())
+            {
+                foreach (string path in contentPaths)
+                {
+                    string digest = GetFileContentDigest(path, projectRoot, sha);
+                    AppendIdentity(manifest, "input-path", path);
+                    AppendIdentity(manifest, "input-content", digest);
+                    if (diskPaths.Contains(path))
+                    {
+                        AppendIdentity(diskManifest, "input-path", path);
+                        AppendIdentity(diskManifest, "input-content", digest);
+                    }
+                }
+
+                diskFilesIdentity = ComputeHexDigest(sha, diskManifest.ToString());
+                return ComputeHexDigest(sha, manifest.ToString());
+            }
+        }
+
+        private static string ComputeCompilationInputFilesIdentity()
+        {
+            string projectRoot = Path.GetFullPath(UnityLeanMcpPaths.ProjectRoot);
+            var manifest = new StringBuilder();
+            using (var sha = SHA256.Create())
+            {
+                foreach (string path in CollectCompilationInputFiles(projectRoot))
+                {
+                    AppendIdentity(manifest, "input-path", path);
+                    AppendIdentity(manifest, "input-content", GetFileContentDigest(path, projectRoot, sha));
+                }
+
+                return ComputeHexDigest(sha, manifest.ToString());
+            }
+        }
+
+        private static string GetFileContentDigest(string path, string projectRoot, SHA256 sha)
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists)
+                return "missing";
+
+            bool cacheable = IsImmutablePackageOrEnginePath(path, projectRoot);
+            long length = info.Length;
+            long writeTicks = info.LastWriteTimeUtc.Ticks;
+            if (cacheable &&
+                s_ImmutablePackageFileDigestCache.TryGetValue(path, out var cached) &&
+                cached.Length == length &&
+                cached.LastWriteUtcTicks == writeTicks)
+            {
+                return cached.Digest;
+            }
+
+            using (var stream = info.OpenRead())
+            {
+                string digest = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+                if (cacheable)
+                {
+                    s_ImmutablePackageFileDigestCache[path] = new CachedFileDigest
+                    {
+                        Length = length,
+                        LastWriteUtcTicks = writeTicks,
+                        Digest = digest
+                    };
+                }
+                return digest;
+            }
+        }
+
+        private static string ComputeHexDigest(SHA256 sha, string text) =>
+            BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "");
+
+        private static bool IsImmutablePackageOrEnginePath(string fullPath, string projectRoot)
+        {
+            string packageCacheRoot = Path.Combine(projectRoot, "Library", "PackageCache");
+            if (IsUnderDirectory(fullPath, packageCacheRoot))
+                return true;
+
+            string editorContents = EditorApplication.applicationContentsPath;
+            if (!string.IsNullOrWhiteSpace(editorContents))
+            {
+                try
+                {
+                    if (IsUnderDirectory(fullPath, Path.GetFullPath(editorContents)))
+                        return true;
+                }
+                catch { }
+            }
+
+            return false;
+        }
+
+        private static bool IsUnderDirectory(string candidatePath, string directoryPath)
+        {
+            if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(directoryPath))
+                return false;
+            string normCandidate = candidatePath.Replace('\\', '/').TrimEnd('/');
+            string normDir = directoryPath.Replace('\\', '/').TrimEnd('/');
+            return normCandidate.Equals(normDir, PathComparison) ||
+                normCandidate.StartsWith(normDir + "/", PathComparison);
+        }
+
+        private static SortedSet<string> CollectCompilationInputFiles(string projectRoot)
+        {
+            var paths = new SortedSet<string>(PathComparer);
+            var inputDirectories = new SortedSet<string>(PathComparer)
+            {
+                Path.Combine(projectRoot, "Assets"),
+                Path.Combine(projectRoot, "Packages")
+            };
+
+            foreach (UnityPackageInfo package in UnityPackageInfo.GetAllRegisteredPackages() ?? new UnityPackageInfo[0])
+            {
+                if (package == null || string.IsNullOrWhiteSpace(package.resolvedPath)) continue;
+                string resolved = Path.GetFullPath(package.resolvedPath);
+                if (IsImmutablePackageOrEnginePath(resolved, projectRoot))
+                    continue;
+                inputDirectories.Add(resolved);
+                AddExistingInput(paths, Path.Combine(resolved, "package.json"));
+            }
+
+            foreach (string root in inputDirectories)
+            {
+                if (!Directory.Exists(root)) continue;
+                var pending = new Stack<string>();
+                pending.Push(root);
+                while (pending.Count > 0)
+                {
+                    string directory = pending.Pop();
+                    foreach (string file in Directory.EnumerateFiles(directory))
+                    {
+                        string extension = Path.GetExtension(file);
+                        string fileName = Path.GetFileName(file);
+                        if (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+                            extension.Equals(".asmdef", StringComparison.OrdinalIgnoreCase) ||
+                            extension.Equals(".asmref", StringComparison.OrdinalIgnoreCase) ||
+                            extension.Equals(".rsp", StringComparison.OrdinalIgnoreCase) ||
+                            extension.Equals(".additionalfile", StringComparison.OrdinalIgnoreCase) ||
+                            extension.Equals(".ruleset", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.Equals(".editorconfig", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.EndsWith(".globalconfig", StringComparison.OrdinalIgnoreCase) ||
+                            extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.EndsWith(".asmdef.meta", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.EndsWith(".asmref.meta", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.EndsWith(".dll.meta", StringComparison.OrdinalIgnoreCase))
+                            paths.Add(Path.GetFullPath(file));
+                    }
+
+                    foreach (string child in Directory.EnumerateDirectories(directory))
+                    {
+                        string childName = Path.GetFileName(child);
+                        if (string.IsNullOrEmpty(childName) || childName.StartsWith(".", StringComparison.Ordinal) ||
+                            childName.EndsWith("~", StringComparison.Ordinal))
+                            continue;
+                        if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                            continue;
+                        pending.Push(child);
+                    }
+                }
+            }
+
+            AddExistingInput(paths, Path.Combine(projectRoot, "ProjectSettings", "ProjectSettings.asset"));
+            AddExistingInput(paths, Path.Combine(projectRoot, "ProjectSettings", "EditorSettings.asset"));
+            AddExistingInput(paths, Path.Combine(projectRoot, "ProjectSettings", "PackageManagerSettings.asset"));
+            AddExistingInput(paths, Path.Combine(projectRoot, "Packages", "manifest.json"));
+            AddExistingInput(paths, Path.Combine(projectRoot, "Packages", "packages-lock.json"));
+
+            var assemblies = CompilationPipeline.GetAssemblies() ?? new UnityEditor.Compilation.Assembly[0];
+            foreach (var assembly in assemblies)
+            {
+                if (assembly == null) continue;
+                foreach (string source in assembly.sourceFiles ?? new string[0])
+                    paths.Add(ResolveCompilerPath(source, projectRoot));
+                var options = assembly.compilerOptions;
+                AddPaths(paths, options.ResponseFiles, projectRoot);
+                AddPaths(paths, new[] { options.AnalyzerConfigPath }, projectRoot);
+                AddPaths(paths, options.RoslynAdditionalFilePaths, projectRoot);
+                AddPaths(paths, options.RoslynAnalyzerDllPaths, projectRoot);
+                AddPaths(paths, new[] { options.RoslynAnalyzerRulesetPath }, projectRoot);
+            }
+
+            string[] userPrecompiled = CompilationPipeline.GetPrecompiledAssemblyPaths(CompilationPipeline.PrecompiledAssemblySources.UserAssembly) ?? new string[0];
+            foreach (string path in userPrecompiled)
+            {
+                string resolved = ResolveCompilerPath(path, projectRoot);
+                paths.Add(resolved);
+                if (File.Exists(resolved + ".meta")) paths.Add(resolved + ".meta");
+            }
+            return paths;
+        }
+
+        private static void AddPaths(SortedSet<string> paths, string[] values, string projectRoot)
+        {
+            foreach (string value in values ?? new string[0])
+                if (!string.IsNullOrWhiteSpace(value)) paths.Add(ResolveCompilerPath(value, projectRoot));
+        }
+
+        private static void AddCompilerOptionFiles(StringBuilder manifest, SortedSet<string> contentPaths, string name, string[] paths, string projectRoot)
+        {
+            foreach (string path in paths ?? new string[0])
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                string resolved = ResolveCompilerPath(path, projectRoot);
+                AppendIdentity(manifest, name, resolved);
+                contentPaths.Add(resolved);
+            }
+        }
+
+        private static string ResolveCompilerPath(string path, string projectRoot)
+        {
+            string normalized = NormalizeCompilerPath(path, projectRoot);
+            // A Windows compiler path may be returned by a host running on
+            // another OS in unit tests. Keep its identity without pretending it
+            // is a local path.
+            if (Path.DirectorySeparatorChar != '\\' && normalized.Length >= 3 && char.IsLetter(normalized[0]) && normalized[1] == ':' && normalized[2] == '/')
+                return normalized;
+            if (Path.IsPathRooted(normalized)) return Path.GetFullPath(normalized);
+            return Path.GetFullPath(Path.Combine(projectRoot, normalized));
+        }
+
+        private static string NormalizeCompilerPath(string path, string projectRoot)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return "";
+            return path.Replace('\\', '/');
+        }
+
+        private static void AddExistingInput(SortedSet<string> paths, string path)
+        {
+            if (File.Exists(path)) paths.Add(Path.GetFullPath(path));
+        }
+
+        private static void AppendIdentity(StringBuilder manifest, string name, object value)
+        {
+            manifest.Append(name ?? "").Append('\0').Append(value?.ToString() ?? "").Append('\n');
         }
 
         private static CoverageFileReport CreateEmptyFileReport(string path) =>

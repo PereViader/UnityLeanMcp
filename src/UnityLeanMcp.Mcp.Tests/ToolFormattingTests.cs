@@ -1321,6 +1321,62 @@ public class ToolFormattingTests
     }
 
     [Fact]
+    public async Task UnityRunTests_ReportsCoverageStatusAlongsidePassingTestOutcome()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 1,
+                CoverageStatus = "available",
+                CoverageMessage = "Coverage report captured for the completed test run."
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, coverage: true);
+
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Tests Passed: 1 passed.", text);
+            Assert.Contains("Coverage captured.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityRunTests_ReportsUnavailableCoverageWithoutChangingPassingTestStatus()
+    {
+        var (tempDir, pm, client, tools) = CreateTestContext();
+        try
+        {
+            client.TestRunResultToReturn = new UnityTestRunResult
+            {
+                Success = true,
+                FailCount = 0,
+                PassCount = 1,
+                CoverageStatus = "unavailable",
+                CoverageMessage = "Profiler restoration compilation failed."
+            };
+
+            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, coverage: true);
+
+            Assert.False(result.IsError);
+            string text = GetResultText(result);
+            Assert.Contains("Tests Passed: 1 passed.", text);
+            Assert.Contains("Coverage unavailable: Profiler restoration compilation failed.", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task UnityRunTests_WhenTestsPassedAndSkippedGreaterThanZero_IncludesSkipped()
     {
         var (tempDir, pm, client, tools) = CreateTestContext();
