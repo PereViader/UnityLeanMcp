@@ -740,6 +740,116 @@ public class CoverageFormattingTests
     }
 
     [Fact]
+    public void GetCoverageHandler_ProcessMethod_WhenAsyncAwaitCompletesSynchronously_DoesNotReportAwaitLineUncovered()
+    {
+        var stateMachineType = typeof(AsyncSampleStateMachine)
+            .GetNestedTypes(System.Reflection.BindingFlags.NonPublic)
+            .FirstOrDefault(t => t.Name.StartsWith("<RunAsync>d__", StringComparison.Ordinal));
+        Assert.NotNull(stateMachineType);
+        var moveNext = stateMachineType!.GetMethod(
+            "MoveNext",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+        Assert.NotNull(moveNext);
+
+        const string sourcePath = "Assets/Scripts/Processor.cs";
+        try
+        {
+            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = m =>
+            {
+                if (!ReferenceEquals(m, moveNext))
+                    return Array.Empty<UnityEngine.TestTools.CoveredSequencePoint>();
+
+                return
+                [
+                    new() { method = moveNext, filename = sourcePath, line = 20, column = 5, ilOffset = 14, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 15, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 55, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 82, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 22, column = 9, ilOffset = 135, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 23, column = 5, ilOffset = 170, hitCount = 1 }
+                ];
+            };
+
+            var pointsByFile = new Dictionary<string, List<UnityEngine.TestTools.CoveredSequencePoint>>(GetCoverageHandler.PathComparer);
+            GetCoverageHandler.ProcessMethod(moveNext!, "C:/Project/", ["Assets/"], pointsByFile);
+
+            Assert.True(pointsByFile.TryGetValue(sourcePath, out var coveredPoints));
+            Assert.Equal(4, coveredPoints!.Count);
+            Assert.All(coveredPoints, p => Assert.True(p.hitCount > 0));
+            Assert.Empty(GetCoverageHandler.ComputeUncoveredSpans(coveredPoints));
+
+            // When none of the points on the await line ran, it must still be reported uncovered once.
+            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = m =>
+            {
+                if (!ReferenceEquals(m, moveNext))
+                    return Array.Empty<UnityEngine.TestTools.CoveredSequencePoint>();
+
+                return
+                [
+                    new() { method = moveNext, filename = sourcePath, line = 20, column = 5, ilOffset = 14, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 15, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 55, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 82, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 22, column = 9, ilOffset = 135, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 23, column = 5, ilOffset = 170, hitCount = 1 }
+                ];
+            };
+
+            var unhitByFile = new Dictionary<string, List<UnityEngine.TestTools.CoveredSequencePoint>>(GetCoverageHandler.PathComparer);
+            GetCoverageHandler.ProcessMethod(moveNext!, "C:/Project/", ["Assets/"], unhitByFile);
+            Assert.True(unhitByFile.TryGetValue(sourcePath, out var unhitPoints));
+            Assert.Equal(4, unhitPoints!.Count);
+            Assert.Equal(3, unhitPoints.Count(p => p.hitCount > 0));
+            var unhitSpans = GetCoverageHandler.ComputeUncoveredSpans(unhitPoints);
+            Assert.Single(unhitSpans);
+            Assert.Equal("RunAsync", unhitSpans[0].method);
+            Assert.Equal(21, unhitSpans[0].startLine);
+            Assert.Equal(21, unhitSpans[0].endLine);
+
+            // A separate statement at a distinct column on the same line that was not hit stays uncovered.
+            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = m =>
+            {
+                if (!ReferenceEquals(m, moveNext))
+                    return Array.Empty<UnityEngine.TestTools.CoveredSequencePoint>();
+
+                return
+                [
+                    new() { method = moveNext, filename = sourcePath, line = 20, column = 5, ilOffset = 14, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 15, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 55, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 9, ilOffset = 82, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 21, column = 45, ilOffset = 130, hitCount = 0 },
+                    new() { method = moveNext, filename = sourcePath, line = 22, column = 9, ilOffset = 135, hitCount = 1 },
+                    new() { method = moveNext, filename = sourcePath, line = 23, column = 5, ilOffset = 170, hitCount = 1 }
+                ];
+            };
+
+            var partialByFile = new Dictionary<string, List<UnityEngine.TestTools.CoveredSequencePoint>>(GetCoverageHandler.PathComparer);
+            GetCoverageHandler.ProcessMethod(moveNext!, "C:/Project/", ["Assets/"], partialByFile);
+            Assert.True(partialByFile.TryGetValue(sourcePath, out var partialPoints));
+            Assert.Equal(5, partialPoints!.Count);
+            var partialSpans = GetCoverageHandler.ComputeUncoveredSpans(partialPoints);
+            Assert.Single(partialSpans);
+            Assert.Equal("RunAsync", partialSpans[0].method);
+            Assert.Equal(21, partialSpans[0].startLine);
+            Assert.Equal(21, partialSpans[0].endLine);
+        }
+        finally
+        {
+            UnityEngine.TestTools.Coverage.GetSequencePointsForFunc = null;
+        }
+    }
+
+    private sealed class AsyncSampleStateMachine
+    {
+        public async Task<bool> RunAsync()
+        {
+            await Task.Yield();
+            return true;
+        }
+    }
+
+    [Fact]
     public void GetCoverageHandler_WriteCoverage_ProfilerRecompilationWithUnchangedInputsRemainsValid()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_cov_epoch_" + Guid.NewGuid().ToString("N"));

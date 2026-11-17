@@ -1,8 +1,37 @@
 using System;
+using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace Tests
 {
+    public interface IOperation
+    {
+        Task<bool> ExecuteAsync();
+    }
+
+    public interface IProcessor
+    {
+        Task<bool> RunAsync();
+    }
+
+    public sealed class CompletedOperation : IOperation
+    {
+        public Task<bool> ExecuteAsync() => Task.FromResult(true);
+    }
+
+    public sealed class Processor : IProcessor
+    {
+        private readonly IOperation _operation;
+
+        public Processor(IOperation operation) => _operation = operation;
+
+        public async Task<bool> RunAsync()
+        {
+            bool result = await _operation.ExecuteAsync();
+            return result;
+        }
+    }
+
     public class DummyTest
     {
         [Test]
@@ -14,7 +43,9 @@ namespace Tests
         [Test]
         public void SpecificTargetTest()
         {
-            Assert.Pass();
+            IProcessor processor = new Processor(new CompletedOperation());
+            bool result = processor.RunAsync().GetAwaiter().GetResult();
+            Assert.That(result, Is.True);
         }
 
         [Test]

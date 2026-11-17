@@ -922,7 +922,7 @@ namespace UnityLeanMcp
                     .OrderBy(l => l)
                     .ToArray();
 
-                var uncoveredSpans = ComputeUncoveredSpans(points);
+                var uncoveredSpans = ComputeUncoveredSpans(points, collapseDuplicates: false);
 
                 reports.Add(new CoverageFileReport
                 {
@@ -1466,6 +1466,7 @@ namespace UnityLeanMcp
             if (points == null || points.Length == 0)
                 return;
 
+            var methodPoints = new List<CoveredSequencePoint>(points.Length);
             foreach (var sp in points)
             {
                 // Ignore Roslyn hidden sequence point (0xfeefee) and invalid lines
@@ -1492,26 +1493,123 @@ namespace UnityLeanMcp
                 if (!MatchesAnyFilter(normFile, filters))
                     continue;
 
-                if (!pointsByFile.TryGetValue(normFile, out var list))
-                {
-                    list = new List<CoveredSequencePoint>();
-                    pointsByFile[normFile] = list;
-                }
-
                 var point = sp;
+                point.filename = normFile;
                 if (point.method == null)
                 {
                     point.method = method;
+                }
+                methodPoints.Add(point);
+            }
+
+            if (methodPoints.Count == 0)
+                return;
+
+            var collapsed = CollapseDuplicateSequencePoints(methodPoints);
+            for (int i = 0; i < collapsed.Count; i++)
+            {
+                var point = collapsed[i];
+                if (!pointsByFile.TryGetValue(point.filename, out var list))
+                {
+                    list = new List<CoveredSequencePoint>();
+                    pointsByFile[point.filename] = list;
                 }
                 list.Add(point);
             }
         }
 
-        internal static List<UncoveredMethodSpan> ComputeUncoveredSpans(List<CoveredSequencePoint> points)
+        private readonly struct SequencePointLocationKey : IEquatable<SequencePointLocationKey>
+        {
+            public readonly MethodBase Method;
+            public readonly string FilePath;
+            public readonly uint Line;
+            public readonly uint Column;
+
+            public SequencePointLocationKey(MethodBase method, string filePath, uint line, uint column)
+            {
+                Method = method;
+                FilePath = filePath ?? string.Empty;
+                Line = line;
+                Column = column;
+            }
+
+            public bool Equals(SequencePointLocationKey other)
+            {
+                return ReferenceEquals(Method, other.Method) &&
+                    Line == other.Line &&
+                    Column == other.Column &&
+                    string.Equals(FilePath, other.FilePath, PathComparison);
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is SequencePointLocationKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = 17;
+                    hash = hash * 31 + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Method);
+                    hash = hash * 31 + PathComparer.GetHashCode(FilePath);
+                    hash = hash * 31 + (int)Line;
+                    hash = hash * 31 + (int)Column;
+                    return hash;
+                }
+            }
+        }
+
+        internal static List<CoveredSequencePoint> CollapseDuplicateSequencePoints(List<CoveredSequencePoint> points)
+        {
+            if (points == null || points.Count == 0)
+                return new List<CoveredSequencePoint>();
+            if (points.Count == 1)
+                return new List<CoveredSequencePoint>(1) { points[0] };
+
+            // Mono JIT emits extra sequence points for async YieldOffset/ResumeOffset at
+            // the exact (filename, line, column) of the await statement, which stay unhit
+            // when the awaited operation completes synchronously.
+            var collapsed = new List<CoveredSequencePoint>(points.Count);
+            var indexByKey = new Dictionary<SequencePointLocationKey, int>();
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                var pt = points[i];
+                if (pt.column == 0)
+                {
+                    collapsed.Add(pt);
+                    continue;
+                }
+
+                var key = new SequencePointLocationKey(pt.method, pt.filename, pt.line, pt.column);
+                if (indexByKey.TryGetValue(key, out int existingIndex))
+                {
+                    var existing = collapsed[existingIndex];
+                    if (pt.hitCount > existing.hitCount)
+                        existing.hitCount = pt.hitCount;
+                    if (pt.ilOffset < existing.ilOffset)
+                        existing.ilOffset = pt.ilOffset;
+                    collapsed[existingIndex] = existing;
+                }
+                else
+                {
+                    indexByKey[key] = collapsed.Count;
+                    collapsed.Add(pt);
+                }
+            }
+
+            return collapsed;
+        }
+
+        internal static List<UncoveredMethodSpan> ComputeUncoveredSpans(List<CoveredSequencePoint> points, bool collapseDuplicates = true)
         {
             var result = new List<UncoveredMethodSpan>();
             if (points == null || points.Count == 0)
                 return result;
+
+            if (collapseDuplicates)
+                points = CollapseDuplicateSequencePoints(points);
 
             var pointsByMethod = new Dictionary<string, List<CoveredSequencePoint>>(StringComparer.Ordinal);
             var methodNameCache = new Dictionary<MethodBase, string>();

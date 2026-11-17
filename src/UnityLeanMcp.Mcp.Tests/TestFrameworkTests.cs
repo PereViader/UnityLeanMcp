@@ -201,6 +201,7 @@ public class TestFrameworkTests
             });
             Assert.False(coverageResult.IsError, coverageResult.Text);
             Assert.Contains("DummyTest.cs", coverageResult.Text);
+            Assert.DoesNotContain("RunAsync", coverageResult.Text, StringComparison.Ordinal);
 
             var repeatedCoverageResult = await client.CallToolAsync("unity_coverage", new
             {
@@ -208,6 +209,7 @@ public class TestFrameworkTests
             });
             Assert.False(repeatedCoverageResult.IsError, repeatedCoverageResult.Text);
             Assert.Contains("DummyTest.cs", repeatedCoverageResult.Text);
+            Assert.DoesNotContain("RunAsync", repeatedCoverageResult.Text, StringComparison.Ordinal);
 
             var restoredCheck = await client.CallToolAsync("unity_eval", new
             {

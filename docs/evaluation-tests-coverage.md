@@ -70,7 +70,8 @@ Depth, item, and output caps do not stop a blocking getter or `MoveNext`. UTF-16
 - Traverse compiler-generated nested types for async methods, iterators, and lambdas, but avoid revisiting nested types already returned by `Assembly.GetTypes()`.
 - Enumerate instance constructors separately from `TypeInitializer`; requesting static constructors in both paths double-counts `.cctor`.
 - Exclude hidden sequence points (`0xfeefee`) and nonpositive lines. Unity's sequence-point line field is unsigned; DTO conversion needs an explicit checked/validated boundary.
-- A source line with several sequence points is uncovered when any point is unhit, even if another point on that line ran.
+- Mono's JIT emits extra sequence points for async `YieldOffset`/`ResumeOffset` at the same `(filename, line, column)` (`column > 0`) as the `await` statement, which remain at `hitCount == 0` when the awaited task completes synchronously. Collapse sequence points within a method that share `(filename, line, column)` (when `column > 0`) using the maximum `hitCount` before evaluating line coverage.
+- A source line with several distinct sequence points (at different columns) is uncovered when any point is unhit, even if another point on that line ran.
 - Use a `Coverage` type alias where importing both TestTools namespaces would make `TestMode` ambiguous.
 
 ### Coverage runtime evidence

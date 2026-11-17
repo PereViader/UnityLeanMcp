@@ -357,6 +357,66 @@ namespace UnityLeanMcpTests
             Assert.That(spans[2].endLine, Is.EqualTo(20));
         }
 
+        [Test]
+        public void ComputeUncoveredSpans_WhenAsyncYieldAndResumePointsShareLineAndColumn_CollapsesDuplicates()
+        {
+            var moveNext = typeof(TypeWithAsyncMethods)
+                .GetNestedType("<AsyncTaskMethod>d__1", System.Reflection.BindingFlags.NonPublic)
+                ?.GetMethod("MoveNext", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+            Assert.That(moveNext, Is.Not.Null);
+
+            const string filename = "Assets/Scripts/Processor.cs";
+
+            // Synchronous await completion hits IL=15 while YieldOffset (55) and ResumeOffset (82) stay 0.
+            var coveredPoints = new List<UnityEngine.TestTools.CoveredSequencePoint>
+            {
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 20, column = 5, ilOffset = 14, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 15, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 55, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 82, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 22, column = 9, ilOffset = 135, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 23, column = 5, ilOffset = 170, hitCount = 1 }
+            };
+            var collapsedCovered = GetCoverageHandler.CollapseDuplicateSequencePoints(coveredPoints);
+            Assert.That(collapsedCovered.Count, Is.EqualTo(4));
+            Assert.That(GetCoverageHandler.ComputeUncoveredSpans(coveredPoints).Count, Is.EqualTo(0));
+
+            // Unexecuted await keeps line 21 uncovered.
+            var unexecutedPoints = new List<UnityEngine.TestTools.CoveredSequencePoint>
+            {
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 20, column = 5, ilOffset = 14, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 15, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 55, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 82, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 22, column = 9, ilOffset = 135, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 23, column = 5, ilOffset = 170, hitCount = 1 }
+            };
+            var unexecutedSpans = GetCoverageHandler.ComputeUncoveredSpans(unexecutedPoints);
+            Assert.That(unexecutedSpans.Count, Is.EqualTo(1));
+            Assert.That(unexecutedSpans[0].method, Is.EqualTo("AsyncTaskMethod"));
+            Assert.That(unexecutedSpans[0].startLine, Is.EqualTo(21));
+            Assert.That(unexecutedSpans[0].endLine, Is.EqualTo(21));
+
+            // Distinct statement at another column on the same line stays uncovered when unhit.
+            var partialLinePoints = new List<UnityEngine.TestTools.CoveredSequencePoint>
+            {
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 20, column = 5, ilOffset = 14, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 15, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 55, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 9, ilOffset = 82, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 21, column = 45, ilOffset = 130, hitCount = 0 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 22, column = 9, ilOffset = 135, hitCount = 1 },
+                new UnityEngine.TestTools.CoveredSequencePoint { method = moveNext, filename = filename, line = 23, column = 5, ilOffset = 170, hitCount = 1 }
+            };
+            var collapsedPartial = GetCoverageHandler.CollapseDuplicateSequencePoints(partialLinePoints);
+            Assert.That(collapsedPartial.Count, Is.EqualTo(5));
+            var partialSpans = GetCoverageHandler.ComputeUncoveredSpans(partialLinePoints);
+            Assert.That(partialSpans.Count, Is.EqualTo(1));
+            Assert.That(partialSpans[0].method, Is.EqualTo("AsyncTaskMethod"));
+            Assert.That(partialSpans[0].startLine, Is.EqualTo(21));
+            Assert.That(partialSpans[0].endLine, Is.EqualTo(21));
+        }
+
         private class TypeWithStaticAndInstanceCtors
         {
             static TypeWithStaticAndInstanceCtors() { }
