@@ -101,7 +101,8 @@ namespace UnityLeanMcp
                 return RunTestsHandler.CancelActiveTestRun(operationId);
             if (string.Equals(kind, OperationKinds.Eval, StringComparison.OrdinalIgnoreCase))
             {
-                if (!OperationExecutionEngine.TryCancel(operationId))
+                if (!OperationExecutionEngine.TryCancel(operationId) &&
+                    !UnityCommandGate.IsOwnedBy(operationId, OperationKinds.Eval))
                 {
                     return OperationCancelResult.NotCancelable;
                 }

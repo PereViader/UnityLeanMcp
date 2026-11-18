@@ -1298,6 +1298,209 @@ public sealed class CommandGatePublicationTests : IDisposable
         Assert.Equal(1, published.skipCount);
     }
 
+    [Theory]
+    [InlineData("baseline-preparing")]
+    [InlineData("enabling")]
+    public void CancelledOrFailedCoveragePreparation_TransitionsToRestoringAndReleasesOwnership(string cancelPhase)
+    {
+        string runId = "coverage-cancel-" + cancelPhase;
+        string resultPath = UnityLeanMcpPaths.GetTestResultsFile(runId);
+        UnityEngine.TestTools.Coverage.enabled = false;
+        RunTestsHandler.ActiveStateKnown = true;
+        RunTestsHandler.Active = false;
+        UnityEditor.EditorApplication.isCompiling = false;
+        UnityEditor.EditorApplication.isUpdating = false;
+        UnityLeanMcpCompilationTracker.IsCompiling = false;
+        UnityLeanMcpCompilationTracker.IsUpdating = false;
+        UnityLeanMcpCompilationTracker.RefreshRequired = false;
+        UnityLeanMcpCompilationTracker.RefreshPending = false;
+        UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
+        UnityLeanMcpCompilationTracker.CompilationInProgress = false;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+        UnityCommandGate.WriteAtomicHook = (p, json, _) => File.WriteAllText(p, json);
+
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, runId, OperationStatus.Running, out _));
+        var state = new UnityLeanMcp.UnityTestRunState { runId = runId, mode = "EditMode", coverage = true, status = OperationStatus.Running };
+        Directory.CreateDirectory(Path.GetDirectoryName(UnityLeanMcpPaths.TestRunningFile)!);
+        File.WriteAllText(UnityLeanMcpPaths.TestRunningFile, UnityEngine.JsonUtility.ToJson(state));
+        RunTestsHandler.ClearCachedRunState();
+        GetCoverageHandler.BeginCoverageAttempt(runId);
+        GetCoverageHandler.ObserveCompilationStarted();
+
+        if (cancelPhase == "enabling")
+        {
+            GetCoverageHandler.ObserveCompilationFinished();
+            for (int i = 0; i < 5; i++)
+                Assert.Equal(i == 4, GetCoverageHandler.AdvanceCoverageLifecycle(runId, restoration: false));
+            Assert.True(GetCoverageHandler.EstablishCoverageBaseline(runId));
+            Assert.Equal("enabling", GetCoverageHandler.GetCoverageAttemptPhase(runId));
+            GetCoverageHandler.ObserveCompilationStarted();
+        }
+
+        Assert.True(UnityCommandGate.TryRequestCancellation(runId, out _));
+        RunTestsHandler.WriteCancelledResult(runId);
+
+        Assert.Equal("restoring", GetCoverageHandler.GetCoverageAttemptPhase(runId));
+        Assert.True(UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test));
+        Assert.False(File.Exists(resultPath));
+
+        GetCoverageHandler.ObserveCompilationStarted();
+        GetCoverageHandler.ObserveCompilationFinished();
+        for (int i = 0; i < 8 && !File.Exists(resultPath); i++)
+            EditorApplication.Tick();
+
+        Assert.True(File.Exists(resultPath));
+        Assert.False(UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test));
+        Assert.Null(UnityCommandGate.ReadSnapshot());
+        Assert.False(UnityEngine.TestTools.Coverage.enabled);
+    }
+
+    [Fact]
+    public void CoverageRestorationAcrossReload_WhenRefreshRequiredResetsTrueAfterSettingApplied_CompletesRestoration()
+    {
+        const string runId = "coverage-reload-refresh-required";
+        string path = Path.Combine(_root, "coverage-reload-restored.json");
+        UnityEngine.TestTools.Coverage.enabled = false;
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, runId, OperationStatus.Running, out _));
+        GetCoverageHandler.BeginCoverageAttempt(runId);
+        PrepareCoverageForRun(runId);
+        RunTestsHandler.MarkCoverageRunStarted(runId);
+        RunTestsHandler.MarkCoverageRunCompleted(runId, complete: true);
+        UnityCommandGate.WriteAtomicHook = (_, _, _) => throw new IOException("locked during first publish");
+
+        UnityCommandGate.PublishResult(OperationKinds.Test, runId, path,
+            "{\"runId\":\"coverage-reload-refresh-required\",\"success\":true,\"resultState\":\"Passed\"}");
+
+        Assert.False(UnityEngine.TestTools.Coverage.enabled);
+        Assert.True(UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test));
+        Assert.True(UnityCommandGate.HasPendingResult(runId));
+
+        // Simulate domain reload where static state is lost and RefreshRequired starts true.
+        typeof(UnityCommandGate).GetField("s_PendingResult", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
+        typeof(UnityCommandGate).GetField("s_Snapshot", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
+        UnityLeanMcpCompilationTracker.RefreshRequired = true;
+        UnityCommandGate.WriteAtomicHook = (p, json, _) => File.WriteAllText(p, json);
+
+        UnityCommandGate.InitializeMainThread();
+        GetCoverageHandler.ObserveCompilationStarted();
+        GetCoverageHandler.ObserveCompilationFinished();
+        for (int i = 0; i < 8 && !File.Exists(path); i++)
+            EditorApplication.Tick();
+
+        Assert.True(File.Exists(path));
+        Assert.Null(UnityCommandGate.ReadSnapshot());
+        Assert.Empty(SessionState.GetString(GetCoverageHandler.CoverageAttemptKey, "")!);
+        var result = UnityEngine.JsonUtility.FromJson<UnityLeanMcp.UnityTestRunResult>(File.ReadAllText(path));
+        Assert.NotNull(result);
+        Assert.Equal("available", result!.coverageStatus);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ApplyCoverageRestoration_WhenSynchronousCompilationStartsDuringRefreshOrSetting_DoesNotOverwriteStartedFlag(bool duringRefresh)
+    {
+        string runId = "coverage-sync-start-" + (duringRefresh ? "refresh" : "setting");
+        string path = Path.Combine(_root, runId + ".json");
+        UnityEngine.TestTools.Coverage.enabled = false;
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, runId, OperationStatus.Running, out _));
+        GetCoverageHandler.BeginCoverageAttempt(runId);
+        PrepareCoverageForRun(runId);
+        RunTestsHandler.MarkCoverageRunStarted(runId);
+        RunTestsHandler.MarkCoverageRunCompleted(runId, complete: true);
+
+        if (duringRefresh)
+        {
+            UnityLeanMcpCompilationTracker.RefreshRequired = true;
+            UnityEditor.AssetDatabase.RefreshFunc = _ => GetCoverageHandler.ObserveCompilationStarted();
+        }
+        else
+        {
+            UnityLeanMcpCompilationTracker.RefreshRequired = false;
+            UnityEngine.TestTools.Coverage.SetEnabledAction = enabled =>
+            {
+                if (!enabled) GetCoverageHandler.ObserveCompilationStarted();
+            };
+        }
+
+        UnityCommandGate.WriteAtomicHook = (p, json, _) => File.WriteAllText(p, json);
+        UnityCommandGate.PublishResult(OperationKinds.Test, runId, path,
+            "{\"runId\":\"" + runId + "\",\"success\":true,\"resultState\":\"Passed\"}");
+
+        UnityEngine.TestTools.Coverage.SetEnabledAction = null;
+        UnityEditor.AssetDatabase.RefreshFunc = null;
+        Assert.False(File.Exists(path));
+
+        // Only finish is observed (start already fired synchronously inside Refresh/Coverage.enabled).
+        GetCoverageHandler.ObserveCompilationFinished();
+        for (int i = 0; i < 8 && !File.Exists(path); i++)
+            EditorApplication.Tick();
+
+        Assert.True(File.Exists(path));
+        Assert.Null(UnityCommandGate.ReadSnapshot());
+    }
+
+    [Theory]
+    [InlineData("refresh")]
+    [InlineData("recompile")]
+    [InlineData("eval")]
+    [InlineData("test")]
+    public void InitializeMainThread_WithInterruptedStatusAndNoPendingResult_PublishesInterruptionAndClearsOwnership(string kind)
+    {
+        string? published = null;
+        string opId = "interrupted-" + kind;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(kind, opId, OperationStatus.Interrupted, out _));
+        typeof(UnityCommandGate).GetField("s_Snapshot", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, null);
+
+        UnityCommandGate.InitializeMainThread();
+
+        Assert.NotNull(published);
+        using var document = System.Text.Json.JsonDocument.Parse(published);
+        Assert.Equal(opId, document.RootElement.GetProperty("operationId").GetString());
+        Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
+        Assert.False(document.RootElement.GetProperty("success").GetBoolean());
+        Assert.Null(UnityCommandGate.ReadSnapshot());
+    }
+
+    [Fact]
+    public void RecoverTestRun_StaysSubscribedWhileActiveAndPublishesInterruptionWhenRunnerStopsWithoutCallback()
+    {
+        string? published = null;
+        UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, "dropped-callback-run", OperationStatus.Running, out _));
+
+        RunTestsHandler.Active = false;
+        UnityCommandGate.InitializeMainThread();
+        Assert.Null(published);
+
+        RunTestsHandler.Active = true;
+        EditorApplication.Tick();
+        EditorApplication.Tick();
+        Assert.Null(published);
+        Assert.True(UnityCommandGate.IsOwnedBy("dropped-callback-run", OperationKinds.Test));
+
+        RunTestsHandler.Active = false;
+        EditorApplication.Tick();
+        Assert.NotNull(published);
+        Assert.Contains("Interrupted", published);
+        Assert.Null(UnityCommandGate.ReadSnapshot());
+    }
+
+    [Fact]
+    public void CancelOperationHandler_EvalOwnedInGateBeforeEngineRegistration_ReturnsCancelling()
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, "eval-pre-exec", OperationStatus.Compiling, out _));
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+        new CancelOperationHandler().Handle("eval-pre-exec", writer);
+
+        string response = System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim();
+        Assert.Equal("CANCELLING", response);
+        Assert.True(UnityCommandGate.IsCancellationRequested("eval-pre-exec"));
+    }
+
     private sealed class StubTestResultAdaptor : UnityEditor.TestTools.TestRunner.Api.ITestResultAdaptor
     {
         public UnityEditor.TestTools.TestRunner.Api.ITestAdaptor? Test => null;

@@ -106,6 +106,12 @@ namespace UnityLeanMcp
                         }
                     }
 
+                    if (op.Status == OperationStatus.Interrupted)
+                    {
+                        WriteInterruptedResult(op.Kind, op.OperationId, "Operation interrupted by domain reload.");
+                        return;
+                    }
+
                     if ((op.Kind == OperationKinds.Refresh || op.Kind == OperationKinds.Recompile) &&
                         op.Status == OperationStatus.Requested)
                     {
@@ -130,8 +136,15 @@ namespace UnityLeanMcp
                         return;
                     }
 
-                    // 3. For surviving operations (refresh, active test run), restore snapshot
-                    s_Snapshot = op;
+                    if (!(string.Equals(op.Kind, OperationKinds.Refresh, StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(op.Kind, OperationKinds.Recompile, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        SessionState.EraseString(SessionKey);
+                        SessionState.EraseString(PendingResultKey);
+                        s_PendingResult = null;
+                        s_LastRetryTicks = 0;
+                        s_Snapshot = null;
+                    }
                 }
                 else
                 {
@@ -146,12 +159,16 @@ namespace UnityLeanMcp
         private static void RecoverTestRun()
         {
             var operation = s_Snapshot;
-            if (operation == null || operation.Kind != OperationKinds.Test)
+            if (operation == null || operation.Kind != OperationKinds.Test || HasPendingResult(operation.OperationId))
             {
                 EditorApplication.update -= RecoverTestRun;
                 return;
             }
             if (!RunTestsHandler.TryGetTestRunnerActiveState(out bool isActive)) return;
+            if (isActive)
+            {
+                return;
+            }
             EditorApplication.update -= RecoverTestRun;
             if (!isActive)
             {
@@ -301,6 +318,10 @@ namespace UnityLeanMcp
                         s_LastRetryTicks = 0;
                         EditorApplication.update -= RetryPendingResult;
                     }
+                    if (string.Equals(s_Snapshot.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
+                    {
+                        EditorApplication.update -= RecoverTestRun;
+                    }
                     // Safe publication ordering: Erase native SessionState first, then clear volatile snapshot
                     SessionState.EraseString(SessionKey);
                     s_Snapshot = null;
@@ -316,6 +337,7 @@ namespace UnityLeanMcp
                 s_AcceptingCancellationRequests = true;
                 EditorApplication.update -= RetryPendingResult;
                 EditorApplication.update -= RecoverTestRun;
+                RunTestsHandler.StopActiveRunMonitoring(null);
                 SessionState.EraseString(PendingResultKey);
                 SessionState.EraseString(GetCoverageHandler.CoverageAttemptKey);
                 GetCoverageHandler.ClearCapturedCoverage();
@@ -365,12 +387,21 @@ namespace UnityLeanMcp
 
             if (pending.Kind == OperationKinds.Test)
             {
-                string coverageOutcome = RunTestsHandler.CompleteCoverageForTerminalResult(pending.OperationId);
-                if (coverageOutcome != null)
+                try
                 {
-                    if (coverageOutcome.StartsWith("pending|", StringComparison.Ordinal))
-                        return;
-                    IncludeCoverageOutcome(pending, coverageOutcome);
+                    string coverageOutcome = RunTestsHandler.CompleteCoverageForTerminalResult(pending.OperationId);
+                    if (coverageOutcome != null)
+                    {
+                        if (coverageOutcome.StartsWith("pending|", StringComparison.Ordinal))
+                            return;
+                        IncludeCoverageOutcome(pending, coverageOutcome);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile,
+                        "Coverage completion will retry for " + pending.Kind + " " + pending.OperationId + ": " + ex.Message);
+                    return;
                 }
             }
 

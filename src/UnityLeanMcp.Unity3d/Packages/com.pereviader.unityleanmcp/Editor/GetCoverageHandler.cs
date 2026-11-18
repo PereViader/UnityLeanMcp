@@ -340,53 +340,61 @@ namespace UnityLeanMcp
         {
             var attempt = ReadCoverageAttempt();
             if (attempt == null) return;
-            if (attempt.phase == "baseline-preparing" && attempt.baselineCompilationExpected)
+            bool updated = false;
+            if ((attempt.phase == "baseline-preparing" || attempt.phase == "restoring") && attempt.baselineCompilationExpected)
             {
                 attempt.baselineCompilationStarted = true;
                 attempt.baselineCompilationFinished = false;
                 attempt.baselineIdleUpdates = 0;
+                updated = true;
             }
-            else if (attempt.phase == "enabling" && attempt.enableCompilationExpected)
+            if ((attempt.phase == "enabling" || attempt.phase == "restoring") && attempt.enableCompilationExpected)
             {
                 attempt.enableCompilationStarted = true;
                 attempt.enableCompilationFinished = false;
                 attempt.enableIdleUpdates = 0;
+                updated = true;
             }
-            else if (attempt.phase == "restoring" && attempt.restoreCompilationExpected)
+            if (attempt.phase == "restoring" && attempt.restoreCompilationExpected)
             {
                 attempt.restoreCompilationStarted = true;
                 attempt.restoreCompilationFinished = false;
+                attempt.restoreIdleUpdates = 0;
+                updated = true;
             }
-            else if (attempt.phase == "restoring" && attempt.baselineCompilationExpected)
+            if (updated)
             {
-                attempt.baselineCompilationStarted = true;
-                attempt.baselineCompilationFinished = false;
+                WriteCoverageAttempt(attempt);
             }
-            else if (attempt.phase == "restoring" && attempt.enableCompilationExpected)
-            {
-                attempt.enableCompilationStarted = true;
-                attempt.enableCompilationFinished = false;
-            }
-            else return;
-            WriteCoverageAttempt(attempt);
         }
 
         internal static void ObserveCompilationFinished()
         {
             var attempt = ReadCoverageAttempt();
             if (attempt == null) return;
-            if (attempt.phase == "baseline-preparing" && attempt.baselineCompilationExpected && attempt.baselineCompilationStarted)
+            bool updated = false;
+            if ((attempt.phase == "baseline-preparing" || attempt.phase == "restoring") &&
+                attempt.baselineCompilationExpected && attempt.baselineCompilationStarted)
+            {
                 attempt.baselineCompilationFinished = true;
-            else if (attempt.phase == "enabling" && attempt.enableCompilationExpected && attempt.enableCompilationStarted)
+                updated = true;
+            }
+            if ((attempt.phase == "enabling" || attempt.phase == "restoring") &&
+                attempt.enableCompilationExpected && attempt.enableCompilationStarted)
+            {
                 attempt.enableCompilationFinished = true;
-            else if (attempt.phase == "restoring" && attempt.restoreCompilationExpected && attempt.restoreCompilationStarted)
+                updated = true;
+            }
+            if (attempt.phase == "restoring" && attempt.restoreCompilationExpected)
+            {
+                attempt.restoreCompilationStarted = true;
                 attempt.restoreCompilationFinished = true;
-            else if (attempt.phase == "restoring" && attempt.baselineCompilationExpected && attempt.baselineCompilationStarted)
-                attempt.baselineCompilationFinished = true;
-            else if (attempt.phase == "restoring" && attempt.enableCompilationExpected && attempt.enableCompilationStarted)
-                attempt.enableCompilationFinished = true;
-            else return;
-            WriteCoverageAttempt(attempt);
+                updated = true;
+            }
+            if (updated)
+            {
+                WriteCoverageAttempt(attempt);
+            }
         }
 
         internal static bool AdvanceCoverageLifecycle(string runId, bool restoration)
@@ -453,9 +461,35 @@ namespace UnityLeanMcp
 
             if (restoration)
             {
-                if (attempt.baselineCompilationExpected && !attempt.baselineCompilationFinished) return false;
-                if (attempt.enableCompilationExpected && !attempt.enableCompilationFinished) return false;
-                if (attempt.restoreCompilationExpected && !attempt.restoreCompilationFinished) return false;
+                bool waitingForBaseline = attempt.baselineCompilationExpected && !attempt.baselineCompilationFinished;
+                bool waitingForEnable = attempt.enableCompilationExpected && !attempt.enableCompilationFinished;
+                bool waitingForRestore = attempt.restoreCompilationExpected && !attempt.restoreCompilationFinished;
+                if (waitingForBaseline || waitingForEnable || waitingForRestore)
+                {
+                    bool canFallback =
+                        attempt.restoreSettingApplied &&
+                        (!attempt.restoreRefreshRequested || attempt.restoreRefreshIssued) &&
+                        (attempt.restoreRequestIssued || Coverage.enabled == attempt.previousProfilerEnabled) &&
+                        (!waitingForBaseline || !attempt.baselineCompilationStarted) &&
+                        (!waitingForEnable || !attempt.enableCompilationStarted) &&
+                        (!waitingForRestore || !attempt.restoreCompilationStarted);
+
+                    if (canFallback)
+                    {
+                        attempt.restoreIdleUpdates++;
+                        if (attempt.restoreIdleUpdates >= 20)
+                        {
+                            if (waitingForBaseline) attempt.baselineCompilationFinished = true;
+                            if (waitingForEnable) attempt.enableCompilationFinished = true;
+                            if (waitingForRestore) attempt.restoreCompilationFinished = true;
+                            attempt.restoreIdleUpdates = 0;
+                            WriteCoverageAttempt(attempt);
+                            return false;
+                        }
+                        WriteCoverageAttempt(attempt);
+                    }
+                    return false;
+                }
                 attempt.restoreIdleUpdates++;
                 WriteCoverageAttempt(attempt);
                 return attempt.restoreIdleUpdates >= 5;
@@ -463,7 +497,22 @@ namespace UnityLeanMcp
 
             if (attempt.phase == "baseline-preparing")
             {
-                if (attempt.baselineCompilationExpected && !attempt.baselineCompilationFinished) return false;
+                if (attempt.baselineCompilationExpected && !attempt.baselineCompilationFinished)
+                {
+                    if (attempt.baselineRequestIssued && !attempt.baselineCompilationStarted)
+                    {
+                        attempt.baselineIdleUpdates++;
+                        if (attempt.baselineIdleUpdates >= 20)
+                        {
+                            attempt.baselineCompilationFinished = true;
+                            attempt.baselineIdleUpdates = 0;
+                            WriteCoverageAttempt(attempt);
+                            return false;
+                        }
+                        WriteCoverageAttempt(attempt);
+                    }
+                    return false;
+                }
                 attempt.baselineIdleUpdates++;
                 WriteCoverageAttempt(attempt);
                 return attempt.baselineIdleUpdates >= 5;
@@ -471,7 +520,22 @@ namespace UnityLeanMcp
 
             if (attempt.phase == "enabling")
             {
-                if (attempt.enableCompilationExpected && !attempt.enableCompilationFinished) return false;
+                if (attempt.enableCompilationExpected && !attempt.enableCompilationFinished)
+                {
+                    if (attempt.enableSettingApplied && attempt.enableRequestIssued && !attempt.enableCompilationStarted)
+                    {
+                        attempt.enableIdleUpdates++;
+                        if (attempt.enableIdleUpdates >= 20)
+                        {
+                            attempt.enableCompilationFinished = true;
+                            attempt.enableIdleUpdates = 0;
+                            WriteCoverageAttempt(attempt);
+                            return false;
+                        }
+                        WriteCoverageAttempt(attempt);
+                    }
+                    return false;
+                }
                 attempt.enableIdleUpdates++;
                 WriteCoverageAttempt(attempt);
                 return attempt.enableIdleUpdates >= 5;
@@ -612,10 +676,21 @@ namespace UnityLeanMcp
                     attempt.captureMessage = "Coverage was not captured because the test run did not complete.";
                 }
 
+                if (!IsEditorCompilationActive())
+                {
+                    if (!attempt.baselineCompilationStarted)
+                        attempt.baselineCompilationExpected = false;
+                    if (!attempt.enableCompilationStarted)
+                        attempt.enableCompilationExpected = false;
+                }
+
+                bool compilationAlreadyActive = UnityLeanMcpCompilationTracker.CompilationInProgress ||
+                    EditorApplication.isCompiling || UnityLeanMcpCompilationTracker.IsCompiling;
+
                 attempt.phase = "restoring";
                 attempt.restoreIdleUpdates = 0;
                 attempt.restoreCompilationExpected = Coverage.enabled != attempt.previousProfilerEnabled;
-                attempt.restoreCompilationStarted = false;
+                attempt.restoreCompilationStarted = compilationAlreadyActive;
                 attempt.restoreCompilationFinished = false;
                 attempt.restoreRefreshRequested = UnityLeanMcpCompilationTracker.RefreshRequired;
                 attempt.restoreRefreshCompleted = false;
@@ -633,6 +708,7 @@ namespace UnityLeanMcp
             try
             {
                 ApplyCoverageRestoration(attempt);
+                attempt = ReadCoverageAttempt() ?? attempt;
                 if (!AdvanceCoverageLifecycle(runId, restoration: true))
                     return "pending|Waiting for profiler restoration to settle.";
                 attempt = ReadCoverageAttempt() ?? attempt;
@@ -667,13 +743,16 @@ namespace UnityLeanMcp
 
             string outcome = (attempt.captureStatus ?? "unavailable") + "|" +
                 (attempt.captureMessage ?? "Coverage was not available for this test run.");
+            UnityLeanMcpCompilationTracker.RefreshRequired = false;
             SessionState.EraseString(CoverageAttemptKey);
             return outcome;
         }
 
         private static void ApplyCoverageRestoration(CoverageAttempt attempt)
         {
-            if (UnityLeanMcpCompilationTracker.RefreshRequired && !attempt.restoreRefreshRequested)
+            string expectedRunId = attempt.runId;
+            attempt = ReadCoverageAttempt() ?? attempt;
+            if (UnityLeanMcpCompilationTracker.RefreshRequired && !attempt.restoreRefreshRequested && !attempt.restoreSettingApplied)
             {
                 attempt.restoreCompilationExpected = true;
                 attempt.restoreCompilationStarted = false;
@@ -691,18 +770,27 @@ namespace UnityLeanMcp
             {
                 AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                 UnityLeanMcpCompilationTracker.RefreshRequired = false;
-                attempt.restoreRefreshCompleted = true;
-                WriteCoverageAttempt(attempt);
+                attempt = ReadCoverageAttempt() ?? attempt;
+                if (attempt.runId == expectedRunId)
+                {
+                    attempt.restoreRefreshCompleted = true;
+                    WriteCoverageAttempt(attempt);
+                }
             }
 
             if (!attempt.restoreSettingApplied)
             {
                 if (Coverage.enabled != attempt.previousProfilerEnabled)
                     Coverage.enabled = attempt.previousProfilerEnabled;
-                attempt.restoreSettingApplied = true;
-                WriteCoverageAttempt(attempt);
+                attempt = ReadCoverageAttempt() ?? attempt;
+                if (attempt.runId == expectedRunId)
+                {
+                    attempt.restoreSettingApplied = true;
+                    WriteCoverageAttempt(attempt);
+                }
             }
 
+            attempt = ReadCoverageAttempt() ?? attempt;
             if (attempt.restoreRefreshRequested && !attempt.restoreRefreshIssued)
             {
                 if (attempt.restoreCompilationStarted)

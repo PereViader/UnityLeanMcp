@@ -36,6 +36,10 @@ namespace UnityLeanMcp
 
             oldCtsToDispose?.Dispose();
             DisposeCapture(oldCaptureToDispose);
+            if (isCancelable && UnityCommandGate.IsCancellationRequested(operationId))
+            {
+                cts.Cancel();
+            }
             return cts;
         }
 
@@ -143,6 +147,11 @@ namespace UnityLeanMcp
 
             oldCtsToDispose?.Dispose();
             DisposeCapture(oldCaptureToDispose);
+
+            if (canCancel && UnityCommandGate.IsCancellationRequested(operationId) && !cts.IsCancellationRequested)
+            {
+                cts.Cancel();
+            }
 
             if (cts.IsCancellationRequested)
             {
@@ -371,6 +380,27 @@ namespace UnityLeanMcp
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Failed to write {operationKind} result: {ex}");
+                if (UnityCommandGate.IsOwnedBy(operationId, operationKind) &&
+                    !UnityCommandGate.HasPendingResult(operationId))
+                {
+                    try
+                    {
+                        var fallback = new UnityOperationResult
+                        {
+                            operationId = operationId,
+                            runId = operationId,
+                            success = false,
+                            interrupted = interrupted,
+                            resultState = interrupted ? OperationStatus.Interrupted : null,
+                            message = $"Failed to serialize {operationKind} result: {ex.Message}"
+                        };
+                        UnityCommandGate.PublishResult(operationKind, operationId, resultFilePath, JsonUtility.ToJson(fallback, true));
+                    }
+                    catch
+                    {
+                        UnityCommandGate.Complete(operationId);
+                    }
+                }
             }
             finally
             {

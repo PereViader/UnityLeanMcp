@@ -57,14 +57,13 @@ namespace PereViader.UnityLeanMcp.Editor
                 return;
             }
 
-            UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
-            RefreshErrorLogCapture.StartCapture(operationId);
-            UnityLeanMcpCompilationTracker.RefreshPending = true;
-            UnityLeanMcpCompilationTracker.AwaitingCompilationStart = true;
-            UnityCommandGate.Update(operationId, OperationKind == OperationKinds.Refresh ? OperationStatus.Refreshing : OperationStatus.Recompiling);
-
             try
             {
+                UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
+                RefreshErrorLogCapture.StartCapture(operationId);
+                UnityLeanMcpCompilationTracker.RefreshPending = true;
+                UnityLeanMcpCompilationTracker.AwaitingCompilationStart = true;
+                UnityCommandGate.Update(operationId, OperationKind == OperationKinds.Refresh ? OperationStatus.Refreshing : OperationStatus.Recompiling);
                 ExecuteCompilation();
             }
             catch (Exception ex)

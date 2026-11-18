@@ -73,6 +73,33 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
+        public void EvalCancellationBeforeEngineRegistrationCancelsToken()
+        {
+            using (var scope = new IsolatedOperation(OperationKinds.Eval))
+            {
+                using (var cancelStream = new MemoryStream())
+                using (var cancelWriter = new StreamWriter(cancelStream) { AutoFlush = true })
+                {
+                    CancelOperationHandler.CancelActiveOperation(scope.Id, cancelWriter);
+                    Assert.That(System.Text.Encoding.UTF8.GetString(cancelStream.ToArray()).Trim(), Is.EqualTo("CANCELLING"));
+                }
+
+                var cts = OperationExecutionEngine.RegisterActiveOperation(scope.Id, isCancelable: true);
+                Assert.That(cts.IsCancellationRequested, Is.True);
+                OperationExecutionEngine.FinishOperation(
+                    scope.Id,
+                    OperationKinds.Eval,
+                    Path.Combine(scope.Root, "eval_cancel.json"),
+                    false,
+                    "Evaluation was canceled.",
+                    0,
+                    null,
+                    null,
+                    interrupted: true);
+            }
+        }
+
+        [Test]
         public void EvalTerminalPayloadSurvivesUnavailableResultDirectory()
         {
             using (var scope = new IsolatedOperation(OperationKinds.Eval))

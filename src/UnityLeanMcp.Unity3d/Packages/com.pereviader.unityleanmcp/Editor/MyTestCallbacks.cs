@@ -19,7 +19,10 @@ namespace UnityLeanMcp
         private string m_CurrentTestName = "";
         private bool m_TerminalResultClaimed;
 
-        public bool IsRunning => m_IsRunning || RunTestsHandler.ReadRunningState() != null;
+        public bool IsRunning =>
+            m_IsRunning ||
+            (!string.IsNullOrEmpty(m_RunId) && UnityCommandGate.IsOwnedBy(m_RunId, OperationKinds.Test)) ||
+            RunTestsHandler.ReadRunningState() != null;
 
         internal void Reset()
         {
@@ -223,18 +226,18 @@ namespace UnityLeanMcp
             {
                 string runningPath = UnityLeanMcpPaths.TestRunningFile;
                 var state = RunTestsHandler.ReadRunningState();
-                runId = m_RunId ?? state?.runId;
+                var activeOp = UnityCommandGate.ReadSnapshot();
+                runId = m_RunId ?? state?.runId ??
+                    (activeOp != null && string.Equals(activeOp.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase)
+                        ? activeOp.OperationId
+                        : null);
                 string resultsPath = UnityLeanMcpPaths.GetTestResultsFile(runId);
 
-                if (state == null || string.IsNullOrEmpty(runId) || state.runId != runId ||
-                    !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
+                if (string.IsNullOrEmpty(runId) ||
+                    !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test) ||
+                    (state != null && !string.IsNullOrEmpty(state.runId) && state.runId != runId))
                 {
                     m_IsRunning = false;
-                    return;
-                }
-
-                if (!m_IsRunning && RunTestsHandler.ReadRunningState() == null)
-                {
                     return;
                 }
 
@@ -248,6 +251,10 @@ namespace UnityLeanMcp
                     {
                         m_TerminalResultClaimed = true;
                         m_IsRunning = false;
+                        if (!UnityCommandGate.HasPendingResult(runId))
+                        {
+                            RunTestsHandler.CleanupTestRun(runId);
+                        }
                         return;
                     }
                 }
@@ -308,6 +315,12 @@ namespace UnityLeanMcp
             catch (Exception ex)
             {
                 Debug.LogError($"UnityLeanMcp: Exception in FinalizeTestRun: {ex}");
+                if (!string.IsNullOrEmpty(runId) &&
+                    UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test) &&
+                    !UnityCommandGate.HasPendingResult(runId))
+                {
+                    RunTestsHandler.WriteInterruptedResult("Failed to finalize test run: " + ex.Message, runId);
+                }
             }
         }
 

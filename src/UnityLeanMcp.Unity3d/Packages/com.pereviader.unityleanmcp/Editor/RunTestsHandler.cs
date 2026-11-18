@@ -23,13 +23,15 @@ namespace UnityLeanMcp
         private static TestRunnerApi s_RunnerApi;
         private static MethodInfo s_IsRunActiveMethod;
         internal static string s_CurrentTestJobGuid;
-        private static readonly object s_RunStateLock = new object();
-        private static UnityTestRunState s_CachedRunState;
+        private static volatile UnityTestRunState s_CachedRunState;
         private static string s_CancellationSignalRunId;
         private static string s_CancellationMonitorRunId;
         private static bool s_CancellationMonitorRegistered;
         private static string s_CoveragePreparationRunId;
         private static bool s_CoveragePreparationRegistered;
+        private static string s_ActiveRunMonitorRunId;
+        private static bool s_ActiveRunObservedActive;
+        private static bool s_ActiveRunMonitorRegistered;
 
         internal static bool IsPlayModeCoverageSupported(string version = null)
         {
@@ -62,10 +64,7 @@ namespace UnityLeanMcp
 
         internal static void ClearCachedRunState()
         {
-            lock (s_RunStateLock)
-            {
-                s_CachedRunState = null;
-            }
+            s_CachedRunState = null;
         }
 
         private static bool TryUpdateRunningState(string runId, Action<UnityTestRunState> update, string actionDesc)
@@ -78,10 +77,7 @@ namespace UnityLeanMcp
                 return false;
 
             update(state);
-            lock (s_RunStateLock)
-            {
-                s_CachedRunState = state;
-            }
+            s_CachedRunState = state;
 
             try
             {
@@ -132,8 +128,12 @@ namespace UnityLeanMcp
             s_RunnerApi.name = CallbackOwnerName;
             s_RunnerApi.hideFlags = HideFlags.HideAndDontSave;
             s_RunnerApi.RegisterCallbacks(s_Callbacks);
+            var activeOp = UnityCommandGate.ReadSnapshot();
             var runningState = ReadRunningState();
-            if (runningState != null)
+            if (runningState != null &&
+                activeOp != null &&
+                string.Equals(activeOp.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase) &&
+                activeOp.OperationId == runningState.runId)
             {
                 s_CurrentTestJobGuid = runningState.jobGuid;
                 s_Callbacks.BindRun(runningState.runId);
@@ -143,6 +143,19 @@ namespace UnityLeanMcp
                     // Resume cancellation on an update, after that restoration finishes.
                     BeginCancellationMonitoring(runningState.runId);
                 }
+            }
+            else if (activeOp == null || !string.Equals(activeOp.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
+            {
+                ClearCachedRunState();
+                try { CommandHelper.DeleteFileWithRetry(UnityLeanMcpPaths.TestRunningFile); } catch { }
+                try
+                {
+                    if (File.Exists(UnityLeanMcpPaths.TestCancellationFile))
+                    {
+                        File.Delete(UnityLeanMcpPaths.TestCancellationFile);
+                    }
+                }
+                catch { }
             }
         }
 
@@ -514,19 +527,13 @@ namespace UnityLeanMcp
                     skipCount = 0,
                     currentTestName = ""
                 };
-                lock (s_RunStateLock)
-                {
-                    s_CachedRunState = state;
-                }
+                s_CachedRunState = state;
                 UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
                 return runId;
             }
             catch (Exception ex)
             {
-                lock (s_RunStateLock)
-                {
-                    s_CachedRunState = null;
-                }
+                s_CachedRunState = null;
                 Debug.LogError($"UnityLeanMcp: Failed to write test running state: {ex}");
                 return null;
             }
@@ -557,11 +564,18 @@ namespace UnityLeanMcp
         {
             string runId = s_CoveragePreparationRunId;
             var operation = UnityCommandGate.ReadSnapshot();
-            var state = ReadRunningState();
-            if (string.IsNullOrEmpty(runId) || operation == null || operation.OperationId != runId ||
-                state == null || state.runId != runId || !GetCoverageHandler.IsCoverageAttempt(runId))
+            if (string.IsNullOrEmpty(runId) || operation == null || operation.OperationId != runId)
             {
                 StopCoveragePreparation();
+                return;
+            }
+
+            var state = ReadRunningState();
+            if (state == null || state.runId != runId || !GetCoverageHandler.IsCoverageAttempt(runId))
+            {
+                StopCoveragePreparation();
+                GetCoverageHandler.AbortCoveragePreparation(runId);
+                WriteInterruptedResult("Coverage preparation state was lost.", runId);
                 return;
             }
 
@@ -700,6 +714,8 @@ namespace UnityLeanMcp
                 {
                     CancelActiveTestRunOnMainThread(runId);
                 }
+
+                BeginActiveRunMonitoring(runId);
             }
             catch (Exception ex)
             {
@@ -717,15 +733,19 @@ namespace UnityLeanMcp
 
         internal static UnityTestRunState ReadRunningState()
         {
-            lock (s_RunStateLock)
+            var cached = s_CachedRunState;
+            if (cached != null)
             {
-                if (s_CachedRunState != null)
-                {
-                    return s_CachedRunState; // Thread-safe in-memory fast path for worker threads
-                }
+                return cached; // Thread-safe in-memory fast path for worker threads
             }
             try
             {
+                var activeOp = UnityCommandGate.ReadSnapshot();
+                if (activeOp == null || !string.Equals(activeOp.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
                 if (!File.Exists(UnityLeanMcpPaths.TestRunningFile))
                 {
                     return null;
@@ -738,10 +758,12 @@ namespace UnityLeanMcp
                 }
 
                 var state = JsonUtility.FromJson<UnityTestRunState>(text);
-                lock (s_RunStateLock)
+                if (state == null || state.runId != activeOp.OperationId)
                 {
-                    s_CachedRunState = state;
+                    return null;
                 }
+
+                s_CachedRunState = state;
                 return state;
             }
             catch (Exception ex)
@@ -758,12 +780,10 @@ namespace UnityLeanMcp
         /// </summary>
         internal static WorkerTestRunStateSnapshot ReadThreadSafeSnapshot()
         {
-            lock (s_RunStateLock)
+            var cached = s_CachedRunState;
+            if (cached != null)
             {
-                if (s_CachedRunState != null)
-                {
-                    return new WorkerTestRunStateSnapshot(s_CachedRunState.runId);
-                }
+                return new WorkerTestRunStateSnapshot(cached.runId);
             }
 
             return WorkerThreadSnapshots.TryReadTestRunState(UnityLeanMcpPaths.TestRunningFile, out var snapshot)
@@ -781,34 +801,35 @@ namespace UnityLeanMcp
             if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
                 return;
 
-            lock (s_RunStateLock)
-            {
-                var state = s_CachedRunState ?? ReadRunningState();
-                if (state == null || state.runId != runId)
-                    return;
+            var state = s_CachedRunState ?? ReadRunningState();
+            if (state == null || state.runId != runId)
+                return;
 
-                if (!string.IsNullOrEmpty(status))
-                {
-                    state.status = status;
-                }
-                state.totalTests = totalTests;
-                state.completedTests = completedTests;
-                state.passCount = passCount;
-                state.failCount = failCount;
-                state.skipCount = skipCount;
-                if (currentTestName != null)
-                {
-                    state.currentTestName = currentTestName;
-                }
-                s_CachedRunState = state;
+            if (!string.IsNullOrEmpty(status))
+            {
+                state.status = status;
             }
+            state.totalTests = totalTests;
+            state.completedTests = completedTests;
+            state.passCount = passCount;
+            state.failCount = failCount;
+            state.skipCount = skipCount;
+            if (currentTestName != null)
+            {
+                state.currentTestName = currentTestName;
+            }
+            s_CachedRunState = state;
         }
 
 
         internal static void WriteInterruptedResult(string message, string targetRunId = null)
         {
             var state = ReadRunningState();
-            string runId = targetRunId ?? state?.runId;
+            var operation = UnityCommandGate.ReadSnapshot();
+            string runId = targetRunId ?? state?.runId ??
+                (operation != null && string.Equals(operation.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase)
+                    ? operation.OperationId
+                    : null);
             if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
             {
                 return;
@@ -835,22 +856,27 @@ namespace UnityLeanMcp
 
         private static void CancelActiveTestRunOnMainThread(string operationId)
         {
-            var state = ReadRunningState();
-            if (state == null || state.runId != operationId ||
-                !UnityCommandGate.IsOwnedBy(operationId, OperationKinds.Test))
+            if (!UnityCommandGate.IsOwnedBy(operationId, OperationKinds.Test))
             {
                 return;
             }
 
-            if (state.status != OperationStatus.Cancelling)
+            var state = ReadRunningState();
+            var snapshot = UnityCommandGate.ReadSnapshot();
+            bool hasMatchingState = state != null && state.runId == operationId;
+            if ((hasMatchingState && state.status != OperationStatus.Cancelling) ||
+                (snapshot != null && snapshot.Status != OperationStatus.Cancelling))
             {
-                UpdateTestRunStatus(operationId, OperationStatus.Cancelling);
+                if (hasMatchingState)
+                {
+                    UpdateTestRunStatus(operationId, OperationStatus.Cancelling);
+                }
                 UnityCommandGate.Update(operationId, OperationStatus.Cancelling);
             }
 
             BeginCancellationMonitoring(operationId);
 
-            string jobGuid = s_CurrentTestJobGuid ?? state.jobGuid;
+            string jobGuid = s_CurrentTestJobGuid ?? (hasMatchingState ? state.jobGuid : null);
             if (!string.IsNullOrEmpty(jobGuid) && s_CancellationSignalRunId != operationId)
             {
                 try
@@ -878,7 +904,7 @@ namespace UnityLeanMcp
             }
 
             var operation = UnityCommandGate.ReadSnapshot();
-            var runningState = ReadThreadSafeSnapshot();
+            var runningState = operation == null ? ReadThreadSafeSnapshot() : null;
 
             // 1. If neither operation store nor running state is active
             if (operation == null && runningState == null)
@@ -897,12 +923,14 @@ namespace UnityLeanMcp
             }
 
             // 2. If the operation belongs to another operation ID
-            if (operation != null && operation.OperationId != operationId)
+            if (operation != null)
             {
-                return OperationCancelResult.NotCancelable;
+                if (operation.OperationId != operationId)
+                {
+                    return OperationCancelResult.NotCancelable;
+                }
             }
-
-            if (runningState != null && runningState.RunId != operationId)
+            else if (runningState != null && runningState.RunId != operationId)
             {
                 return OperationCancelResult.NotCancelable;
             }
@@ -924,7 +952,11 @@ namespace UnityLeanMcp
         internal static void WriteCancelledResult(string targetRunId = null)
         {
             var state = ReadRunningState();
-            string runId = targetRunId ?? state?.runId;
+            var operation = UnityCommandGate.ReadSnapshot();
+            string runId = targetRunId ?? state?.runId ??
+                (operation != null && string.Equals(operation.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase)
+                    ? operation.OperationId
+                    : null);
             if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
             {
                 return;
@@ -972,6 +1004,7 @@ namespace UnityLeanMcp
         {
             ClearCancellationRequest(runId);
             StopCancellationMonitoring(runId);
+            StopActiveRunMonitoring(runId);
             DeleteRunningStateIfOwned(runId);
             ClearCachedRunState();
             UnityCommandGate.Complete(runId);
@@ -995,14 +1028,6 @@ namespace UnityLeanMcp
             if (snapshot != null && snapshot.OperationId == runId && snapshot.Status == OperationStatus.Cancelling)
             {
                 return true;
-            }
-
-            lock (s_RunStateLock)
-            {
-                if (s_CachedRunState != null && s_CachedRunState.runId == runId && s_CachedRunState.status == OperationStatus.Cancelling)
-                {
-                    return true;
-                }
             }
 
             var state = ReadRunningState();
@@ -1041,15 +1066,90 @@ namespace UnityLeanMcp
                 return;
             }
 
-            var state = ReadRunningState();
-            if (state == null || state.runId != runId ||
-                !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
+            if (!UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test) ||
+                UnityCommandGate.HasPendingResult(runId))
             {
                 StopCancellationMonitoring(runId);
                 return;
             }
 
             CancelActiveTestRunOnMainThread(runId);
+        }
+
+        private static void BeginActiveRunMonitoring(string runId)
+        {
+            if (string.IsNullOrEmpty(runId) ||
+                !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test) ||
+                UnityCommandGate.HasPendingResult(runId))
+            {
+                return;
+            }
+
+            s_ActiveRunMonitorRunId = runId;
+            s_ActiveRunObservedActive = TryGetTestRunnerActiveState(out bool activeNow) && activeNow;
+            if (s_ActiveRunMonitorRegistered)
+            {
+                return;
+            }
+
+            EditorApplication.update -= ObserveActiveTestRun;
+            EditorApplication.update += ObserveActiveTestRun;
+            s_ActiveRunMonitorRegistered = true;
+        }
+
+        internal static void StopActiveRunMonitoring(string runId)
+        {
+            if (!string.IsNullOrEmpty(runId) && s_ActiveRunMonitorRunId != runId)
+            {
+                return;
+            }
+
+            if (s_ActiveRunMonitorRegistered)
+            {
+                EditorApplication.update -= ObserveActiveTestRun;
+                s_ActiveRunMonitorRegistered = false;
+            }
+
+            s_ActiveRunMonitorRunId = null;
+            s_ActiveRunObservedActive = false;
+        }
+
+        private static void ObserveActiveTestRun()
+        {
+            string runId = s_ActiveRunMonitorRunId;
+            if (string.IsNullOrEmpty(runId) ||
+                !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test) ||
+                UnityCommandGate.HasPendingResult(runId))
+            {
+                StopActiveRunMonitoring(runId);
+                return;
+            }
+
+            if (!TryGetTestRunnerActiveState(out bool isActive))
+            {
+                return;
+            }
+
+            if (isActive)
+            {
+                s_ActiveRunObservedActive = true;
+                return;
+            }
+
+            if (!s_ActiveRunObservedActive)
+            {
+                return;
+            }
+
+            StopActiveRunMonitoring(runId);
+            if (IsCancellationRequested(runId))
+            {
+                WriteCancelledResult(runId);
+            }
+            else
+            {
+                WriteInterruptedResult("Test run ended without a completion callback.", runId);
+            }
         }
 
         private static void TryCompleteCancellationIfRunnerTerminal(string runId)
@@ -1106,12 +1206,10 @@ namespace UnityLeanMcp
                 var state = ReadRunningState();
                 if (state != null && state.runId == runId)
                 {
-                    lock (s_RunStateLock)
+                    var cached = s_CachedRunState;
+                    if (cached != null && cached.runId == runId)
                     {
-                        if (s_CachedRunState != null && s_CachedRunState.runId == runId)
-                        {
-                            s_CachedRunState = null;
-                        }
+                        s_CachedRunState = null;
                     }
 
                     return CommandHelper.DeleteFileWithRetry(UnityLeanMcpPaths.TestRunningFile);

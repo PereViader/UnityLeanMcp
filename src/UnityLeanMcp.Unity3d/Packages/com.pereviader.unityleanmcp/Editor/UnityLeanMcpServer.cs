@@ -163,12 +163,12 @@ namespace UnityLeanMcp
                 }
 
                 UnityLeanMcpPaths.EnsureInitialized();
-                UnityCommandGate.InitializeMainThread();
                 UnityLeanMcpCompilationTracker.EnsureInitialized();
                 UnityLeanMcpDispatcher.EnsureInitialized();
                 RoslynCompilerHelper.EnsureInitialized();
                 EnsureDefaultHandlers();
                 UnityResultFormatter.EnsureInitialized();
+                UnityCommandGate.InitializeMainThread();
 
                 try
                 {
@@ -182,8 +182,9 @@ namespace UnityLeanMcp
                 // Register lifecycle callbacks before opening the socket. No
                 // external connection can be accepted until every dependency
                 // and recovery hook is ready.
-                s_IsPlayModeActive = EditorApplication.isPlaying && EditorApplication.isPlayingOrWillChangePlaymode;
-                s_IsPlayModeChanging = EditorApplication.isPlaying != EditorApplication.isPlayingOrWillChangePlaymode;
+                ReconcilePlayModeState();
+                EditorApplication.update -= ReconcilePlayModeState;
+                EditorApplication.update += ReconcilePlayModeState;
                 EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
                 EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
                 AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
@@ -229,6 +230,7 @@ namespace UnityLeanMcp
         {
             _isReloading = true;
             UnityCommandGate.SuspendCancellationForReload();
+            EditorApplication.update -= ReconcilePlayModeState;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             s_IsPlayModeActive = false;
             s_IsPlayModeChanging = false;
@@ -247,10 +249,17 @@ namespace UnityLeanMcp
 
         private static void OnEditorQuitting()
         {
+            EditorApplication.update -= ReconcilePlayModeState;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             s_IsPlayModeActive = false;
             s_IsPlayModeChanging = false;
             StopServer();
+        }
+
+        internal static void ReconcilePlayModeState()
+        {
+            s_IsPlayModeActive = EditorApplication.isPlaying && EditorApplication.isPlayingOrWillChangePlaymode;
+            s_IsPlayModeChanging = EditorApplication.isPlaying != EditorApplication.isPlayingOrWillChangePlaymode;
         }
 
         internal static void StopServer()
@@ -357,7 +366,7 @@ namespace UnityLeanMcp
 
                 while(_isRunning)
                 {
-                    TcpClient client;
+                    TcpClient client = null;
                     try
                     {
                         client = listener.AcceptTcpClient();
@@ -371,28 +380,52 @@ namespace UnityLeanMcp
                     {
                         break;
                     }
-
-                    s_ActiveClients.TryAdd(client, 0);
-                    if (IsShuttingDown())
+                    catch(ThreadAbortException) when (IsShuttingDown())
                     {
-                        try { client.Close(); } catch { }
-                        s_ActiveClients.TryRemove(client, out _);
-                        break;
+                        throw;
+                    }
+                    catch(Exception e)
+                    {
+                        if (IsShuttingDown())
+                        {
+                            break;
+                        }
+                        LogUnexpectedException("accept client", e);
+                        s_ShutdownEvent.WaitOne(50);
+                        continue;
                     }
 
                     try
                     {
+                        s_ActiveClients.TryAdd(client, 0);
+                        if (IsShuttingDown())
+                        {
+                            try { client.Close(); } catch { }
+                            s_ActiveClients.TryRemove(client, out _);
+                            break;
+                        }
+
                         if (!ThreadPool.QueueUserWorkItem(state => ProcessClient((TcpClient)state), client))
                         {
                             try { client.Close(); } catch { }
                             s_ActiveClients.TryRemove(client, out _);
                         }
                     }
-                    catch
+                    catch(ThreadAbortException) when (IsShuttingDown())
                     {
-                        try { client.Close(); } catch { }
-                        s_ActiveClients.TryRemove(client, out _);
+                        try { client?.Close(); } catch { }
+                        if (client != null) s_ActiveClients.TryRemove(client, out _);
                         throw;
+                    }
+                    catch(Exception e)
+                    {
+                        try { client?.Close(); } catch { }
+                        if (client != null) s_ActiveClients.TryRemove(client, out _);
+                        if (!IsShuttingDown())
+                        {
+                            LogUnexpectedException("queue client", e);
+                            s_ShutdownEvent.WaitOne(50);
+                        }
                     }
                 }
             }
@@ -430,6 +463,11 @@ namespace UnityLeanMcp
                         _serverThread = null;
 
                     _isRunning = false;
+                }
+
+                if (!_isReloading && !_shutdownRequested)
+                {
+                    DeletePortFile();
                 }
 
                 s_ShutdownEvent.Set();
@@ -537,9 +575,10 @@ namespace UnityLeanMcp
                     // A live caller reissues the same ID after the transition settles.
                     writer.WriteLine("BUSY playmode");
                     writer.Flush();
-                    EditorApplication.isPlaying = false;
                     s_IsPlayModeActive = false;
                     s_IsPlayModeChanging = true;
+                    EditorApplication.isPlaying = false;
+                    ReconcilePlayModeState();
                     return;
                 }
             }
@@ -558,6 +597,7 @@ namespace UnityLeanMcp
                 }
 
                 client.ReceiveTimeout = 5000;
+                client.SendTimeout = 5000;
                 using NetworkStream stream = client.GetStream();
                 using StreamReader reader = new(stream, Encoding.UTF8);
                 // We use new UTF8Encoding(false) to disable emitting a UTF-8 Byte Order Mark (BOM).

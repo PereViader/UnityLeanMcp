@@ -164,6 +164,7 @@ namespace UnityLeanMcp
 
         private static void InitializeMainThread()
         {
+            s_RefreshRequired = true;
             UnityLeanMcpPaths.EnsureInitialized();
             RefreshErrorLogCapture.InitializeMainThread();
             RestoreAssemblyDiagnostics();
@@ -171,6 +172,20 @@ namespace UnityLeanMcp
             var operation = UnityCommandGate.ReadSnapshot();
             bool resumingCompilation = operation != null &&
                 (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile);
+            if (!resumingCompilation)
+            {
+                string activeOpJson = SessionState.GetString("UnityLeanMcp_ActiveOp", null);
+                if (!string.IsNullOrEmpty(activeOpJson))
+                {
+                    try
+                    {
+                        var activeOp = JsonUtility.FromJson<ActiveOperationSnapshot>(activeOpJson);
+                        resumingCompilation = activeOp != null &&
+                            (activeOp.Kind == OperationKinds.Refresh || activeOp.Kind == OperationKinds.Recompile);
+                    }
+                    catch { }
+                }
+            }
             if (!resumingCompilation)
             {
                 WriteActiveErrorsToFile();
@@ -484,12 +499,25 @@ namespace UnityLeanMcp
             var snap = UnityCommandGate.ReadSnapshot();
             if (snap == null || (snap.Kind != OperationKinds.Refresh && snap.Kind != OperationKinds.Recompile))
             {
+                if (!s_RefreshPending && !s_IsCompiling && !EditorApplication.isCompiling)
+                {
+                    s_AwaitingCompilationStart = false;
+                }
                 s_ObservedOperationId = null;
                 Interlocked.Exchange(ref s_SettledUpdateCount, 0);
                 return;
             }
 
-            if (snap.Status == OperationStatus.Interrupted || snap.Status == OperationStatus.Requested)
+            if (snap.Status == OperationStatus.Interrupted)
+            {
+                if (!UnityCommandGate.HasPendingResult(snap.OperationId))
+                {
+                    WriteInterruptedRefreshResult(snap.OperationId, "Unity editor restarted before the operation completed.");
+                }
+                return;
+            }
+
+            if (snap.Status == OperationStatus.Requested)
             {
                 return;
             }

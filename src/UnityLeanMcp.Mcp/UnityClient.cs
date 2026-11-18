@@ -853,7 +853,7 @@ public class UnityClient : IUnityClient
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 0, cancellationToken);
+            string? response = await SendCommandAsync($"GET_COVERAGE {escapedJson}", 30, cancellationToken);
             if (string.IsNullOrEmpty(response))
             {
                 // Reload can close this read-only request after test completion.

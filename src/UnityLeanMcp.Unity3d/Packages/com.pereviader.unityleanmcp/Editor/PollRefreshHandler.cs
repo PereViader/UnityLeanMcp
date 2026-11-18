@@ -52,10 +52,6 @@ namespace UnityLeanMcp
                 {
                     if (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile)
                     {
-                        if (operation.Status == OperationStatus.Interrupted)
-                        {
-                            return "INTERRUPTION Unity editor restarted before the operation completed.";
-                        }
                         return "COMPILING";
                     }
 
@@ -75,7 +71,6 @@ namespace UnityLeanMcp
             }
 
             if (UnityLeanMcpCompilationTracker.RefreshPending ||
-                UnityLeanMcpCompilationTracker.AwaitingCompilationStart ||
                 UnityLeanMcpCompilationTracker.CompilationInProgress ||
                 UnityLeanMcpCompilationTracker.IsCompiling)
             {

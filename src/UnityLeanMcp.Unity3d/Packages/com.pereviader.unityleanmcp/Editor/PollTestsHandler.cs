@@ -45,7 +45,8 @@ namespace UnityLeanMcp
             var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null)
             {
-                if (!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
+                if ((!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId) ||
+                    !string.Equals(operation.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
                 {
                     writer.WriteLine($"BUSY {operation.Kind} {operation.OperationId}");
                 }

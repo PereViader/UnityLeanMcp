@@ -420,5 +420,70 @@ namespace UnityLeanMcp.Mcp.Tests
                 Assert.Null(logs[2].stackTrace);
             }
         }
+
+        [Fact]
+        public void PollRefreshHandler_BarePollWhileOperationInInterruptedStatus_ReturnsCompilingNotInterruption()
+        {
+            UnityCommandGate.ForceReset();
+            try
+            {
+                Assert.Equal(BeginGateResult.Started,
+                    UnityCommandGate.TryBegin(OperationKinds.Refresh, "interrupted-refresh-op", OperationStatus.Interrupted, out _));
+                var handler = new PollRefreshHandler();
+
+                using (var bareStream = new MemoryStream())
+                using (var bareWriter = new StreamWriter(bareStream) { AutoFlush = true })
+                {
+                    handler.Handle("", bareWriter);
+                    Assert.Equal("COMPILING", Encoding.UTF8.GetString(bareStream.ToArray()).Trim());
+                }
+
+                using (var corrStream = new MemoryStream())
+                using (var corrWriter = new StreamWriter(corrStream) { AutoFlush = true })
+                {
+                    handler.Handle("interrupted-refresh-op", corrWriter);
+                    Assert.StartsWith("INTERRUPTION ", Encoding.UTF8.GetString(corrStream.ToArray()).Trim());
+                }
+            }
+            finally
+            {
+                UnityCommandGate.ForceReset();
+            }
+        }
+
+        [Fact]
+        public void PollTestsHandler_WhenGateIsIdleAndStaleTestRunningFileExists_ReturnsIdle()
+        {
+            UnityCommandGate.ForceReset();
+            RunTestsHandler.ClearCachedRunState();
+            string runningFile = UnityLeanMcpPaths.TestRunningFile;
+            string? dir = Path.GetDirectoryName(runningFile);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(runningFile, "{\"runId\":\"stale-run-id\",\"status\":\"Running\"}");
+
+            try
+            {
+                var handler = new PollTestsHandler();
+
+                using (var corrStream = new MemoryStream())
+                using (var corrWriter = new StreamWriter(corrStream) { AutoFlush = true })
+                {
+                    handler.Handle("stale-run-id", corrWriter);
+                    Assert.Equal("IDLE", Encoding.UTF8.GetString(corrStream.ToArray()).Trim());
+                }
+
+                using (var bareStream = new MemoryStream())
+                using (var bareWriter = new StreamWriter(bareStream) { AutoFlush = true })
+                {
+                    handler.Handle("", bareWriter);
+                    Assert.Equal("IDLE", Encoding.UTF8.GetString(bareStream.ToArray()).Trim());
+                }
+            }
+            finally
+            {
+                RunTestsHandler.ClearCachedRunState();
+                try { if (File.Exists(runningFile)) File.Delete(runningFile); } catch { }
+            }
+        }
     }
 }
