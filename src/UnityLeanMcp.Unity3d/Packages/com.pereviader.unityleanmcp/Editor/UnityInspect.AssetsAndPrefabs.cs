@@ -451,7 +451,7 @@ namespace UnityLeanMcp
             if (totalOverrides == 0)
             {
                 sb.AppendLine("  Status: No overrides (clean instance)");
-                return LimitOutput(sb.ToString().TrimEnd(), DefaultMaxOutputCharacters, DefaultMaxOutputBytes);
+                return LimitOutput(sb.ToString().TrimEnd(), DefaultMaxOutputCharacters);
             }
 
             sb.AppendLine($"  Status: {totalOverrides} override(s) ({validAdded.Count} added, {validRemoved.Count} removed, {validMods.Count} modified)");
@@ -508,7 +508,7 @@ namespace UnityLeanMcp
                 }
             }
 
-            return LimitOutput(sb.ToString().TrimEnd(), DefaultMaxOutputCharacters, DefaultMaxOutputBytes);
+            return LimitOutput(sb.ToString().TrimEnd(), DefaultMaxOutputCharacters);
         }
 
         private static string ResolvePrefabAssetPath(GameObject instance)

@@ -13,7 +13,6 @@ namespace UnityLeanMcpTests
         private int m_MaxDepth;
         private int m_MaxItems;
         private int m_MaxOutputCharacters;
-        private int m_MaxOutputBytes;
 
         [SetUp]
         public void CaptureFormatterLimits()
@@ -21,7 +20,6 @@ namespace UnityLeanMcpTests
             m_MaxDepth = UnityResultFormatter.MaxDepth;
             m_MaxItems = UnityResultFormatter.MaxItems;
             m_MaxOutputCharacters = UnityResultFormatter.MaxOutputCharacters;
-            m_MaxOutputBytes = UnityResultFormatter.MaxOutputBytes;
         }
 
         [TearDown]
@@ -30,7 +28,6 @@ namespace UnityLeanMcpTests
             UnityResultFormatter.MaxDepth = m_MaxDepth;
             UnityResultFormatter.MaxItems = m_MaxItems;
             UnityResultFormatter.MaxOutputCharacters = m_MaxOutputCharacters;
-            UnityResultFormatter.MaxOutputBytes = m_MaxOutputBytes;
         }
 
         [Test]
@@ -149,37 +146,33 @@ namespace UnityLeanMcpTests
 
 
         [Test]
-        public void FormatResult_OversizedString_RespectsCharacterAndByteLimits()
+        public void FormatResult_OversizedString_RespectsCharacterLimit()
         {
             UnityResultFormatter.MaxOutputCharacters = 64;
-            UnityResultFormatter.MaxOutputBytes = 128;
 
             string formatted = UnityResultFormatter.FormatResult(new string('x', 10_000), prettyPrint: false);
 
             StringAssert.Contains("truncated: maximum output size reached", formatted);
             Assert.That(formatted.Length, Is.LessThanOrEqualTo(64));
-            Assert.That(Encoding.UTF8.GetByteCount(formatted), Is.LessThanOrEqualTo(128));
         }
 
         [Test]
-        public void LimitOutput_65KMultiByteCharactersAndSurrogatePairs_TruncatesLinearlyAndPreservesValidUtf16()
+        public void LimitOutput_65KSurrogatePairs_PreservesValidUtf16()
         {
-            string multiByteBmp = new string('€', 65536);
-            var emojiBuilder = new StringBuilder(65536);
+            var emojiBuilder = new StringBuilder(65537);
             for (int i = 0; i < 32768; i++)
             {
                 emojiBuilder.Append("\uD83D\uDE00");
             }
+            emojiBuilder.Append('x');
             string emojiText = emojiBuilder.ToString();
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            string limitedBmp = UnityResultFormatter.LimitOutput(multiByteBmp, 65536, 65536);
-            string limitedEmoji = UnityResultFormatter.LimitOutput(emojiText, 65536, 65536);
+            string limitedEmoji = UnityResultFormatter.LimitOutput(emojiText, 65536);
             sw.Stop();
 
             Assert.That(sw.ElapsedMilliseconds, Is.LessThan(2000));
-            Assert.That(Encoding.UTF8.GetByteCount(limitedBmp), Is.LessThanOrEqualTo(65536));
-            Assert.That(Encoding.UTF8.GetByteCount(limitedEmoji), Is.LessThanOrEqualTo(65536));
+            Assert.That(limitedEmoji.Length, Is.LessThanOrEqualTo(65536));
             int markerIndex = limitedEmoji.IndexOf(UnityResultFormatter.OutputTruncationMarker, System.StringComparison.Ordinal);
             Assert.That(markerIndex, Is.GreaterThan(0));
             Assert.That(char.IsHighSurrogate(limitedEmoji[markerIndex - 1]), Is.False);
@@ -189,7 +182,6 @@ namespace UnityLeanMcpTests
         public void FormatResult_OversizedJson_RespectsOutputLimits()
         {
             UnityResultFormatter.MaxOutputCharacters = 80;
-            UnityResultFormatter.MaxOutputBytes = 160;
 
             string formatted = UnityResultFormatter.FormatResult(
                 new JsonPayload { Text = new string('y', 10_000) },
@@ -197,14 +189,12 @@ namespace UnityLeanMcpTests
 
             StringAssert.Contains("truncated: maximum output size reached", formatted);
             Assert.That(formatted.Length, Is.LessThanOrEqualTo(80));
-            Assert.That(Encoding.UTF8.GetByteCount(formatted), Is.LessThanOrEqualTo(160));
         }
 
         [Test]
         public void FormatResult_AggregateOversizedJson_RefusesBeforeSerialization()
         {
             UnityResultFormatter.MaxOutputCharacters = 80;
-            UnityResultFormatter.MaxOutputBytes = 160;
 
             string formatted = UnityResultFormatter.FormatResult(
                 new WideJsonPayload { Values = new[]

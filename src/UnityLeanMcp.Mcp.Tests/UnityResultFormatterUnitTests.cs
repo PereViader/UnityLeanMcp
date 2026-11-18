@@ -19,7 +19,7 @@ public sealed class UnityResultFormatterUnitTests : IDisposable
     public void LimitOutput_TruncatesWhenExceedingCharacterCap()
     {
         string hugeText = new string('A', 1000);
-        string capped = Inspect.LimitOutput(hugeText, maxCharacters: 100, maxBytes: 100);
+        string capped = Inspect.LimitOutput(hugeText, maxCharacters: 100);
 
         Assert.True(capped.Length <= 100);
         Assert.Contains("... (truncated: maximum output size reached)", capped);
@@ -29,7 +29,7 @@ public sealed class UnityResultFormatterUnitTests : IDisposable
     public void LimitOutput_PreservesTextWithinBudget()
     {
         string normalText = "Hello World";
-        string result = Inspect.LimitOutput(normalText, maxCharacters: 100, maxBytes: 100);
+        string result = Inspect.LimitOutput(normalText, maxCharacters: 100);
 
         Assert.Equal("Hello World", result);
     }
@@ -40,53 +40,37 @@ public sealed class UnityResultFormatterUnitTests : IDisposable
         string text = new string('X', 500);
 
         // Cap at 10 chars
-        string capped10 = Inspect.LimitOutput(text, maxCharacters: 10, maxBytes: 10);
+        string capped10 = Inspect.LimitOutput(text, maxCharacters: 10);
         Assert.True(capped10.Length <= 10, $"Expected length <= 10 but was {capped10.Length}");
-        Assert.True(Encoding.UTF8.GetByteCount(capped10) <= 10);
 
         // Cap at 5 chars
-        string capped5 = Inspect.LimitOutput(text, maxCharacters: 5, maxBytes: 5);
+        string capped5 = Inspect.LimitOutput(text, maxCharacters: 5);
         Assert.True(capped5.Length <= 5, $"Expected length <= 5 but was {capped5.Length}");
-        Assert.True(Encoding.UTF8.GetByteCount(capped5) <= 5);
     }
 
     [Fact]
-    public void LimitOutput_65KMultiByteCharactersAndSurrogatePairs_TruncatesLinearlyAndPreservesValidUtf16()
+    public void LimitOutput_65KSurrogatePairs_TruncatesFastAndPreservesValidUtf16()
     {
-        // 65,536 3-byte UTF-8 characters (196,608 UTF-8 bytes)
-        string multiByteBmp = new string('€', 65536);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        string limitedInspect = Inspect.LimitOutput(multiByteBmp, maxCharacters: 65536, maxBytes: 65536);
-        string limitedFormatter = UnityResultFormatter.FormatResult(multiByteBmp, prettyPrint: false);
-        sw.Stop();
-
-        Assert.True(sw.ElapsedMilliseconds < 2000, $"Expected fast O(N) truncation, took {sw.ElapsedMilliseconds}ms");
-        Assert.True(Encoding.UTF8.GetByteCount(limitedInspect) <= 65536);
-        Assert.True(Encoding.UTF8.GetByteCount(limitedFormatter) <= 65536);
-        Assert.Contains("... (truncated: maximum output size reached)", limitedInspect);
-        Assert.Contains("... (truncated: maximum output size reached)", limitedFormatter);
-
-        // 32,768 emoji surrogate pairs (65,536 UTF-16 chars, 131,072 UTF-8 bytes)
-        var emojiBuilder = new StringBuilder(65536);
+        // 32,768 emoji surrogate pairs + 1 char (65,537 UTF-16 chars)
+        var emojiBuilder = new StringBuilder(65537);
         for (int i = 0; i < 32768; i++)
         {
             emojiBuilder.Append("\uD83D\uDE00");
         }
+        emojiBuilder.Append('x');
         string emojiText = emojiBuilder.ToString();
-        string limitedEmoji = Inspect.LimitOutput(emojiText, maxCharacters: 65536, maxBytes: 65536);
-        Assert.True(Encoding.UTF8.GetByteCount(limitedEmoji) <= 65536);
-        int markerIndex = limitedEmoji.IndexOf("... (truncated: maximum output size reached)", StringComparison.Ordinal);
-        Assert.True(markerIndex > 0);
-        Assert.False(char.IsHighSurrogate(limitedEmoji[markerIndex - 1]));
 
-        sw.Restart();
-        string formatterBmp = UnityResultFormatter.LimitOutput(multiByteBmp, 65536, 65536);
-        string formatterEmoji = UnityResultFormatter.LimitOutput(emojiText, 65536, 65536);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string limitedInspect = Inspect.LimitOutput(emojiText, maxCharacters: 65536);
+        string limitedFormatter = UnityResultFormatter.LimitOutput(emojiText, 65536);
         sw.Stop();
 
-        Assert.True(sw.ElapsedMilliseconds < 2000, $"Expected fast O(N) truncation in UnityResultFormatter, took {sw.ElapsedMilliseconds}ms");
-        Assert.Equal(limitedInspect, formatterBmp);
-        Assert.Equal(limitedEmoji, formatterEmoji);
+        Assert.True(sw.ElapsedMilliseconds < 2000, $"Expected fast truncation, took {sw.ElapsedMilliseconds}ms");
+        Assert.True(limitedInspect.Length <= 65536);
+        int markerIndex = limitedInspect.IndexOf("... (truncated: maximum output size reached)", StringComparison.Ordinal);
+        Assert.True(markerIndex > 0);
+        Assert.False(char.IsHighSurrogate(limitedInspect[markerIndex - 1]));
+        Assert.Equal(limitedInspect, limitedFormatter);
     }
 
     private class BaseSerializableNode
@@ -114,8 +98,7 @@ public sealed class UnityResultFormatterUnitTests : IDisposable
         var ctx1 = new UnityResultFormatter.FormattingContext(
             UnityResultFormatter.DefaultMaxDepth,
             UnityResultFormatter.DefaultMaxItems,
-            UnityResultFormatter.DefaultMaxOutputCharacters,
-            UnityResultFormatter.DefaultMaxOutputBytes);
+            UnityResultFormatter.DefaultMaxOutputCharacters);
         Assert.Equal(
             UnityResultFormatter.GraphGuardResult.Safe,
             ctx1.InspectChildren(nodeWithNonPublicCycles, depth: 0, prettyPrint: false));
@@ -127,8 +110,7 @@ public sealed class UnityResultFormatterUnitTests : IDisposable
         var ctx2 = new UnityResultFormatter.FormattingContext(
             UnityResultFormatter.DefaultMaxDepth,
             UnityResultFormatter.DefaultMaxItems,
-            UnityResultFormatter.DefaultMaxOutputCharacters,
-            UnityResultFormatter.DefaultMaxOutputBytes);
+            UnityResultFormatter.DefaultMaxOutputCharacters);
         Assert.Equal(
             UnityResultFormatter.GraphGuardResult.Cycle,
             ctx2.InspectChildren(nodeWithInheritedSerializedCycle, depth: 0, prettyPrint: false));

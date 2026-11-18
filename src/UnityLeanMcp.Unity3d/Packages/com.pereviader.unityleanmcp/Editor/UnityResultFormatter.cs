@@ -20,7 +20,6 @@ namespace UnityLeanMcp
         public const int DefaultMaxDepth = 32;
         public const int DefaultMaxItems = 100;
         public const int DefaultMaxOutputCharacters = 64 * 1024;
-        public const int DefaultMaxOutputBytes = 64 * 1024;
 
         internal const string CycleTruncationMarker = "... (truncated: cycle detected)";
         internal const string DepthTruncationMarker = "... (truncated: maximum depth reached)";
@@ -51,19 +50,16 @@ namespace UnityLeanMcp
                 new HashSet<object>(ReferenceIdentityComparer.Instance);
             private int m_ItemsVisited;
             private long m_EstimatedOutputCharacters;
-            private long m_EstimatedOutputBytes;
 
             public int MaxDepth { get; }
             public int MaxItems { get; }
             public int MaxOutputCharacters { get; }
-            public int MaxOutputBytes { get; }
 
-            public FormattingContext(int maxDepth, int maxItems, int maxOutputCharacters, int maxOutputBytes)
+            public FormattingContext(int maxDepth, int maxItems, int maxOutputCharacters)
             {
                 MaxDepth = maxDepth;
                 MaxItems = maxItems;
                 MaxOutputCharacters = maxOutputCharacters;
-                MaxOutputBytes = maxOutputBytes;
             }
 
             public bool TryEnter(object value)
@@ -90,12 +86,10 @@ namespace UnityLeanMcp
                 return true;
             }
 
-            private GraphGuardResult TryAddEstimatedOutput(int characters, int bytes)
+            private GraphGuardResult TryAddEstimatedOutput(int characters)
             {
                 m_EstimatedOutputCharacters += characters;
-                m_EstimatedOutputBytes += bytes;
-                return m_EstimatedOutputCharacters <= MaxOutputCharacters &&
-                    m_EstimatedOutputBytes <= MaxOutputBytes
+                return m_EstimatedOutputCharacters <= MaxOutputCharacters
                     ? GraphGuardResult.Safe
                     : GraphGuardResult.Output;
             }
@@ -114,7 +108,7 @@ namespace UnityLeanMcp
 
                 if (value is IEnumerable enumerable && !(value is string))
                 {
-                    GraphGuardResult estimateResult = TryAddEstimatedOutput(1, 1); // [
+                    GraphGuardResult estimateResult = TryAddEstimatedOutput(1); // [
                     if (estimateResult != GraphGuardResult.Safe)
                     {
                         return estimateResult;
@@ -132,7 +126,7 @@ namespace UnityLeanMcp
 
                             if (itemIndex++ > 0)
                             {
-                                estimateResult = TryAddEstimatedOutput(1, 1); // ,
+                                estimateResult = TryAddEstimatedOutput(1); // ,
                                 if (estimateResult != GraphGuardResult.Safe)
                                 {
                                     return estimateResult;
@@ -141,7 +135,7 @@ namespace UnityLeanMcp
 
                             if (prettyPrint)
                             {
-                                estimateResult = TryAddEstimatedOutput(1 + ((depth + 1) * 4), 1 + ((depth + 1) * 4));
+                                estimateResult = TryAddEstimatedOutput(1 + ((depth + 1) * 4));
                                 if (estimateResult != GraphGuardResult.Safe)
                                 {
                                     return estimateResult;
@@ -161,10 +155,10 @@ namespace UnityLeanMcp
                         // normal way. A throwing custom enumerator is not a graph cycle.
                     }
 
-                    return TryAddEstimatedOutput(1, 1); // ]
+                    return TryAddEstimatedOutput(1); // ]
                 }
 
-                GraphGuardResult objectEstimate = TryAddEstimatedOutput(1, 1); // {
+                GraphGuardResult objectEstimate = TryAddEstimatedOutput(1); // {
                 if (objectEstimate != GraphGuardResult.Safe)
                 {
                     return objectEstimate;
@@ -183,7 +177,7 @@ namespace UnityLeanMcp
 
                         if (fieldIndex++ > 0)
                         {
-                            objectEstimate = TryAddEstimatedOutput(1, 1); // ,
+                            objectEstimate = TryAddEstimatedOutput(1); // ,
                             if (objectEstimate != GraphGuardResult.Safe)
                             {
                                 return objectEstimate;
@@ -192,7 +186,7 @@ namespace UnityLeanMcp
 
                         if (prettyPrint)
                         {
-                            objectEstimate = TryAddEstimatedOutput(1 + ((depth + 1) * 4), 1 + ((depth + 1) * 4));
+                            objectEstimate = TryAddEstimatedOutput(1 + ((depth + 1) * 4));
                             if (objectEstimate != GraphGuardResult.Safe)
                             {
                                 return objectEstimate;
@@ -205,7 +199,7 @@ namespace UnityLeanMcp
                             return objectEstimate;
                         }
 
-                        objectEstimate = TryAddEstimatedOutput(1, 1); // :
+                        objectEstimate = TryAddEstimatedOutput(1); // :
                         if (objectEstimate != GraphGuardResult.Safe)
                         {
                             return objectEstimate;
@@ -229,14 +223,14 @@ namespace UnityLeanMcp
                     }
                 }
 
-                return TryAddEstimatedOutput(1, 1); // }
+                return TryAddEstimatedOutput(1); // }
             }
 
             private GraphGuardResult InspectValue(object value, int depth, bool prettyPrint)
             {
                 if (value == null)
                 {
-                    return TryAddEstimatedOutput(4, 4); // null
+                    return TryAddEstimatedOutput(4); // null
                 }
 
                 if (depth > MaxDepth)
@@ -252,7 +246,7 @@ namespace UnityLeanMcp
                 if (IsLeaf(value) || value is UnityEngine.Object)
                 {
                     string leafText = value.ToString();
-                    return TryAddEstimatedOutput(leafText.Length, Encoding.UTF8.GetByteCount(leafText));
+                    return TryAddEstimatedOutput(leafText.Length);
                 }
 
                 if (!TryEnter(value))
@@ -273,29 +267,25 @@ namespace UnityLeanMcp
             private GraphGuardResult EstimateJsonString(string value)
             {
                 int characters = 2;
-                int bytes = 2;
                 for (int i = 0; i < value.Length; i++)
                 {
                     char character = value[i];
                     if (character == '"' || character == '\\' || character < ' ')
                     {
                         characters += character < ' ' && character != '\t' && character != '\n' && character != '\r' ? 6 : 2;
-                        bytes += character < ' ' && character != '\t' && character != '\n' && character != '\r' ? 6 : 2;
                     }
                     else if (char.IsHighSurrogate(character) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
                     {
                         characters += 2;
-                        bytes += Encoding.UTF8.GetByteCount(value, i, 2);
                         i++;
                     }
                     else
                     {
                         characters++;
-                        bytes += Encoding.UTF8.GetByteCount(value, i, 1);
                     }
                 }
 
-                return TryAddEstimatedOutput(characters, bytes);
+                return TryAddEstimatedOutput(characters);
             }
 
             private static bool IsLeaf(object value)
@@ -308,7 +298,6 @@ namespace UnityLeanMcp
         private static int s_MaxDepth = DefaultMaxDepth;
         private static int s_MaxItems = DefaultMaxItems;
         private static int s_MaxOutputCharacters = DefaultMaxOutputCharacters;
-        private static int s_MaxOutputBytes = DefaultMaxOutputBytes;
 
         /// <summary>
         /// Maximum recursive child depth. The root result is depth zero.
@@ -337,15 +326,6 @@ namespace UnityLeanMcp
             set => SetPositiveLimit(ref s_MaxOutputCharacters, value, nameof(MaxOutputCharacters));
         }
 
-        /// <summary>
-        /// Maximum UTF-8 byte count returned by one result formatting call.
-        /// </summary>
-        public static int MaxOutputBytes
-        {
-            get => Volatile.Read(ref s_MaxOutputBytes);
-            set => SetPositiveLimit(ref s_MaxOutputBytes, value, nameof(MaxOutputBytes));
-        }
-
         private static void SetPositiveLimit(ref int target, int value, string parameterName, bool allowZero = false)
         {
             if (value < 0 || (!allowZero && value == 0))
@@ -362,7 +342,7 @@ namespace UnityLeanMcp
 
         public static string FormatResult(object result, bool isVoidStatement = false, bool prettyPrint = true)
         {
-            var context = new FormattingContext(MaxDepth, MaxItems, MaxOutputCharacters, MaxOutputBytes);
+            var context = new FormattingContext(MaxDepth, MaxItems, MaxOutputCharacters);
             return LimitOutput(FormatResult(result, isVoidStatement, prettyPrint, context, 0), context);
         }
 
@@ -515,96 +495,63 @@ namespace UnityLeanMcp
 
         internal static string LimitOutput(string value, FormattingContext context)
         {
-            return LimitOutput(value, context.MaxOutputCharacters, context.MaxOutputBytes);
+            return LimitOutput(value, context.MaxOutputCharacters);
         }
 
-        internal static string LimitOutput(string value, int maxCharacters, int maxBytes)
+        internal static string LimitOutput(string value, int maxCharacters)
         {
-            if (value == null)
-            {
-                return null;
-            }
-
-            if (value.Length <= maxCharacters &&
-                Encoding.UTF8.GetByteCount(value) <= maxBytes)
+            if (value == null || value.Length <= maxCharacters)
             {
                 return value;
             }
 
-            string marker = GetOutputTruncationMarker(maxCharacters, maxBytes);
+            string marker = GetOutputTruncationMarker(maxCharacters);
             if (marker.Length == 0)
             {
                 return string.Empty;
             }
 
-            int markerBytes = Encoding.UTF8.GetByteCount(marker);
-            int maxPrefixBytes = maxBytes - markerBytes;
-            int prefixLength = Math.Min(value.Length, maxCharacters - marker.Length);
+            int prefixLength = maxCharacters - marker.Length;
             if (prefixLength <= 0)
             {
                 return marker;
             }
 
-            if (prefixLength < value.Length && char.IsHighSurrogate(value[prefixLength - 1]))
+            if (char.IsHighSurrogate(value[prefixLength - 1]))
             {
                 prefixLength--;
-            }
-
-            int currentBytes = prefixLength > 0 ? Encoding.UTF8.GetByteCount(value, 0, prefixLength) : 0;
-            while (prefixLength > 0 && currentBytes > maxPrefixBytes)
-            {
-                int previousLength = prefixLength;
-                int step = prefixLength >= 2 &&
-                           char.IsHighSurrogate(value[prefixLength - 2]) &&
-                           char.IsLowSurrogate(value[prefixLength - 1])
-                    ? 2
-                    : 1;
-                prefixLength -= step;
-                if (prefixLength > 0 && char.IsHighSurrogate(value[prefixLength - 1]))
-                {
-                    prefixLength--;
-                }
-
-                int removedChars = previousLength - prefixLength;
-                currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, removedChars);
             }
 
             return value.Substring(0, prefixLength) + marker;
         }
 
-        private static string GetOutputTruncationMarker(int maxCharacters, int maxBytes)
+        private static string GetOutputTruncationMarker(int maxCharacters)
         {
-            if (FitsOutputBudget(OutputTruncationMarker, maxCharacters, maxBytes))
+            if (OutputTruncationMarker.Length <= maxCharacters)
             {
                 return OutputTruncationMarker;
             }
 
             const string shortMarker = "... (truncated)";
-            if (FitsOutputBudget(shortMarker, maxCharacters, maxBytes))
+            if (shortMarker.Length <= maxCharacters)
             {
                 return shortMarker;
             }
 
             const string compactMarker = "[truncated]";
-            if (FitsOutputBudget(compactMarker, maxCharacters, maxBytes))
+            if (compactMarker.Length <= maxCharacters)
             {
                 return compactMarker;
             }
 
             const string ellipsisMarker = "...";
-            if (FitsOutputBudget(ellipsisMarker, maxCharacters, maxBytes))
+            if (ellipsisMarker.Length <= maxCharacters)
             {
                 return ellipsisMarker;
             }
 
             const string singleCharacterMarker = ".";
-            return FitsOutputBudget(singleCharacterMarker, maxCharacters, maxBytes) ? singleCharacterMarker : string.Empty;
-        }
-
-        private static bool FitsOutputBudget(string value, int maxCharacters, int maxBytes)
-        {
-            return value.Length <= maxCharacters &&
-                Encoding.UTF8.GetByteCount(value) <= maxBytes;
+            return singleCharacterMarker.Length <= maxCharacters ? singleCharacterMarker : string.Empty;
         }
 
         public static string FormatSerializedPropertyValue(SerializedProperty prop)

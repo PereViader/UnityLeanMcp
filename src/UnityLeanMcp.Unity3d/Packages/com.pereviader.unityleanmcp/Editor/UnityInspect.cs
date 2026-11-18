@@ -23,7 +23,6 @@ namespace UnityLeanMcp
         public const int DefaultMaxDepth = 32;
         public const int DefaultMaxItems = 100;
         public const int DefaultMaxOutputCharacters = 64 * 1024;
-        public const int DefaultMaxOutputBytes = 64 * 1024;
 
         internal const string CycleTruncationMarker = "... (truncated: cycle detected)";
         internal const string DepthTruncationMarker = "... (truncated: maximum depth reached)";
@@ -227,15 +226,14 @@ namespace UnityLeanMcp
 
         internal static string LimitOutput(
             string value,
-            int maxCharacters = DefaultMaxOutputCharacters,
-            int maxBytes = DefaultMaxOutputBytes)
+            int maxCharacters = DefaultMaxOutputCharacters)
         {
             if (string.IsNullOrEmpty(value))
             {
                 return value ?? string.Empty;
             }
 
-            return UnityResultFormatter.LimitOutput(value, maxCharacters, maxBytes);
+            return UnityResultFormatter.LimitOutput(value, maxCharacters);
         }
 
         private static PropertyInfo GetCachedProperty(
