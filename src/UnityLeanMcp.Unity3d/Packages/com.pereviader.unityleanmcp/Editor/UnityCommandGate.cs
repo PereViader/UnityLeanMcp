@@ -172,8 +172,8 @@ namespace UnityLeanMcp
             EditorApplication.update -= RecoverTestRun;
             if (!isActive)
             {
-                string coveragePhase = GetCoverageHandler.GetCoverageAttemptPhase(operation.OperationId);
-                if (coveragePhase == "baseline-preparing" || coveragePhase == "enabling" || coveragePhase == "preparing")
+                string coveragePhase = CoverageLifecycleManager.GetCoverageAttemptPhase(operation.OperationId);
+                if (CoverageAttemptPhase.IsPreparationPhase(coveragePhase))
                 {
                     RunTestsHandler.ScheduleCoveragePreparation(operation.OperationId);
                     return;
@@ -339,8 +339,8 @@ namespace UnityLeanMcp
                 EditorApplication.update -= RecoverTestRun;
                 RunTestsHandler.StopActiveRunMonitoring(null);
                 SessionState.EraseString(PendingResultKey);
-                SessionState.EraseString(GetCoverageHandler.CoverageAttemptKey);
-                GetCoverageHandler.ClearCapturedCoverage();
+                CoverageLifecycleManager.ClearCoverageAttempt();
+                CoverageLifecycleManager.ClearCapturedCoverage();
                 s_PendingResult = null;
                 s_LastRetryTicks = 0;
                 SessionState.EraseString(SessionKey);
@@ -389,10 +389,10 @@ namespace UnityLeanMcp
             {
                 try
                 {
-                    string coverageOutcome = RunTestsHandler.CompleteCoverageForTerminalResult(pending.OperationId);
-                    if (coverageOutcome != null)
+                    CoverageCompletionOutcome coverageOutcome = RunTestsHandler.CompleteCoverageForTerminalResult(pending.OperationId);
+                    if (coverageOutcome.HasOutcome)
                     {
-                        if (coverageOutcome.StartsWith("pending|", StringComparison.Ordinal))
+                        if (coverageOutcome.IsPending)
                             return;
                         IncludeCoverageOutcome(pending, coverageOutcome);
                     }
@@ -446,12 +446,11 @@ namespace UnityLeanMcp
             }
         }
 
-        private static void IncludeCoverageOutcome(PendingResult pending, string outcome)
+        private static void IncludeCoverageOutcome(PendingResult pending, CoverageCompletionOutcome outcome)
         {
-            int separator = outcome.IndexOf('|');
-            if (separator < 0) return;
-            string status = outcome.Substring(0, separator);
-            string message = outcome.Substring(separator + 1);
+            string status = outcome.ToProtocolStatus();
+            if (string.IsNullOrEmpty(status)) return;
+            string message = outcome.Message ?? "";
             UnityTestRunResult result;
             try { result = JsonUtility.FromJson<UnityTestRunResult>(pending.Json); }
             catch { return; }

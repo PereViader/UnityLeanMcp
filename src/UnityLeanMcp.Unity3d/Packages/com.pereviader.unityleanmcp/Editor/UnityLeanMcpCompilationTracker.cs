@@ -209,7 +209,7 @@ namespace UnityLeanMcp
             s_IsCompiling = true;
             CompilationInProgress = true;
             IncrementCompilationEpoch();
-            GetCoverageHandler.ObserveCompilationStarted();
+            CoverageLifecycleManager.ObserveCompilationStarted();
         }
 
         private static void OnCompilationFinished(object obj)
@@ -218,7 +218,7 @@ namespace UnityLeanMcp
             CompilationFinished = true;
             s_ScriptCompilationFailed = EditorUtility.scriptCompilationFailed;
             IncrementCompilationEpoch();
-            GetCoverageHandler.ObserveCompilationFinished();
+            CoverageLifecycleManager.ObserveCompilationFinished();
             WriteActiveErrorsToFile();
         }
 

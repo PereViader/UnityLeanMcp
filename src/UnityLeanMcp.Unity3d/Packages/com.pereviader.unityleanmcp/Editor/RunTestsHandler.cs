@@ -370,7 +370,7 @@ namespace UnityLeanMcp
             {
                 // Admission starts a new single-snapshot attempt. A later setup
                 // failure must not make the previous report available again.
-                GetCoverageHandler.ClearCapturedCoverage();
+                CoverageLifecycleManager.ClearCapturedCoverage();
             }
 
             try
@@ -434,11 +434,11 @@ namespace UnityLeanMcp
                 {
                     try
                     {
-                        GetCoverageHandler.BeginCoverageAttempt(operationId);
+                        CoverageLifecycleManager.BeginCoverageAttempt(operationId);
                     }
                     catch (Exception ex)
                     {
-                        GetCoverageHandler.AbortCoveragePreparation(operationId);
+                        CoverageLifecycleManager.AbortCoveragePreparation(operationId);
                         writer.WriteLine($"FAILURE Failed to initialize code coverage: {ex.Message}");
                         writer.Flush();
                         WriteInterruptedResult("Failed to initialize code coverage: " + ex.Message, operationId);
@@ -613,7 +613,7 @@ namespace UnityLeanMcp
 
         internal static void ScheduleCoveragePreparation(string runId)
         {
-            if (string.IsNullOrEmpty(runId) || !GetCoverageHandler.IsCoverageAttempt(runId))
+            if (string.IsNullOrEmpty(runId) || !CoverageLifecycleManager.IsCoverageAttempt(runId))
                 return;
             s_CoveragePreparationRunId = runId;
             if (s_CoveragePreparationRegistered)
@@ -641,10 +641,10 @@ namespace UnityLeanMcp
             }
 
             var state = ReadRunningState();
-            if (state == null || state.runId != runId || !GetCoverageHandler.IsCoverageAttempt(runId))
+            if (state == null || state.runId != runId || !CoverageLifecycleManager.IsCoverageAttempt(runId))
             {
                 StopCoveragePreparation();
-                GetCoverageHandler.AbortCoveragePreparation(runId);
+                CoverageLifecycleManager.AbortCoveragePreparation(runId);
                 WriteInterruptedResult("Coverage preparation state was lost.", runId);
                 return;
             }
@@ -656,8 +656,8 @@ namespace UnityLeanMcp
                 return;
             }
 
-            string phase = GetCoverageHandler.GetCoverageAttemptPhase(runId);
-            if (phase != "baseline-preparing" && phase != "enabling" && phase != "preparing")
+            string phase = CoverageLifecycleManager.GetCoverageAttemptPhase(runId);
+            if (!CoverageAttemptPhase.IsPreparationPhase(phase))
             {
                 StopCoveragePreparation();
                 return;
@@ -665,7 +665,7 @@ namespace UnityLeanMcp
 
             try
             {
-                if (!GetCoverageHandler.AdvanceCoverageLifecycle(runId, restoration: false))
+                if (!CoverageLifecycleManager.AdvanceCoverageLifecycle(runId, restoration: false))
                     return;
 
                 if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed || EditorUtility.scriptCompilationFailed)
@@ -678,9 +678,9 @@ namespace UnityLeanMcp
                 if (!TryGetTestRunnerActiveState(out bool isActive) || isActive)
                     return;
 
-                if (phase == "baseline-preparing")
+                if (phase == CoverageAttemptPhase.BaselinePreparing)
                 {
-                    if (!GetCoverageHandler.EstablishCoverageBaseline(runId))
+                    if (!CoverageLifecycleManager.EstablishCoverageBaseline(runId))
                     {
                         StopCoveragePreparation();
                         WriteInterruptedResult("Compilation inputs changed while the coverage baseline was being established. Refresh the project and rerun tests with coverage enabled.", runId);
@@ -689,15 +689,15 @@ namespace UnityLeanMcp
                     return;
                 }
 
-                if (phase == "enabling")
+                if (phase == CoverageAttemptPhase.Enabling)
                 {
-                    if (!UnityEngine.TestTools.Coverage.enabled || !GetCoverageHandler.CoverageInputsMatchAttempt(runId))
+                    if (!UnityEngine.TestTools.Coverage.enabled || !CoverageLifecycleManager.CoverageInputsMatchAttempt(runId))
                     {
                         StopCoveragePreparation();
                         WriteInterruptedResult("Compilation inputs changed while coverage instrumentation settled. Refresh the project and rerun tests with coverage enabled.", runId);
                         return;
                     }
-                    GetCoverageHandler.MarkCoverageInstrumentationSettled(runId);
+                    CoverageLifecycleManager.MarkCoverageInstrumentationSettled(runId);
                     return;
                 }
 
@@ -712,14 +712,14 @@ namespace UnityLeanMcp
                 // pre-enable fingerprint identifies the refreshed code; if any
                 // inputs changed while instrumentation settled, do not measure a
                 // different assembly graph under the old identity.
-                if (!GetCoverageHandler.CoverageInputsMatchAttempt(runId))
+                if (!CoverageLifecycleManager.CoverageInputsMatchAttempt(runId))
                 {
                     StopCoveragePreparation();
                     WriteInterruptedResult("Compilation inputs changed while coverage instrumentation settled. Refresh the project and rerun tests with coverage enabled.", runId);
                     return;
                 }
 
-                GetCoverageHandler.ResetCoverageCounters();
+                CoverageLifecycleManager.ResetCoverageCounters();
                 StopCoveragePreparation();
 
                 var args = new RunTestsArgs
@@ -736,7 +736,7 @@ namespace UnityLeanMcp
             catch (Exception ex)
             {
                 StopCoveragePreparation();
-                GetCoverageHandler.AbortCoveragePreparation(runId);
+                CoverageLifecycleManager.AbortCoveragePreparation(runId);
                 Debug.LogError($"UnityLeanMcp: Failed to prepare coverage: {ex}");
                 WriteInterruptedResult("Failed to prepare code coverage: " + ex.Message, runId);
             }
@@ -772,7 +772,7 @@ namespace UnityLeanMcp
                 Debug.Log($"UnityLeanMcp: Executing {mode} tests with testNames count '{(filter.testNames?.Length ?? 0)}', groupNames count '{(filter.groupNames?.Length ?? 0)}', categoryNames count '{(filter.categoryNames?.Length ?? 0)}', assemblyNames count '{(filter.assemblyNames?.Length ?? 0)}'...");
                 if (args.coverage)
                 {
-                    GetCoverageHandler.MarkCoverageExecutionStarting(runId);
+                    CoverageLifecycleManager.MarkCoverageExecutionStarting(runId);
                 }
                 s_CurrentTestJobGuid = s_RunnerApi.Execute(settings);
                 UpdateTestRunJobGuid(runId, s_CurrentTestJobGuid);
@@ -1132,18 +1132,18 @@ namespace UnityLeanMcp
         }
 
         internal static void MarkCoverageRunStarted(string runId) =>
-            GetCoverageHandler.TryMarkCoverageRunnerStarted(runId);
+            CoverageLifecycleManager.TryMarkCoverageRunnerStarted(runId);
 
         internal static void MarkCoverageRunCompleted(string runId, bool complete) =>
-            GetCoverageHandler.MarkCoverageTestCompleted(runId, complete);
+            CoverageLifecycleManager.MarkCoverageTestCompleted(runId, complete);
 
         // Called by terminal-result publication after the exact test payload and
         // coverage recovery record are persisted. Capture is frozen in
         // SessionState before the prior native profiler flag can discard counters.
-        internal static string CompleteCoverageForTerminalResult(string runId) =>
-            GetCoverageHandler.CompleteCoverageAttempt(runId);
+        internal static CoverageCompletionOutcome CompleteCoverageForTerminalResult(string runId) =>
+            CoverageLifecycleManager.CompleteCoverageAttempt(runId);
 
-        private static void RestoreCoverageOnEditorQuit() => GetCoverageHandler.RestoreAnyCoverageProfiler();
+        private static void RestoreCoverageOnEditorQuit() => CoverageLifecycleManager.RestoreAnyCoverageProfiler();
 
         internal static void CleanupTestRun(string runId)
         {

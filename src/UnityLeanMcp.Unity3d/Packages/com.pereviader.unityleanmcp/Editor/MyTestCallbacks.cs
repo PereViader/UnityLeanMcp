@@ -110,7 +110,7 @@ namespace UnityLeanMcp
             try
             {
                 if (m_TerminalResultClaimed || !IsRunning ||
-                    GetCoverageHandler.IsCoverageTerminalResultClaimed(m_RunId))
+                    CoverageLifecycleManager.IsCoverageTerminalResultClaimed(m_RunId))
                 {
                     return;
                 }

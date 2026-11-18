@@ -1063,11 +1063,11 @@ public class CoverageFormattingTests
         Assert.True(GetCoverageHandler.EstablishCoverageBaseline(runId));
         RunTestsHandler.MarkCoverageRunStarted(runId);
         RunTestsHandler.MarkCoverageRunCompleted(runId, complete: true);
-        string? outcome = "";
+        UnityLeanMcp.CoverageCompletionOutcome outcome = default;
         string lifecycleState = "";
         for (int i = 0; i < 6; i++)
         {
-            outcome = GetCoverageHandler.CompleteCoverageAttempt(runId);
+            outcome = UnityLeanMcp.CoverageLifecycleManager.CompleteCoverageAttempt(runId);
             lifecycleState = string.Join(";", new[]
             {
                 UnityEditor.SessionState.GetString(GetCoverageHandler.CoverageAttemptKey, ""),
@@ -1080,9 +1080,9 @@ public class CoverageFormattingTests
                 "inProgress=" + UnityLeanMcpCompilationTracker.CompilationInProgress,
                 "refreshRequired=" + UnityLeanMcpCompilationTracker.RefreshRequired
             });
-            if (outcome == null || !outcome.StartsWith("pending|", StringComparison.Ordinal)) break;
+            if (!outcome.HasOutcome || !outcome.IsPending) break;
         }
-        Assert.True(outcome != null && outcome.StartsWith("available|", StringComparison.Ordinal),
+        Assert.True(outcome.State == UnityLeanMcp.CoverageCompletionState.Available,
             lifecycleState);
     }
 
