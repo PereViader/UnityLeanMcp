@@ -26,6 +26,10 @@ namespace UnityLeanMcp
                 if (!s_Initialized) EnsureInitialized();
                 return s_ProjectRoot;
             }
+            internal set
+            {
+                ResetForTesting(value);
+            }
         }
 
         public static string TempDir
@@ -132,6 +136,19 @@ namespace UnityLeanMcp
             }
         }
 
+        internal static void ResetForTesting(string projectRoot)
+        {
+            if (string.IsNullOrEmpty(projectRoot))
+            {
+                throw new ArgumentException("Project root cannot be null or empty.", nameof(projectRoot));
+            }
+
+            lock (s_InitLock)
+            {
+                InitializeFromProjectRoot(Path.GetFullPath(projectRoot));
+            }
+        }
+
         public static void EnsureInitialized()
         {
             if (s_Initialized) return;
@@ -148,19 +165,24 @@ namespace UnityLeanMcp
                     Debug.LogError($"UnityLeanMcp: Failed to initialize ProjectRoot: {ex}");
                 }
                 if (string.IsNullOrEmpty(projectRoot)) return;
-                string tempDir = Path.Combine(projectRoot, "Temp");
-                s_ProjectRoot = projectRoot;
-                s_PortFile = Path.Combine(tempDir, "unity_lean_mcp_port.txt");
-                s_DiagnosticsFile = Path.Combine(tempDir, "unity_compilation_errors.txt");
-                s_RefreshResultFile = Path.Combine(tempDir, "unity_refresh_result.json");
-                s_TestRunningFile = Path.Combine(tempDir, "unity_test_running.txt");
-                s_TestCancellationFile = Path.Combine(tempDir, "unity_test_cancellation.txt");
-                s_TestResultsFile = Path.Combine(tempDir, "unity_test_results.json");
-                s_EvalResultFile = Path.Combine(tempDir, "unity_eval_result.json");
-                s_WorkerLogFile = Path.Combine(tempDir, "unity_lean_mcp_worker.log");
-                s_TempDir = tempDir;
-                s_Initialized = true;
+                InitializeFromProjectRoot(projectRoot);
             }
+        }
+
+        private static void InitializeFromProjectRoot(string projectRoot)
+        {
+            string tempDir = Path.Combine(projectRoot, "Temp");
+            s_ProjectRoot = projectRoot;
+            s_PortFile = Path.Combine(tempDir, "unity_lean_mcp_port.txt");
+            s_DiagnosticsFile = Path.Combine(tempDir, "unity_compilation_errors.txt");
+            s_RefreshResultFile = Path.Combine(tempDir, "unity_refresh_result.json");
+            s_TestRunningFile = Path.Combine(tempDir, "unity_test_running.txt");
+            s_TestCancellationFile = Path.Combine(tempDir, "unity_test_cancellation.txt");
+            s_TestResultsFile = Path.Combine(tempDir, "unity_test_results.json");
+            s_EvalResultFile = Path.Combine(tempDir, "unity_eval_result.json");
+            s_WorkerLogFile = Path.Combine(tempDir, "unity_lean_mcp_worker.log");
+            s_TempDir = tempDir;
+            s_Initialized = true;
         }
     }
 }

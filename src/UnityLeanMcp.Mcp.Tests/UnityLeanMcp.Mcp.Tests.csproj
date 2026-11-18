@@ -30,105 +30,45 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanJson.cs" Link="UnityLeanJson.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CommandHelper.cs" Link="CommandHelper.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CommandTypes.cs" Link="CommandTypes.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ICommandHandler.cs" Link="ICommandHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpPaths.cs" Link="UnityLeanMcpPaths.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanJson.cs" Link="UnityLeanJson.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\McpConfigurationWriter.cs" Link="McpConfigurationWriter.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CompilationCommandHandlerBase.cs" Link="CompilationCommandHandlerBase.cs" />
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityCommandGate.cs" Link="UnityCommandGate.cs"><Nullable>disable</Nullable></Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RoslynCompilerHelper.cs" Link="RoslynCompilerHelper.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\WorkerThreadSnapshots.cs" Link="WorkerThreadSnapshots.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\WorkerDiagnosticsLogger.cs" Link="WorkerDiagnosticsLogger.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ServerThreadShutdown.cs" Link="ServerThreadShutdown.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpStaticHistoryWriter.cs" Link="UnityLeanMcpStaticHistoryWriter.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\McpConfigurationPaths.cs" Link="McpConfigurationPaths.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.cs" Link="UnityInspect.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.SceneAndHierarchy.cs" Link="UnityInspect.SceneAndHierarchy.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.UIToolkit.cs" Link="UnityInspect.UIToolkit.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.ObjectAndComponent.cs" Link="UnityInspect.ObjectAndComponent.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.AssetsAndPrefabs.cs" Link="UnityInspect.AssetsAndPrefabs.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.CameraAndCapture.cs" Link="UnityInspect.CameraAndCapture.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpDispatcher.cs" Link="UnityLeanMcpDispatcher.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CancelOperationHandler.cs" Link="CancelOperationHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpCompilationTracker.cs" Link="UnityLeanMcpCompilationTracker.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RefreshErrorLogCapture.cs" Link="RefreshErrorLogCapture.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollHelper.cs" Link="PollHelper.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollRefreshHandler.cs" Link="PollRefreshHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollTestsHandler.cs" Link="PollTestsHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\EvalHandler.cs" Link="EvalHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityResultFormatter.cs" Link="UnityResultFormatter.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\GetCoverageHandler.cs" Link="GetCoverageHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CoverageLifecycleManager.cs" Link="CoverageLifecycleManager.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CompilationInputIdentityCalculator.cs" Link="CompilationInputIdentityCalculator.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CoverageSequencePointHarvester.cs" Link="CoverageSequencePointHarvester.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\MyTestCallbacks.cs" Link="MyTestCallbacks.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.cs" Link="RunTestsHandler.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.CoveragePrep.cs" Link="RunTestsHandler.CoveragePrep.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.MonitorAndCancel.cs" Link="RunTestsHandler.MonitorAndCancel.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ConsoleLogCapture.cs" Link="ConsoleLogCapture.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
-    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\TestDiscoveryHelper.cs" Link="TestDiscoveryHelper.cs">
-      <Nullable>disable</Nullable>
-    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityCommandGate.cs" Link="UnityCommandGate.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RoslynCompilerHelper.cs" Link="RoslynCompilerHelper.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\WorkerThreadSnapshots.cs" Link="WorkerThreadSnapshots.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\WorkerDiagnosticsLogger.cs" Link="WorkerDiagnosticsLogger.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ServerThreadShutdown.cs" Link="ServerThreadShutdown.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpStaticHistoryWriter.cs" Link="UnityLeanMcpStaticHistoryWriter.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\McpConfigurationPaths.cs" Link="McpConfigurationPaths.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.cs" Link="UnityInspect.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.SceneAndHierarchy.cs" Link="UnityInspect.SceneAndHierarchy.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.UIToolkit.cs" Link="UnityInspect.UIToolkit.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.ObjectAndComponent.cs" Link="UnityInspect.ObjectAndComponent.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.AssetsAndPrefabs.cs" Link="UnityInspect.AssetsAndPrefabs.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.CameraAndCapture.cs" Link="UnityInspect.CameraAndCapture.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpDispatcher.cs" Link="UnityLeanMcpDispatcher.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CancelOperationHandler.cs" Link="CancelOperationHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpCompilationTracker.cs" Link="UnityLeanMcpCompilationTracker.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RefreshErrorLogCapture.cs" Link="RefreshErrorLogCapture.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollHelper.cs" Link="PollHelper.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollRefreshHandler.cs" Link="PollRefreshHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollTestsHandler.cs" Link="PollTestsHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\EvalHandler.cs" Link="EvalHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityResultFormatter.cs" Link="UnityResultFormatter.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\GetCoverageHandler.cs" Link="GetCoverageHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CoverageLifecycleManager.cs" Link="CoverageLifecycleManager.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CompilationInputIdentityCalculator.cs" Link="CompilationInputIdentityCalculator.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CoverageSequencePointHarvester.cs" Link="CoverageSequencePointHarvester.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\MyTestCallbacks.cs" Link="MyTestCallbacks.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.cs" Link="RunTestsHandler.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.CoveragePrep.cs" Link="RunTestsHandler.CoveragePrep.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RunTestsHandler.MonitorAndCancel.cs" Link="RunTestsHandler.MonitorAndCancel.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\ConsoleLogCapture.cs" Link="ConsoleLogCapture.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\TestDiscoveryHelper.cs" Link="TestDiscoveryHelper.cs" />
   </ItemGroup>
 
 </Project>

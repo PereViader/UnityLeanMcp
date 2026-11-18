@@ -14,6 +14,7 @@ public sealed class CommandGatePublicationTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         UnityLeanMcpPaths.ProjectRoot = _root;
+        Directory.CreateDirectory(UnityLeanMcpPaths.TempDir);
         UnityCommandGate.ForceReset();
         UnityCommandGate.RetryThrottleMs = 0;
         SessionState.EraseString("UnityLeanMcp_PendingResult");
@@ -571,9 +572,12 @@ public sealed class CommandGatePublicationTests : IDisposable
         EditorApplication.Tick();
         Assert.NotNull(published);
         using var document = System.Text.Json.JsonDocument.Parse(published);
-        Assert.Equal("cancelled-run", document.RootElement.GetProperty("operationId").GetString());
+        Assert.Equal("cancelled-run", document.RootElement.GetProperty("runId").GetString());
         Assert.Equal(OperationStatus.Cancelled, document.RootElement.GetProperty("resultState").GetString());
-        Assert.True(document.RootElement.GetProperty("interrupted").GetBoolean());
+        Assert.False(document.RootElement.GetProperty("success").GetBoolean());
+        var parsed = UnityEngine.JsonUtility.FromJson<UnityLeanMcp.UnityTestRunResult>(published)!;
+        Assert.Equal("cancelled-run", parsed.OperationId);
+        Assert.True(parsed.Interrupted);
         Assert.Null(UnityCommandGate.ReadSnapshot());
     }
 

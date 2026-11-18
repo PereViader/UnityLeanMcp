@@ -486,6 +486,7 @@ namespace UnityEngine
 
     public static class Application
     {
+        public static string dataPath { get; set; } = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "Assets");
         public static string unityVersion { get; set; } = "6000.7.0f1";
         public static bool isPlaying { get; set; } = false;
         public delegate void LogCallback(string condition, string stackTrace, LogType type);
@@ -1030,35 +1031,10 @@ namespace UnityLeanMcp
         public static string UnescapeLine(string? text) => UnityLeanMcp.Mcp.ProtocolCodec.UnescapeLine(text) ?? string.Empty;
     }
 
-    internal static class CommandHelper
-    {
-        public static bool IsAssetImportWorkerProcess() => false;
-        public static string ReadFileWithRetry(string path, int maxRetries = 3, int delayMs = 10) =>
-            System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : string.Empty;
-        public static bool DeleteFileWithRetry(string path, int maxRetries = 3, int delayMs = 10)
-        {
-            if (System.IO.File.Exists(path))
-            {
-                System.IO.File.Delete(path);
-                return true;
-            }
-            return false;
-        }
-    }
-
     internal static class UnityLeanMcpServer
     {
         public static bool IsPlayModeActive { get; internal set; }
         public static bool IsPlayModeChanging { get; internal set; }
-    }
-
-    [Serializable]
-    public class ConsoleLogEntry
-    {
-        public string type = "";
-        public string logType = "";
-        public string message = "";
-        public string stackTrace = "";
     }
 
     internal static class OperationExecutionEngine
@@ -1110,28 +1086,6 @@ namespace UnityLeanMcp
         }
     }
 
-    internal static class UnityLeanMcpPaths
-    {
-        public static void EnsureInitialized() { }
-        public static string TempDir => System.IO.Path.Combine(ProjectRoot, "Temp");
-        public static string GetResultFilePath(string kind, string id) => System.IO.Path.Combine(ProjectRoot, kind + "_" + id + ".json");
-        public static string GetTestResultsFile(string id) => GetResultFilePath("test", id);
-        public static string GetEvalResultFile(string id) => GetResultFilePath("eval", id);
-        public static string GetRefreshResultFile(string id) => GetResultFilePath("refresh", id);
-        public static string TestResultsFile => System.IO.Path.Combine(ProjectRoot, "tests.json");
-        public static string TestRunningFile => System.IO.Path.Combine(ProjectRoot, "test_running.json");
-        public static string TestCancellationFile => System.IO.Path.Combine(ProjectRoot, "test_cancel.txt");
-        public static string RefreshResultFile => System.IO.Path.Combine(ProjectRoot, "refresh.json");
-        public static string DiagnosticsFile => System.IO.Path.Combine(ProjectRoot, "Temp", "unity_compile_diagnostics.txt");
-        public static string LogFile => System.IO.Path.Combine(ProjectRoot, "Temp", "unity_lean_mcp_worker.log");
-        public static string ProjectRoot { get; set; } = System.IO.Directory.GetCurrentDirectory();
-    }
-
-    internal static class OperationKinds
-    {
-        public const string Eval = "eval", Test = "test", Refresh = "refresh", Recompile = "recompile";
-    }
-
     internal sealed class CancelledRunIdSet
     {
         public void Add(string id)
@@ -1168,132 +1122,6 @@ namespace UnityLeanMcp
             set => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.Active = value;
         }
         public static readonly CancelledRunIdSet CancelledRunIds = new();
-    }
-
-    internal enum BeginOperationResult { Started, AlreadyStarted, Busy, Invalid }
-    internal sealed class UnityLeanMcpOperationState { public string kind = ""; public string operationId = ""; public string status = ""; }
-    internal enum CommandExecutionTarget { WorkerThread, MainThread, EditModeOnly }
-    internal interface ICommandHandler
-    {
-        CommandExecutionTarget ExecutionTarget => CommandExecutionTarget.EditModeOnly;
-        bool IsMutating => false;
-        bool RequiresCompilationSettled => false;
-        void Handle(string payload, System.IO.StreamWriter writer);
-    }
-    internal static class OperationStatus
-    {
-        public const string Queued = "Queued", Running = "Running", Executing = "Executing", Compiling = "Compiling",
-            Refreshing = "Refreshing", Recompiling = "Recompiling", Cancelling = "Cancelling", Requested = "Requested",
-            WaitingForUnity = "WaitingForUnity", Reloading = "Reloading", ShuttingDown = "ShuttingDown",
-            Interrupted = "Interrupted", Cancelled = "Cancelled", Completed = "Completed";
-    }
-    internal sealed class UnityRefreshResult { public string operationId = ""; public bool success; public bool interrupted; public string message = ""; }
-    internal sealed class UnityOperationResult
-    {
-        public string operationId = "";
-        public string runId = "";
-        public bool success;
-        public bool interrupted;
-        public string resultState = "";
-        public string message = "";
-    }
-
-    [Serializable]
-    public class FailedTestInfo
-    {
-        public string name = "";
-        public string fullName = "";
-        public string message = "";
-        public string stackTrace = "";
-        public double duration;
-    }
-
-    [Serializable]
-    public class RunTestsArgs
-    {
-        public string mode = "";
-        public string[]? testNames;
-        public string[]? groupNames;
-        public string[]? categoryNames;
-        public string[]? assemblyNames;
-        public bool failedOnly;
-        public bool coverage;
-    }
-
-    [Serializable]
-    public class UnityTestRunState
-    {
-        public string runId = "";
-        public string mode = "";
-        public string[]? testNames;
-        public string[]? groupNames;
-        public string[]? categoryNames;
-        public string[]? assemblyNames;
-        public bool coverage;
-        public string status = "";
-        public string jobGuid = "";
-        public string startedUtc = "";
-        public int totalTests;
-        public int completedTests;
-        public int passCount;
-        public int failCount;
-        public int skipCount;
-        public string currentTestName = "";
-    }
-
-    [Serializable]
-    public class UnityTestRunResult
-    {
-        public string runId = "";
-        public bool success;
-        public int failCount;
-        public int passCount;
-        public int skipCount;
-        public string message = "";
-        public string resultState = "";
-        public string? coverageStatus;
-        public string? coverageMessage;
-        public List<FailedTestInfo> failedTests = new();
-        public List<string> otherModeMatches = new();
-        public List<string> nearMatches = new();
-
-        public List<string> OtherModeMatches { get => otherModeMatches; set => otherModeMatches = value; }
-        public List<string> NearMatches { get => nearMatches; set => nearMatches = value; }
-
-        public string operationId => runId;
-        public bool interrupted =>
-            string.Equals(resultState, "Interrupted", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(resultState, "Cancelled", StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Serializable]
-    public class GetCoverageArgs
-    {
-        public string[]? paths;
-    }
-
-    [Serializable]
-    public class UncoveredMethodSpan
-    {
-        public string method = "";
-        public int startLine;
-        public int endLine;
-    }
-
-    [Serializable]
-    public class CoverageFileReport
-    {
-        public string path = "";
-        public int totalPoints;
-        public int coveredPoints;
-        public int[] uncoveredLines = Array.Empty<int>();
-        public List<UncoveredMethodSpan> uncoveredSpans = new();
-    }
-
-    [Serializable]
-    public class CoverageResponsePayload
-    {
-        public List<CoverageFileReport> files = new();
     }
 }
 
