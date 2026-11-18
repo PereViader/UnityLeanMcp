@@ -396,7 +396,7 @@ public class UnityExecutableLocatorTests
 
             Assert.NotNull(pm.ExecutableLocator);
             Assert.Equal("2021.3.16f1", pm.GetProjectEditorVersion());
-            Assert.Equal(((UnityExecutableLocator)pm.ExecutableLocator).GetProjectEditorVersion(), pm.GetProjectEditorVersion());
+            Assert.Equal(pm.ExecutableLocator.GetProjectEditorVersion(), pm.GetProjectEditorVersion());
         }
         finally
         {

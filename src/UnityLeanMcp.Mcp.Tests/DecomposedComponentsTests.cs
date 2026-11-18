@@ -967,16 +967,16 @@ public class DecomposedComponentsTests
     [Fact]
     public void UnityProcessManager_TryExtractProjectPathArgument_ParsesVariousFormats()
     {
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath /foo/bar -nographics", out var path1));
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -projectPath /foo/bar -nographics", out var path1));
         Assert.Equal("/foo/bar", path1);
 
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=\"/foo/bar\" -nographics", out var path2));
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -projectPath=\"/foo/bar\" -nographics", out var path2));
         Assert.Equal("/foo/bar", path2);
 
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("Unity\0-batchmode\0-projectPath\0.\0-nographics", out var path3));
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument("Unity\0-batchmode\0-projectPath\0.\0-nographics", out var path3));
         Assert.Equal(".", path3);
 
-        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -nographics", out _));
+        Assert.False(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -nographics", out _));
     }
 
     private sealed class CountingProcessManager : IUnityProcessManager

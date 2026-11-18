@@ -2,12 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -133,6 +128,30 @@ public class UnityProcessManager : IUnityProcessManager
     /// </summary>
     public virtual bool IsUnityRunning(out int? processId)
     {
+        if (TryFindRunningPidFromPidFiles(out processId))
+        {
+            return true;
+        }
+
+        if (TryFindRunningPidFromLockFile(out processId))
+        {
+            return true;
+        }
+
+        // 3. Fallback: check system processes for Unity instance targeting this project
+        int? sysPid = FindProjectUnityPid();
+        if (sysPid.HasValue)
+        {
+            processId = sysPid;
+            return true;
+        }
+
+        processId = null;
+        return false;
+    }
+
+    private bool TryFindRunningPidFromPidFiles(out int? processId)
+    {
         processId = null;
 
         // 1. Check the durable PID/identity pair. The identity sidecar is
@@ -148,28 +167,39 @@ public class UnityProcessManager : IUnityProcessManager
                 return true;
             }
 
-            try { File.Delete(_pathResolver.PidFile); } catch { }
-            try { File.Delete(pidIdentityFile); } catch { }
+            DeleteFileSilently(_pathResolver.PidFile);
+            DeleteFileSilently(pidIdentityFile);
+            return false;
         }
-        else if (File.Exists(_pathResolver.PidFile))
-        {
-            try
-            {
-                string pidText = ReadFileWithRetry(_pathResolver.PidFile).Trim();
-                if (int.TryParse(pidText, out int rawPid) && rawPid > 0 && IsOwnedPid(rawPid))
-                {
-                    processId = rawPid;
-                    return true;
-                }
 
-                try { File.Delete(_pathResolver.PidFile); } catch { }
-                try { File.Delete(pidIdentityFile); } catch { }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Error reading pid file {PidFile}", _pathResolver.PidFile);
-            }
+        if (!File.Exists(_pathResolver.PidFile))
+        {
+            return false;
         }
+
+        try
+        {
+            string pidText = FileIoRetryHelper.ReadFileWithRetry(_pathResolver.PidFile).Trim();
+            if (int.TryParse(pidText, out int rawPid) && rawPid > 0 && IsOwnedPid(rawPid))
+            {
+                processId = rawPid;
+                return true;
+            }
+
+            DeleteFileSilently(_pathResolver.PidFile);
+            DeleteFileSilently(pidIdentityFile);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error reading pid file {PidFile}", _pathResolver.PidFile);
+        }
+
+        return false;
+    }
+
+    private bool TryFindRunningPidFromLockFile(out int? processId)
+    {
+        processId = null;
 
         // 2. Check Temp/UnityLockfile or Temp/UnityLockFile
         string lockFilePath = Path.Combine(_pathResolver.TempDir, "UnityLockfile");
@@ -178,98 +208,109 @@ public class UnityProcessManager : IUnityProcessManager
             lockFilePath = Path.Combine(_pathResolver.TempDir, "UnityLockFile");
         }
 
-        bool? isLocked = null;
-        bool CheckIsLocked() => isLocked ??= IsFileLocked(lockFilePath);
-
-        if (File.Exists(lockFilePath))
+        if (!File.Exists(lockFilePath))
         {
-            // Try reading PID from lockfile (4-byte binary or text)
-            try
-            {
-                var fileInfo = new FileInfo(lockFilePath);
-                int lockPid = 0;
-                if (fileInfo.Length == 4)
-                {
-                    byte[] bytes = File.ReadAllBytes(lockFilePath);
-                    lockPid = BitConverter.ToInt32(bytes, 0);
-                }
-                else if (fileInfo.Length > 0)
-                {
-                    string text = ReadFileWithRetry(lockFilePath, maxRetries: 1).Trim();
-                    int.TryParse(text, out lockPid);
-                }
-
-                if (lockPid > 0)
-                {
-                    if (IsOwnedPid(lockPid))
-                    {
-                        processId = lockPid;
-                        return true;
-                    }
-
-                    // For GUI instances (which do not have a .identity.json record),
-                    // verify the candidate process is alive and is a Unity instance.
-                    try
-                    {
-                        using var proc = Process.GetProcessById(lockPid);
-                        if (!proc.HasExited && (proc.ProcessName.Contains("Unity", StringComparison.OrdinalIgnoreCase) ||
-                                                proc.ProcessName.Contains("unity-editor", StringComparison.OrdinalIgnoreCase)))
-                        {
-                            if (TryGetProcessCommandLine(proc, out string commandLine))
-                            {
-                                if (CommandLineTargetsProject(commandLine, proc.Id))
-                                {
-                                    processId = lockPid;
-                                    return true;
-                                }
-                            }
-                            else if (CheckIsLocked() || RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                            {
-                                processId = lockPid;
-                                return true;
-                            }
-                        }
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-
-            // Check if file is actively locked by an operating system handle
-            if (CheckIsLocked())
-            {
-                int? projectPid = FindProjectUnityPid();
-                if (projectPid.HasValue)
-                {
-                    processId = projectPid.Value;
-                    return true;
-                }
-
-                // A lock held in this project's Temp directory is enough to
-                // establish that starting another Editor would be unsafe, even
-                // when this host cannot inspect the lock holder's command line.
-                // This is intentionally not process ownership proof: callers
-                // receive no PID and therefore cannot use it to terminate an
-                // Editor. It only makes startup wait for the existing Editor to
-                // republish its socket (or release the lock) instead of racing it
-                // with a conflicting launch.
-                processId = null;
-                _logger.LogInformation(
-                    "Unity project lockfile {LockFile} is held but its process cannot be attributed; waiting for the existing Editor socket.",
-                    lockFilePath);
-                return true;
-            }
+            return false;
         }
 
-        // 3. Fallback: check system processes for Unity instance targeting this project
-        int? sysPid = FindProjectUnityPid();
-        if (sysPid.HasValue)
+        bool? isLocked = null;
+        bool CheckIsLocked() => isLocked ??= FileIoRetryHelper.IsFileLocked(lockFilePath);
+
+        if (TryReadLockFilePid(lockFilePath, out int lockPid) &&
+            IsLockFilePidAlive(lockPid, CheckIsLocked))
         {
-            processId = sysPid;
+            processId = lockPid;
             return true;
         }
 
-        return false;
+        // Check if file is actively locked by an operating system handle
+        if (!CheckIsLocked())
+        {
+            return false;
+        }
+
+        int? projectPid = FindProjectUnityPid();
+        if (projectPid.HasValue)
+        {
+            processId = projectPid.Value;
+            return true;
+        }
+
+        // A lock held in this project's Temp directory is enough to
+        // establish that starting another Editor would be unsafe, even
+        // when this host cannot inspect the lock holder's command line.
+        // This is intentionally not process ownership proof: callers
+        // receive no PID and therefore cannot use it to terminate an
+        // Editor. It only makes startup wait for the existing Editor to
+        // republish its socket (or release the lock) instead of racing it
+        // with a conflicting launch.
+        processId = null;
+        _logger.LogInformation(
+            "Unity project lockfile {LockFile} is held but its process cannot be attributed; waiting for the existing Editor socket.",
+            lockFilePath);
+        return true;
+    }
+
+    private static bool TryReadLockFilePid(string lockFilePath, out int lockPid)
+    {
+        lockPid = 0;
+        try
+        {
+            var fileInfo = new FileInfo(lockFilePath);
+            if (fileInfo.Length == 4)
+            {
+                byte[] bytes = File.ReadAllBytes(lockFilePath);
+                lockPid = BitConverter.ToInt32(bytes, 0);
+            }
+            else if (fileInfo.Length > 0)
+            {
+                string text = FileIoRetryHelper.ReadFileWithRetry(lockFilePath, maxRetries: 1).Trim();
+                int.TryParse(text, out lockPid);
+            }
+        }
+        catch
+        {
+            lockPid = 0;
+        }
+
+        return lockPid > 0;
+    }
+
+    private bool IsLockFilePidAlive(int lockPid, Func<bool> checkIsLocked)
+    {
+        if (IsOwnedPid(lockPid))
+        {
+            return true;
+        }
+
+        // For GUI instances (which do not have a .identity.json record),
+        // verify the candidate process is alive and is a Unity instance.
+        try
+        {
+            using var proc = Process.GetProcessById(lockPid);
+            if (proc.HasExited ||
+                (!proc.ProcessName.Contains("Unity", StringComparison.OrdinalIgnoreCase) &&
+                 !proc.ProcessName.Contains("unity-editor", StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+
+            if (TryGetProcessCommandLine(proc, out string commandLine))
+            {
+                return CommandLineTargetsProject(commandLine, proc.Id);
+            }
+
+            return checkIsLocked() || RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void DeleteFileSilently(string path)
+    {
+        try { File.Delete(path); } catch { }
     }
 
     private string GetPidIdentityFilePath() => _processIdentityStore.FilePath;
@@ -319,50 +360,6 @@ public class UnityProcessManager : IUnityProcessManager
         return _processIdentityStore.TryGetOwnedProcess(pid, _pathResolver.ProjectRoot, out process);
     }
 
-    private sealed class StartupClaim
-    {
-        public string ClaimId { get; init; } = string.Empty;
-        public int ProcessId { get; init; }
-        public long StartTimeUtcTicks { get; init; }
-        public string ExecutablePath { get; init; } = string.Empty;
-        public string ProjectRoot { get; init; } = string.Empty;
-    }
-
-    internal static void WriteTextAtomically(string path, string content)
-    {
-        string? directory = Path.GetDirectoryName(path);
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            throw new ArgumentException("The target path must include a directory.", nameof(path));
-        }
-
-        Directory.CreateDirectory(directory);
-        string temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            using (var stream = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4096,
-                options: FileOptions.SequentialScan))
-            {
-                byte[] bytes = Encoding.UTF8.GetBytes(content);
-                stream.Write(bytes, 0, bytes.Length);
-                stream.Flush(flushToDisk: true);
-            }
-
-            // Holding the startup lock prevents concurrent publication races while
-            // replacing any stale PID pointer that could not be deleted before launch.
-            File.Move(temporaryPath, path, overwrite: true);
-        }
-        finally
-        {
-            try { File.Delete(temporaryPath); } catch { }
-        }
-    }
-
     private async Task<FileStream> AcquireStartupLockAsync(CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_pathResolver.TempDir);
@@ -370,10 +367,9 @@ public class UnityProcessManager : IUnityProcessManager
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            FileStream stream;
             try
             {
-                stream = new FileStream(
+                return new FileStream(
                     _pathResolver.StartupLockFile,
                     FileMode.OpenOrCreate,
                     FileAccess.ReadWrite,
@@ -387,7 +383,6 @@ public class UnityProcessManager : IUnityProcessManager
                 // inode is intentionally retained: on POSIX, unlinking an
                 // open lock file would let a waiter create a second inode.
                 await Task.Delay(100, cancellationToken);
-                continue;
             }
             catch (UnauthorizedAccessException) when (File.Exists(_pathResolver.StartupLockFile))
             {
@@ -395,64 +390,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // Keep waiting for the owning handle to close; cancellation
                 // remains the only bounded exit from this wait.
                 await Task.Delay(100, cancellationToken);
-                continue;
             }
-
-            try
-            {
-                WriteStartupClaim(stream);
-                return stream;
-            }
-            catch
-            {
-                stream.Dispose();
-                throw;
-            }
-        }
-    }
-
-    private void WriteStartupClaim(FileStream stream)
-    {
-        using Process currentProcess = Process.GetCurrentProcess();
-        FileUnityProcessIdentityStore.TryGetProcessStartTimeTicks(currentProcess, out long startTimeTicks);
-
-        var claim = new StartupClaim
-        {
-            ClaimId = Guid.NewGuid().ToString("N"),
-            ProcessId = currentProcess.Id,
-            StartTimeUtcTicks = startTimeTicks,
-            ExecutablePath = FileUnityProcessIdentityStore.TryGetProcessPath(currentProcess) ?? string.Empty,
-            ProjectRoot = _pathResolver.ProjectRoot
-        };
-
-        byte[] bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(claim));
-        stream.SetLength(0);
-        stream.Position = 0;
-        stream.Write(bytes, 0, bytes.Length);
-        stream.Flush(flushToDisk: true);
-    }
-
-    private static bool IsFileLocked(string filePath)
-    {
-        try
-        {
-            using var stream = File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            return false;
-        }
-        catch (IOException)
-        {
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Windows can report an existing FileShare.None claim as access
-            // denied. Preserve the lockfile rather than treating an
-            // unprobeable file as stale and deleting it.
-            return true;
-        }
-        catch
-        {
-            return false;
         }
     }
 
@@ -580,162 +518,12 @@ public class UnityProcessManager : IUnityProcessManager
         return UnityProcessCommandLineReader.TryRead(process.Id, out commandLine);
     }
 
-    internal bool CommandLineTargetsProject(string commandLine, int? processId = null)
-    {
-        if (!TryExtractProjectPathArgument(commandLine, out string? projectPathArg) ||
-            string.IsNullOrWhiteSpace(projectPathArg))
-            return false;
-
-        // Only an explicit project argument proves intent. Relative arguments
-        // belong to the Editor's working directory, never this host's directory.
-        if (Path.IsPathFullyQualified(projectPathArg))
-            return FileUnityProcessIdentityStore.PathsEqual(projectPathArg, _pathResolver.ProjectRoot);
-
-        if (processId.HasValue && (LinuxProcessCwdProvider != null || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
-        {
-            string? procCwd = TryGetLinuxProcessCwd(processId.Value);
-            if (!string.IsNullOrWhiteSpace(procCwd) && Path.IsPathFullyQualified(procCwd))
-            {
-                try
-                {
-                    string combined = Path.GetFullPath(Path.Combine(procCwd, projectPathArg));
-                    return FileUnityProcessIdentityStore.PathsEqual(combined, _pathResolver.ProjectRoot);
-                }
-                catch { }
-            }
-        }
-
-        return false;
-    }
-
-    internal static bool TryExtractProjectPathArgument(string commandLine, out string? projectPath)
-    {
-        projectPath = null;
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return false;
-        }
-
-        List<string> tokens = ParseCommandLineTokens(commandLine);
-
-        for (int i = 0; i < tokens.Count; i++)
-        {
-            string part = tokens[i].Trim('"', '\'');
-            if (part.Equals("-projectPath", StringComparison.OrdinalIgnoreCase))
-            {
-                if (i + 1 < tokens.Count)
-                {
-                    projectPath = tokens[i + 1].Trim('"', '\'');
-                    return !string.IsNullOrWhiteSpace(projectPath);
-                }
-            }
-            else if (part.StartsWith("-projectPath=", StringComparison.OrdinalIgnoreCase))
-            {
-                projectPath = part.Substring("-projectPath=".Length).Trim('"', '\'');
-                return !string.IsNullOrWhiteSpace(projectPath);
-            }
-        }
-
-        return false;
-    }
-
-    private static List<string> ParseCommandLineTokens(string commandLine)
-    {
-        var tokens = new List<string>();
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return tokens;
-        }
-
-        if (commandLine.Contains('\0'))
-        {
-            string[] rawParts = commandLine.Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (rawParts.Length > 1)
-            {
-                tokens.AddRange(rawParts);
-                return tokens;
-            }
-
-            if (rawParts.Length == 1)
-            {
-                return TokenizeSpaceSeparated(rawParts[0]);
-            }
-
-            return tokens;
-        }
-
-        return TokenizeSpaceSeparated(commandLine);
-    }
-
-    private static List<string> TokenizeSpaceSeparated(string text)
-    {
-        var tokens = new List<string>();
-        var current = new StringBuilder();
-        bool inQuotes = false;
-        char quoteChar = '\0';
-
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if ((c == '"' || c == '\'') && !inQuotes)
-            {
-                inQuotes = true;
-                quoteChar = c;
-            }
-            else if (inQuotes && c == quoteChar)
-            {
-                inQuotes = false;
-                quoteChar = '\0';
-            }
-            else if (!inQuotes && (c == ' ' || c == '\t'))
-            {
-                if (current.Length > 0)
-                {
-                    tokens.Add(current.ToString());
-                    current.Clear();
-                }
-            }
-            else
-            {
-                current.Append(c);
-            }
-        }
-
-        if (current.Length > 0)
-        {
-            tokens.Add(current.ToString());
-        }
-
-        return tokens;
-    }
-
-    internal string? TryGetLinuxProcessCwd(int pid)
-    {
-        if (LinuxProcessCwdProvider != null)
-        {
-            try
-            {
-                string? cwd = LinuxProcessCwdProvider(pid);
-                if (!string.IsNullOrWhiteSpace(cwd))
-                {
-                    return FileUnityProcessIdentityStore.ResolveRealPath(cwd);
-                }
-            }
-            catch { }
-        }
-
-        try
-        {
-            string cwdLink = $"/proc/{pid}/cwd";
-            if (Directory.Exists(cwdLink))
-            {
-                return FileUnityProcessIdentityStore.ResolveRealPath(cwdLink);
-            }
-        }
-        catch { }
-
-        return null;
-    }
+    internal bool CommandLineTargetsProject(string commandLine, int? processId = null) =>
+        UnityProcessCommandLineReader.CommandLineTargetsProject(
+            commandLine,
+            _pathResolver.ProjectRoot,
+            processId,
+            LinuxProcessCwdProvider);
 
     /// <summary>
     /// Locates the Unity executable for this project. Delegates to <see cref="IUnityExecutableLocator"/>.
@@ -771,7 +559,7 @@ public class UnityProcessManager : IUnityProcessManager
         return "GUI";
     }
 
-    public string? GetProjectEditorVersion() => (_executableLocator as UnityExecutableLocator)?.GetProjectEditorVersion();
+    public string? GetProjectEditorVersion() => _executableLocator.GetProjectEditorVersion();
 
     internal string DetermineLaunchMode()
     {
@@ -913,7 +701,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // publications, IsUnityRunning can recover from the sidecar
                 // alone; a reused PID cannot satisfy its identity.
                 _processIdentityStore.Write(proc, unityExe, _pathResolver.ProjectRoot, isBatchmode ? "Batchmode" : "GUI");
-                WriteTextAtomically(_pathResolver.PidFile, proc.Id.ToString());
+                FileIoRetryHelper.WriteTextAtomically(_pathResolver.PidFile, proc.Id.ToString());
             }
             catch (Exception ex)
             {
@@ -955,23 +743,7 @@ public class UnityProcessManager : IUnityProcessManager
             {
                 if (startedProcess.HasExited)
                 {
-                    if (File.Exists(_pathResolver.LogFile))
-                    {
-                        string logText = ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
-                        if (_logScanner.HasCompilationErrors(logText))
-                        {
-                            var errorLines = _logScanner.ExtractUniqueCompilationLines(logText);
-                            try
-                            {
-                                Directory.CreateDirectory(_pathResolver.TempDir);
-                                File.WriteAllLines(_pathResolver.CompilationErrorsFile, errorLines);
-                            }
-                            catch { }
-                            throw new UnityCompilationException(
-                                string.Join(Environment.NewLine, errorLines),
-                                errorLines);
-                        }
-                    }
+                    ThrowIfNewStartupCompilationErrors(initialLogOffset);
 
                     string logSnippet = GetLogSnippet(initialLogOffset);
                     throw new InvalidOperationException(
@@ -987,23 +759,7 @@ public class UnityProcessManager : IUnityProcessManager
                 socketIsLive = await IsSocketReadyAsync(2, cancellationToken);
                 if (!socketIsLive.Value && !IsUnityRunning(out _))
                 {
-                    if (File.Exists(_pathResolver.LogFile))
-                    {
-                        string logText = ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
-                        if (_logScanner.HasCompilationErrors(logText))
-                        {
-                            var errorLines = _logScanner.ExtractUniqueCompilationLines(logText);
-                            try
-                            {
-                                Directory.CreateDirectory(_pathResolver.TempDir);
-                                File.WriteAllLines(_pathResolver.CompilationErrorsFile, errorLines);
-                            }
-                            catch { }
-                            throw new UnityCompilationException(
-                                string.Join(Environment.NewLine, errorLines),
-                                errorLines);
-                        }
-                    }
+                    ThrowIfNewStartupCompilationErrors(initialLogOffset);
 
                     string logSnippet = GetLogSnippet(initialLogOffset);
                     throw new InvalidOperationException(
@@ -1012,24 +768,9 @@ public class UnityProcessManager : IUnityProcessManager
             }
 
             // 2. Monitor unity_background_log.txt for compilation errors during startup
-            if (startedProcess != null && File.Exists(_pathResolver.LogFile))
+            if (startedProcess != null)
             {
-                string logText = ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
-                if (_logScanner.HasCompilationErrors(logText))
-                {
-                    _logger.LogError("Compilation errors detected in Unity background log during startup.");
-                    var errorLines = _logScanner.ExtractUniqueCompilationLines(logText);
-                    try
-                    {
-                        Directory.CreateDirectory(_pathResolver.TempDir);
-                        File.WriteAllLines(_pathResolver.CompilationErrorsFile, errorLines);
-                    }
-                    catch { }
-
-                    throw new UnityCompilationException(
-                        string.Join(Environment.NewLine, errorLines),
-                        errorLines);
-                }
+                ThrowIfNewStartupCompilationErrors(initialLogOffset);
             }
 
             // 3. Check socket connection
@@ -1050,6 +791,33 @@ public class UnityProcessManager : IUnityProcessManager
 
             await Task.Delay(1000, cancellationToken);
         }
+    }
+
+    private void ThrowIfNewStartupCompilationErrors(long initialLogOffset)
+    {
+        if (!File.Exists(_pathResolver.LogFile))
+        {
+            return;
+        }
+
+        string logText = FileIoRetryHelper.ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
+        if (!_logScanner.HasCompilationErrors(logText))
+        {
+            return;
+        }
+
+        _logger.LogError("Compilation errors detected in Unity background log during startup.");
+        var errorLines = _logScanner.ExtractUniqueCompilationLines(logText);
+        try
+        {
+            Directory.CreateDirectory(_pathResolver.TempDir);
+            File.WriteAllLines(_pathResolver.CompilationErrorsFile, errorLines);
+        }
+        catch { }
+
+        throw new UnityCompilationException(
+            string.Join(Environment.NewLine, errorLines),
+            errorLines);
     }
 
     public virtual async Task<bool> IsSocketReadyAsync(int timeoutSeconds = 2, CancellationToken cancellationToken = default)
@@ -1079,7 +847,7 @@ public class UnityProcessManager : IUnityProcessManager
         if (!File.Exists(_pathResolver.PortFile)) return 0;
         try
         {
-            string content = ReadFileWithRetry(_pathResolver.PortFile).Trim();
+            string content = FileIoRetryHelper.ReadFileWithRetry(_pathResolver.PortFile).Trim();
             return int.TryParse(content, out int port) ? port : 0;
         }
         catch
@@ -1090,52 +858,6 @@ public class UnityProcessManager : IUnityProcessManager
 
     private string GetLogSnippet(long initialOffset = 0) =>
         _logScanner.GetLogSnippet(_pathResolver.LogFile, initialOffset);
-
-    internal static List<string> ExtractUniqueCompilationLines(string logText) =>
-        new UnityLogScanner().ExtractUniqueCompilationLines(logText);
-
-    public static string ReadFileWithRetry(string path, int maxRetries = 5, int delayMs = 100, long fromOffset = 0)
-    {
-        return ReadFileWithRetry(path, maxRetries, delayMs, fromOffset, ReadFileFromOffset);
-    }
-
-    internal static string ReadFileWithRetry(string path, int maxRetries, int delayMs, long fromOffset, Func<string, long, string> reader)
-    {
-        for (int i = 0; i < maxRetries; i++)
-        {
-            try
-            {
-                return reader(path, fromOffset);
-            }
-            catch (IOException) when (i < maxRetries - 1)
-            {
-                Thread.Sleep(delayMs);
-            }
-            catch (UnauthorizedAccessException) when (i < maxRetries - 1)
-            {
-                Thread.Sleep(delayMs);
-            }
-        }
-        return reader(path, fromOffset);
-    }
-
-    private static string ReadFileFromOffset(string path, long fromOffset)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        if (fromOffset > 0)
-        {
-            if (fs.Length < fromOffset)
-            {
-                fs.Seek(0, SeekOrigin.Begin);
-            }
-            else
-            {
-                fs.Seek(fromOffset, SeekOrigin.Begin);
-            }
-        }
-        using var reader = new StreamReader(fs, Encoding.UTF8);
-        return reader.ReadToEnd();
-    }
 
     private async Task WaitForUnityExitAsync(CancellationToken cancellationToken)
     {

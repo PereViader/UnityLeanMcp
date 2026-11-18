@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -49,6 +50,175 @@ internal static class UnityProcessCommandLineReader
         }
 
         return false;
+    }
+
+    internal static bool CommandLineTargetsProject(
+        string commandLine,
+        string projectRoot,
+        int? processId = null,
+        Func<int, string?>? processWorkingDirectoryProvider = null)
+    {
+        if (!TryExtractProjectPathArgument(commandLine, out string? projectPathArg) ||
+            string.IsNullOrWhiteSpace(projectPathArg))
+        {
+            return false;
+        }
+
+        // Only an explicit project argument proves intent. Relative arguments
+        // belong to the Editor's working directory, never this host's directory.
+        if (Path.IsPathFullyQualified(projectPathArg))
+        {
+            return FileUnityProcessIdentityStore.PathsEqual(projectPathArg, projectRoot);
+        }
+
+        if (processId.HasValue && (processWorkingDirectoryProvider != null || RuntimeInformation.IsOSPlatform(OSPlatform.Linux)))
+        {
+            string? procCwd = TryGetProcessWorkingDirectory(processId.Value, processWorkingDirectoryProvider);
+            if (!string.IsNullOrWhiteSpace(procCwd) && Path.IsPathFullyQualified(procCwd))
+            {
+                try
+                {
+                    string combined = Path.GetFullPath(Path.Combine(procCwd, projectPathArg));
+                    return FileUnityProcessIdentityStore.PathsEqual(combined, projectRoot);
+                }
+                catch { }
+            }
+        }
+
+        return false;
+    }
+
+    internal static bool TryExtractProjectPathArgument(string commandLine, out string? projectPath)
+    {
+        projectPath = null;
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return false;
+        }
+
+        List<string> tokens = ParseCommandLineTokens(commandLine);
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            string part = tokens[i].Trim('"', '\'');
+            if (part.Equals("-projectPath", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < tokens.Count)
+                {
+                    projectPath = tokens[i + 1].Trim('"', '\'');
+                    return !string.IsNullOrWhiteSpace(projectPath);
+                }
+            }
+            else if (part.StartsWith("-projectPath=", StringComparison.OrdinalIgnoreCase))
+            {
+                projectPath = part.Substring("-projectPath=".Length).Trim('"', '\'');
+                return !string.IsNullOrWhiteSpace(projectPath);
+            }
+        }
+
+        return false;
+    }
+
+    internal static List<string> ParseCommandLineTokens(string commandLine)
+    {
+        var tokens = new List<string>();
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return tokens;
+        }
+
+        if (commandLine.Contains('\0'))
+        {
+            string[] rawParts = commandLine.Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (rawParts.Length > 1)
+            {
+                tokens.AddRange(rawParts);
+                return tokens;
+            }
+
+            if (rawParts.Length == 1)
+            {
+                return TokenizeSpaceSeparated(rawParts[0]);
+            }
+
+            return tokens;
+        }
+
+        return TokenizeSpaceSeparated(commandLine);
+    }
+
+    private static List<string> TokenizeSpaceSeparated(string text)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+        char quoteChar = '\0';
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if ((c == '"' || c == '\'') && !inQuotes)
+            {
+                inQuotes = true;
+                quoteChar = c;
+            }
+            else if (inQuotes && c == quoteChar)
+            {
+                inQuotes = false;
+                quoteChar = '\0';
+            }
+            else if (!inQuotes && (c == ' ' || c == '\t'))
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
+    }
+
+    internal static string? TryGetProcessWorkingDirectory(
+        int pid,
+        Func<int, string?>? processWorkingDirectoryProvider = null)
+    {
+        if (processWorkingDirectoryProvider != null)
+        {
+            try
+            {
+                string? cwd = processWorkingDirectoryProvider(pid);
+                if (!string.IsNullOrWhiteSpace(cwd))
+                {
+                    return FileUnityProcessIdentityStore.ResolveRealPath(cwd);
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        try
+        {
+            string cwdLink = $"/proc/{pid}/cwd";
+            if (Directory.Exists(cwdLink))
+            {
+                return FileUnityProcessIdentityStore.ResolveRealPath(cwdLink);
+            }
+        }
+        catch { }
+
+        return null;
     }
 
     internal static bool TryReadLinux(int processId, out string commandLine)

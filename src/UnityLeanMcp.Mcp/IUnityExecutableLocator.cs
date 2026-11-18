@@ -14,4 +14,5 @@ public readonly record struct UnityLocatorResult(string? ExecutablePath, string?
 public interface IUnityExecutableLocator
 {
     UnityLocatorResult FindUnityExecutable();
+    string? GetProjectEditorVersion();
 }

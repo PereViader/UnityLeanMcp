@@ -80,7 +80,7 @@ public class OperationPoller : IOperationPoller
 
         try
         {
-            string json = UnityProcessManager.ReadFileWithRetry(filePath, maxRetries: 3, delayMs: 50);
+            string json = FileIoRetryHelper.ReadFileWithRetry(filePath, maxRetries: 3, delayMs: 50);
             if (string.IsNullOrWhiteSpace(json)) return null;
 
             var result = JsonSerializer.Deserialize<T>(json, s_JsonOptions);

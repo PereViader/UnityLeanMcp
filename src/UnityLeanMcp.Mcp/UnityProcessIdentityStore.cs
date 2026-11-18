@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -52,7 +51,7 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         identity = new UnityProcessIdentityRecord();
         try
         {
-            string json = ReadFileWithRetry(FilePath);
+            string json = FileIoRetryHelper.ReadFileWithRetry(FilePath, maxRetries: ReadRetries, delayMs: ReadRetryDelayMilliseconds);
             identity = JsonSerializer.Deserialize<UnityProcessIdentityRecord>(json) ??
                        new UnityProcessIdentityRecord();
             return identity.ProcessId > 0 && identity.StartTimeUtcTicks > 0;
@@ -84,7 +83,7 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
 
         try
         {
-            WriteTextAtomically(FilePath, JsonSerializer.Serialize(identity));
+            FileIoRetryHelper.WriteTextAtomically(FilePath, JsonSerializer.Serialize(identity));
         }
         catch (Exception ex)
         {
@@ -140,74 +139,6 @@ internal sealed class FileUnityProcessIdentityStore : IUnityProcessIdentityStore
         finally
         {
             candidate?.Dispose();
-        }
-    }
-
-    private static string ReadFileWithRetry(string path)
-    {
-        for (int attempt = 0; attempt < ReadRetries; attempt++)
-        {
-            try
-            {
-                return ReadFile(path);
-            }
-            catch (IOException) when (attempt < ReadRetries - 1)
-            {
-                Thread.Sleep(ReadRetryDelayMilliseconds);
-            }
-            catch (UnauthorizedAccessException) when (attempt < ReadRetries - 1)
-            {
-                Thread.Sleep(ReadRetryDelayMilliseconds);
-            }
-        }
-
-        return ReadFile(path);
-    }
-
-    private static string ReadFile(string path)
-    {
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        return reader.ReadToEnd();
-    }
-
-    private static void WriteTextAtomically(string path, string content)
-    {
-        string? directory = Path.GetDirectoryName(path);
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            throw new ArgumentException("The target path must include a directory.", nameof(path));
-        }
-
-        Directory.CreateDirectory(directory);
-        string temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            using (var stream = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4096,
-                options: FileOptions.SequentialScan))
-            {
-                byte[] bytes = Encoding.UTF8.GetBytes(content);
-                stream.Write(bytes, 0, bytes.Length);
-                stream.Flush(flushToDisk: true);
-            }
-
-            // The identity is published before the PID pointer. Holding the startup
-            // lock prevents concurrent publication races while replacing any stale
-            // identity from a prior run.
-            File.Move(temporaryPath, path, overwrite: true);
-        }
-        finally
-        {
-            try { File.Delete(temporaryPath); } catch { }
         }
     }
 

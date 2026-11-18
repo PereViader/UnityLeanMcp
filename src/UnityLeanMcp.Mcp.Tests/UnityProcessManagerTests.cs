@@ -49,7 +49,7 @@ public class UnityProcessManagerTests
 
             File.AppendAllText(tempFile, "New line 3\nNew line 4\n", Encoding.UTF8);
 
-            string result = UnityProcessManager.ReadFileWithRetry(tempFile, fromOffset: offset);
+            string result = FileIoRetryHelper.ReadFileWithRetry(tempFile, fromOffset: offset);
 
             Assert.Equal("New line 3\nNew line 4\n", result);
         }
@@ -72,7 +72,7 @@ public class UnityProcessManagerTests
             File.WriteAllText(tempFile, "Short fresh text.\n", Encoding.UTF8);
             Assert.True(new FileInfo(tempFile).Length < offset);
 
-            string result = UnityProcessManager.ReadFileWithRetry(tempFile, fromOffset: offset);
+            string result = FileIoRetryHelper.ReadFileWithRetry(tempFile, fromOffset: offset);
 
             Assert.Equal("Short fresh text.\n", result);
         }
@@ -91,7 +91,7 @@ public class UnityProcessManagerTests
             File.WriteAllText(tempFile, "Some existing content\n", Encoding.UTF8);
             long offset = new FileInfo(tempFile).Length;
 
-            string result = UnityProcessManager.ReadFileWithRetry(tempFile, fromOffset: offset);
+            string result = FileIoRetryHelper.ReadFileWithRetry(tempFile, fromOffset: offset);
 
             Assert.Equal(string.Empty, result);
         }
@@ -105,7 +105,7 @@ public class UnityProcessManagerTests
     public void ReadFileWithRetry_WhenTransientUnauthorizedAccessException_RetriesAndSucceeds()
     {
         int attempts = 0;
-        string result = UnityProcessManager.ReadFileWithRetry(
+        string result = FileIoRetryHelper.ReadFileWithRetry(
             "dummy_path.txt",
             maxRetries: 5,
             delayMs: 1,
@@ -128,7 +128,7 @@ public class UnityProcessManagerTests
     public void ReadFileWithRetry_WhenTransientIOException_RetriesAndSucceeds()
     {
         int attempts = 0;
-        string result = UnityProcessManager.ReadFileWithRetry(
+        string result = FileIoRetryHelper.ReadFileWithRetry(
             "dummy_path.txt",
             maxRetries: 5,
             delayMs: 1,
@@ -151,7 +151,7 @@ public class UnityProcessManagerTests
     public void ReadFileWithRetry_WhenMixedTransientExceptions_RetriesAndSucceeds()
     {
         int attempts = 0;
-        string result = UnityProcessManager.ReadFileWithRetry(
+        string result = FileIoRetryHelper.ReadFileWithRetry(
             "dummy_path.txt",
             maxRetries: 5,
             delayMs: 1,
@@ -179,7 +179,7 @@ public class UnityProcessManagerTests
     {
         int attempts = 0;
         var ex = Assert.Throws<UnauthorizedAccessException>(() =>
-            UnityProcessManager.ReadFileWithRetry(
+            FileIoRetryHelper.ReadFileWithRetry(
                 "dummy_path.txt",
                 maxRetries: 3,
                 delayMs: 1,
@@ -205,7 +205,7 @@ public class UnityProcessManagerTests
             using var stream = new FileStream(tempFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
             int attempts = 0;
-            string result = UnityProcessManager.ReadFileWithRetry(
+            string result = FileIoRetryHelper.ReadFileWithRetry(
                 tempFile,
                 maxRetries: 10,
                 delayMs: 25,
@@ -1708,6 +1708,7 @@ public class UnityProcessManagerTests
     private sealed class FixedExecutableLocator : IUnityExecutableLocator
     {
         public UnityLocatorResult FindUnityExecutable() => UnityLocatorResult.Found("/test/unity-editor");
+        public string? GetProjectEditorVersion() => null;
     }
 
     private sealed class DiscoverySocketTransport : IUnitySocketTransport
@@ -2037,32 +2038,32 @@ public class UnityProcessManagerTests
     public void UnityProcessManager_TryExtractProjectPathArgument_ParsesQuotedAndNulArguments()
     {
         // 1. Quoted path with spaces
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath \"C:/My Folder/My Project\" -nographics", out var path1));
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -projectPath \"C:/My Folder/My Project\" -nographics", out var path1));
         Assert.Equal("C:/My Folder/My Project", path1);
 
         // 2. Quoted path with = syntax and spaces
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=\"/Users/test/Unity Projects/Repo\" -nographics", out var path2));
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -projectPath=\"/Users/test/Unity Projects/Repo\" -nographics", out var path2));
         Assert.Equal("/Users/test/Unity Projects/Repo", path2);
 
         // 3. NUL-delimited with spaces in path
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument("Unity\0-batchmode\0-projectPath\0/var/opt/my unity project\0-nographics", out var path3));
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument("Unity\0-batchmode\0-projectPath\0/var/opt/my unity project\0-nographics", out var path3));
         Assert.Equal("/var/opt/my unity project", path3);
 
         // 4. Incomplete or trailing -projectPath
-        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath", out _));
-        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=", out _));
-        Assert.False(UnityProcessManager.TryExtractProjectPathArgument("", out _));
+        Assert.False(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -projectPath", out _));
+        Assert.False(UnityProcessCommandLineReader.TryExtractProjectPathArgument("-batchmode -projectPath=", out _));
+        Assert.False(UnityProcessCommandLineReader.TryExtractProjectPathArgument("", out _));
     }
 
     [Fact]
     public void UnityProcessManager_TryExtractProjectPathArgument_NulDelimitedEqualsWithSpaces_PreservesFullPath()
     {
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument(
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument(
             "-projectPath=/Users/dev/My Unity Project\0-batchmode",
             out string? path1));
         Assert.Equal("/Users/dev/My Unity Project", path1);
 
-        Assert.True(UnityProcessManager.TryExtractProjectPathArgument(
+        Assert.True(UnityProcessCommandLineReader.TryExtractProjectPathArgument(
             "Unity\0-batchmode\0-projectPath=/var/opt/Unity Projects/My Game\0-nographics",
             out string? path2));
         Assert.Equal("/var/opt/Unity Projects/My Game", path2);
@@ -2103,8 +2104,8 @@ public class UnityProcessManagerTests
         try
         {
             var resolver = new UnityPathResolver(projectRoot);
-            UnityProcessManager.WriteTextAtomically(resolver.PidFile, "11111");
-            UnityProcessManager.WriteTextAtomically(resolver.PidFile, "22222");
+            FileIoRetryHelper.WriteTextAtomically(resolver.PidFile, "11111");
+            FileIoRetryHelper.WriteTextAtomically(resolver.PidFile, "22222");
             Assert.Equal("22222", File.ReadAllText(resolver.PidFile));
 
             var dummyProc = StartDummyProcess();
