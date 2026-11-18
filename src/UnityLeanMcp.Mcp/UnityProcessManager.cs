@@ -328,7 +328,7 @@ public class UnityProcessManager : IUnityProcessManager
         public string ProjectRoot { get; init; } = string.Empty;
     }
 
-    private static void WriteTextAtomically(string path, string content)
+    internal static void WriteTextAtomically(string path, string content)
     {
         string? directory = Path.GetDirectoryName(path);
         if (string.IsNullOrWhiteSpace(directory))
@@ -353,10 +353,9 @@ public class UnityProcessManager : IUnityProcessManager
                 stream.Flush(flushToDisk: true);
             }
 
-            // Startup files are removed before a new launch. A non-overwriting
-            // move prevents replacing an identity another host may have
-            // published concurrently.
-            File.Move(temporaryPath, path);
+            // Holding the startup lock prevents concurrent publication races while
+            // replacing any stale PID pointer that could not be deleted before launch.
+            File.Move(temporaryPath, path, overwrite: true);
         }
         finally
         {
@@ -651,18 +650,17 @@ public class UnityProcessManager : IUnityProcessManager
         if (commandLine.Contains('\0'))
         {
             string[] rawParts = commandLine.Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            foreach (string part in rawParts)
+            if (rawParts.Length > 1)
             {
-                if (part.Contains("-projectPath", StringComparison.OrdinalIgnoreCase) &&
-                    (part.Contains(' ') || part.Contains('\t')))
-                {
-                    tokens.AddRange(TokenizeSpaceSeparated(part));
-                }
-                else
-                {
-                    tokens.Add(part);
-                }
+                tokens.AddRange(rawParts);
+                return tokens;
             }
+
+            if (rawParts.Length == 1)
+            {
+                return TokenizeSpaceSeparated(rawParts[0]);
+            }
+
             return tokens;
         }
 

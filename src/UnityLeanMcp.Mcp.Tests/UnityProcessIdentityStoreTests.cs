@@ -134,6 +134,75 @@ public sealed class UnityProcessIdentityStoreTests
         }
     }
 
+    [Fact]
+    public void ResolveRealPath_CustomLinkResolver_HandlesExistingFilesAndDirectories()
+    {
+        string projectRoot = CreateProjectRoot();
+        string realDir = Path.Combine(projectRoot, "RealDirectory");
+        Directory.CreateDirectory(realDir);
+        string realFile = Path.Combine(realDir, "UnityEditor.bin");
+        File.WriteAllText(realFile, "binary");
+
+        string dirLink = Path.Combine(projectRoot, "LinkDirectory");
+        string fileLink = Path.Combine(projectRoot, "LinkFile");
+
+        try
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = path =>
+            {
+                string norm = path.Replace('\\', '/').TrimEnd('/');
+                if (string.Equals(norm, dirLink.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                {
+                    return realDir;
+                }
+
+                if (string.Equals(norm, fileLink.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                {
+                    return realFile;
+                }
+
+                return null;
+            };
+
+            string resolvedDir = FileUnityProcessIdentityStore.ResolveRealPath(dirLink);
+            string resolvedFile = FileUnityProcessIdentityStore.ResolveRealPath(fileLink);
+
+            Assert.Equal(FileUnityProcessIdentityStore.ResolveRealPath(realDir), resolvedDir);
+            Assert.Equal(FileUnityProcessIdentityStore.ResolveRealPath(realFile), resolvedFile);
+            Assert.True(FileUnityProcessIdentityStore.PathsEqual(fileLink, realFile));
+            Assert.True(FileUnityProcessIdentityStore.PathsEqual(dirLink, realDir));
+            Assert.Equal(resolvedFile, UnityLeanMcp.ProjectCommandEnvelope.ResolveRealPath(fileLink));
+        }
+        finally
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = null;
+            DeleteProjectRoot(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ProjectCommandEnvelope_CanonicalizesOnDiskCasingOnCaseInsensitiveVolumes()
+    {
+        string projectRoot = CreateProjectRoot();
+        string mixedCaseProject = Path.Combine(projectRoot, "MyUnityProject");
+        Directory.CreateDirectory(mixedCaseProject);
+
+        try
+        {
+            string lowerCaseVariant = Path.Combine(projectRoot, "myunityproject");
+            if (Directory.Exists(lowerCaseVariant))
+            {
+                string line = UnityLeanMcp.ProjectCommandEnvelope.Encode(lowerCaseVariant, "PING");
+                Assert.True(UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line, mixedCaseProject, out string command));
+                Assert.Equal("PING", command);
+            }
+        }
+        finally
+        {
+            DeleteProjectRoot(projectRoot);
+        }
+    }
+
     private static FileUnityProcessIdentityStore CreateStore(string projectRoot) =>
         new(Path.Combine(projectRoot, "Temp", "unity_lean_mcp_process.pid"));
 

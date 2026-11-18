@@ -1955,8 +1955,8 @@ public class UnityProcessManagerTests
             // 2. NUL-delimited relative -projectPath ./
             Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath\0./\0-nographics\0", testPid));
 
-            // 3. NUL-delimited with space within argument token
-            Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath .\0-nographics\0", testPid));
+            // 3. Single NUL-terminated command line with space-separated arguments
+            Assert.True(pm.CommandLineTargetsProject("Unity -batchmode -projectPath .\0", testPid));
 
             // 4. NUL-delimited with -projectPath=.
             Assert.True(pm.CommandLineTargetsProject("Unity\0-batchmode\0-projectPath=.\0-nographics\0", testPid));
@@ -2052,5 +2052,100 @@ public class UnityProcessManagerTests
         Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath", out _));
         Assert.False(UnityProcessManager.TryExtractProjectPathArgument("-batchmode -projectPath=", out _));
         Assert.False(UnityProcessManager.TryExtractProjectPathArgument("", out _));
+    }
+
+    [Fact]
+    public void UnityProcessManager_TryExtractProjectPathArgument_NulDelimitedEqualsWithSpaces_PreservesFullPath()
+    {
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument(
+            "-projectPath=/Users/dev/My Unity Project\0-batchmode",
+            out string? path1));
+        Assert.Equal("/Users/dev/My Unity Project", path1);
+
+        Assert.True(UnityProcessManager.TryExtractProjectPathArgument(
+            "Unity\0-batchmode\0-projectPath=/var/opt/Unity Projects/My Game\0-nographics",
+            out string? path2));
+        Assert.Equal("/var/opt/Unity Projects/My Game", path2);
+    }
+
+    [Fact]
+    public void CommandLineTargetsProject_NulDelimitedEqualsWithSpaces_MatchesProjectRoot()
+    {
+        string projectRoot = Path.Combine(
+            Path.GetTempPath(),
+            "unity project with spaces_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectRoot);
+
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            var pm = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance);
+
+            Assert.True(pm.CommandLineTargetsProject(
+                $"Unity\0-batchmode\0-projectPath={projectRoot}\0-nographics",
+                processId: 54321));
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_WhenLeftoverPidFileExists_OverwritesWithoutKillingStartedProcess()
+    {
+        string projectRoot = Path.Combine(
+            Path.GetTempPath(),
+            "unity_pm_test_pid_overwrite_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(projectRoot, "Temp"));
+        int dummyPid = 0;
+
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            UnityProcessManager.WriteTextAtomically(resolver.PidFile, "11111");
+            UnityProcessManager.WriteTextAtomically(resolver.PidFile, "22222");
+            Assert.Equal("22222", File.ReadAllText(resolver.PidFile));
+
+            var dummyProc = StartDummyProcess();
+            dummyPid = dummyProc.Id;
+            using var cts = new CancellationTokenSource();
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: new DiscoverySocketTransport(isReady: false),
+                executableLocator: new FixedExecutableLocator())
+            {
+                ProcessStarter = _ =>
+                {
+                    // Simulate a leftover PidFile that could not be removed before launch.
+                    File.WriteAllText(resolver.PidFile, "99999");
+                    cts.Cancel();
+                    return dummyProc;
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cts.Token));
+
+            using (var liveProc = Process.GetProcessById(dummyPid))
+            {
+                Assert.False(liveProc.HasExited);
+            }
+            Assert.Equal(dummyPid.ToString(), File.ReadAllText(resolver.PidFile));
+
+            var store = new FileUnityProcessIdentityStore(resolver.PidFile);
+            Assert.True(store.TryRead(out var identity));
+            Assert.Equal(dummyPid, identity.ProcessId);
+        }
+        finally
+        {
+            try
+            {
+                using var p = Process.GetProcessById(dummyPid);
+                if (!p.HasExited) p.Kill(true);
+            }
+            catch { }
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
     }
 }

@@ -199,9 +199,7 @@ internal static class UnityProcessCommandLineReader
     {
         commandLine = string.Empty;
         IntPtr processHandle = OpenProcess(
-            WindowsProcessQueryInformation |
-            WindowsProcessQueryLimitedInformation |
-            WindowsProcessVirtualMemoryRead,
+            WindowsProcessQueryLimitedInformation,
             false,
             processId);
         if (processHandle == IntPtr.Zero)
@@ -249,13 +247,7 @@ internal static class UnityProcessCommandLineReader
                     {
                         Marshal.Copy(value.Buffer, bytes, 0, bytes.Length);
                     }
-                    else if (!ReadProcessMemory(
-                                 processHandle,
-                                 value.Buffer,
-                                 bytes,
-                                 bytes.Length,
-                                 out IntPtr bytesRead) ||
-                             bytesRead.ToInt64() != bytes.Length)
+                    else if (!TryReadProcessMemory(processId, value.Buffer, bytes))
                     {
                         return false;
                     }
@@ -275,6 +267,33 @@ internal static class UnityProcessCommandLineReader
         }
 
         return false;
+    }
+
+    private static bool TryReadProcessMemory(int processId, IntPtr remoteAddress, byte[] bytes)
+    {
+        IntPtr memoryHandle = OpenProcess(
+            WindowsProcessQueryInformation | WindowsProcessVirtualMemoryRead,
+            false,
+            processId);
+        if (memoryHandle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            return ReadProcessMemory(
+                       memoryHandle,
+                       remoteAddress,
+                       bytes,
+                       bytes.Length,
+                       out IntPtr bytesRead) &&
+                   bytesRead.ToInt64() == bytes.Length;
+        }
+        finally
+        {
+            CloseHandle(memoryHandle);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

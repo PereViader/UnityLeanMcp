@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace UnityLeanMcp
 {
@@ -37,15 +39,44 @@ namespace UnityLeanMcp
         }
 
 #nullable enable
+        private static readonly AsyncLocal<Func<string, string?>?> s_CustomLinkResolver = new AsyncLocal<Func<string, string?>?>();
+
         internal static Func<string, string>? CustomRealPathResolver;
+
+        internal static Func<string, string?>? CustomLinkResolver
+        {
+            get => s_CustomLinkResolver.Value;
+            set => s_CustomLinkResolver.Value = value;
+        }
 #nullable restore
 
         private static string Normalize(string path)
         {
             if (string.IsNullOrWhiteSpace(path)) return path ?? string.Empty;
             string full = CustomRealPathResolver != null ? CustomRealPathResolver(path) : ResolveRealPath(path);
-            string root = Path.GetPathRoot(full);
-            return full.Length == root.Length ? full : full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return TrimTrailingSeparators(full);
+        }
+
+        private static string TrimTrailingSeparators(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+
+            string root = Path.GetPathRoot(path);
+            if (!string.IsNullOrEmpty(root) && path.Length <= root.Length)
+            {
+                return path;
+            }
+
+            string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.IsNullOrEmpty(root) && trimmed.Length < root.Length)
+            {
+                return root;
+            }
+
+            return trimmed;
         }
 
         internal static string ResolveRealPath(string path)
@@ -57,18 +88,17 @@ namespace UnityLeanMcp
 
             try
             {
-                string fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string current = TrimTrailingSeparators(Path.GetFullPath(path));
 
                 int loopCount = 0;
                 const int maxHops = 32;
-                string current = fullPath;
 
                 while (loopCount++ < maxHops)
                 {
                     string finalTarget = ResolveLink(current);
                     if (!string.IsNullOrWhiteSpace(finalTarget))
                     {
-                        string targetFull = Path.GetFullPath(finalTarget).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        string targetFull = TrimTrailingSeparators(Path.GetFullPath(finalTarget));
                         if (!string.Equals(targetFull, current, StringComparison.Ordinal))
                         {
                             current = targetFull;
@@ -79,7 +109,7 @@ namespace UnityLeanMcp
                     string resolvedAncestor = ResolveAncestors(current);
                     if (resolvedAncestor != null)
                     {
-                        string ancestorFull = Path.GetFullPath(resolvedAncestor).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        string ancestorFull = TrimTrailingSeparators(Path.GetFullPath(resolvedAncestor));
                         if (!string.Equals(ancestorFull, current, StringComparison.Ordinal))
                         {
                             current = ancestorFull;
@@ -90,11 +120,11 @@ namespace UnityLeanMcp
                     break;
                 }
 
-                return current;
+                return CanonicalizeExistingPathCasing(current);
             }
             catch
             {
-                return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return TrimTrailingSeparators(path);
             }
         }
 
@@ -109,19 +139,14 @@ namespace UnityLeanMcp
             string relative = path.Substring(root.Length);
             string[] parts = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
 
-            string current = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (string.IsNullOrEmpty(current) && root.StartsWith('/'))
-            {
-                current = "/";
-            }
-
+            string current = root;
             for (int i = 0; i < parts.Length; i++)
             {
                 current = Path.Combine(current, parts[i]);
                 string target = ResolveLink(current);
                 if (!string.IsNullOrWhiteSpace(target))
                 {
-                    string targetPath = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    string targetPath = TrimTrailingSeparators(Path.GetFullPath(target));
                     if (!string.Equals(targetPath, current, StringComparison.Ordinal))
                     {
                         if (i + 1 == parts.Length)
@@ -142,18 +167,35 @@ namespace UnityLeanMcp
         {
             try
             {
-                string trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                if (File.Exists(trimmed) || Directory.Exists(trimmed))
+                string trimmed = TrimTrailingSeparators(path);
+                var customResolver = CustomLinkResolver;
+                if (customResolver != null)
                 {
-                    var resolveMethod = typeof(File).GetMethod("ResolveLinkTarget", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                    if (resolveMethod != null)
+                    string customTarget = customResolver(trimmed) ?? customResolver(trimmed.Replace('\\', '/'));
+                    if (!string.IsNullOrWhiteSpace(customTarget))
                     {
-                        var info = resolveMethod.Invoke(null, new object[] { trimmed, true }) as FileSystemInfo;
-                        if (info != null && !string.IsNullOrWhiteSpace(info.FullName))
+                        if (File.Exists(customTarget))
                         {
-                            return info.FullName;
+                            return new FileInfo(customTarget).FullName;
                         }
+
+                        if (Directory.Exists(customTarget))
+                        {
+                            return new DirectoryInfo(customTarget).FullName;
+                        }
+
+                        return customTarget;
                     }
+                }
+
+                if (File.Exists(trimmed))
+                {
+                    return ResolveOsLinkTarget(typeof(File), trimmed);
+                }
+
+                if (Directory.Exists(trimmed))
+                {
+                    return ResolveOsLinkTarget(typeof(Directory), trimmed);
                 }
             }
             catch
@@ -161,6 +203,87 @@ namespace UnityLeanMcp
             }
 
             return null;
+        }
+
+        private static string ResolveOsLinkTarget(Type fileSystemType, string path)
+        {
+            MethodInfo resolveMethod = fileSystemType.GetMethod("ResolveLinkTarget", BindingFlags.Public | BindingFlags.Static);
+            if (resolveMethod == null)
+            {
+                return null;
+            }
+
+            var info = resolveMethod.Invoke(null, new object[] { path, true }) as FileSystemInfo;
+            return info != null && !string.IsNullOrWhiteSpace(info.FullName) ? info.FullName : null;
+        }
+
+        private static string CanonicalizeExistingPathCasing(string path)
+        {
+            string root = Path.GetPathRoot(path);
+            if (string.IsNullOrEmpty(root))
+            {
+                return path;
+            }
+
+            string relative = path.Substring(root.Length);
+            if (string.IsNullOrEmpty(relative))
+            {
+                return path;
+            }
+
+            string[] parts = relative.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            string current = root;
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string segment = parts[i];
+                string candidate = Path.Combine(current, segment);
+                if (!File.Exists(candidate) && !Directory.Exists(candidate))
+                {
+                    for (int j = i; j < parts.Length; j++)
+                    {
+                        current = Path.Combine(current, parts[j]);
+                    }
+
+                    return current;
+                }
+
+                current = Path.Combine(current, ResolveEntryCasing(current, segment));
+            }
+
+            return current;
+        }
+
+        private static string ResolveEntryCasing(string parentDir, string segment)
+        {
+            try
+            {
+                var entries = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                    ? Directory.EnumerateFileSystemEntries(parentDir, segment)
+                    : Directory.EnumerateFileSystemEntries(parentDir);
+
+                string caseInsensitiveMatch = null;
+                foreach (string entry in entries)
+                {
+                    string name = Path.GetFileName(entry);
+                    if (string.Equals(name, segment, StringComparison.Ordinal))
+                    {
+                        return segment;
+                    }
+
+                    if (caseInsensitiveMatch == null &&
+                        string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
+                    {
+                        caseInsensitiveMatch = name;
+                    }
+                }
+
+                return caseInsensitiveMatch ?? segment;
+            }
+            catch
+            {
+                return segment;
+            }
         }
     }
 }
