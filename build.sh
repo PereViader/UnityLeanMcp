@@ -82,4 +82,9 @@ if [ -d "$backup" ]; then
   rm -rf "$backup" || echo "Notice: Previous loaded binaries retained at $backup" >&2
 fi
 
+if [ "${KEEP_BUILD_DIR:-0}" != "1" ] && [ "${CI:-}" != "true" ]; then
+  echo "Cleaning staging build directory: $BUILD_DIR..."
+  rm -rf "$BUILD_DIR"
+fi
+
 echo "=== Build completed successfully! ==="

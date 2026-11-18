@@ -3,159 +3,16 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.DependencyInjection;
-using System.ComponentModel;
-using System.Linq;
-using System.Reflection;
-using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
-using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
-using ModelContextProtocol.Server;
 using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
-public class ToolFormattingTests
+public sealed class ToolFormattingTests
 {
-    private sealed class FakeUnityProcessManager : UnityProcessManager
-    {
-        public bool Running { get; set; }
-        public int? Pid { get; set; }
-        public string Mode { get; set; } = "Batchmode";
-        public bool StopSuccess { get; set; } = true;
-
-        public FakeUnityProcessManager(IUnityPathResolver pathResolver)
-            : base(pathResolver, NullLogger<UnityProcessManager>.Instance)
-        {
-        }
-
-        public FakeUnityProcessManager(string projectRoot)
-            : this(new UnityPathResolver(projectRoot))
-        {
-        }
-
-        public override bool IsUnityRunning(out int? processId)
-        {
-            processId = Running ? Pid : null;
-            return Running;
-        }
-
-        public override string GetUnityMode(int? pid = null) => Mode;
-
-        public override Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default)
-        {
-            if (Mode == "GUI" && !force)
-            {
-                return Task.FromResult(false);
-            }
-
-            if (StopSuccess)
-            {
-                Running = false;
-            }
-            return Task.FromResult(StopSuccess);
-        }
-
-    }
-
-    private sealed class FakeUnityClient : UnityClient
-    {
-        public UnityRefreshResult RefreshResultToReturn { get; set; } = new();
-        public UnityEvalResult EvalResultToReturn { get; set; } = new();
-        public UnityTestRunResult TestRunResultToReturn { get; set; } = new();
-
-        public FakeUnityClient(UnityProcessManager pm, IUnityPathResolver pathResolver)
-            : base(pm, pathResolver, NullLogger<UnityClient>.Instance)
-        {
-        }
-
-        public FakeUnityClient(UnityProcessManager pm)
-            : this(pm, pm.PathResolver)
-        {
-        }
-
-        public override Task<UnityRefreshResult> RefreshAsync(
-            bool isRecompile = false,
-            IProgress<ProgressNotificationValue>? progress = null,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(RefreshResultToReturn);
-
-        public override Task<UnityEvalResult> EvalAsync(
-            string code,
-            IProgress<ProgressNotificationValue>? progress = null,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(EvalResultToReturn);
-
-        public string[]? LastTestNames { get; private set; }
-        public string[]? LastGroupNames { get; private set; }
-        public string[]? LastCategoryNames { get; private set; }
-        public string[]? LastAssemblyNames { get; private set; }
-        public string? LastMode { get; private set; }
-        public bool LastFailedOnly { get; private set; }
-        public bool LastCoverage { get; private set; }
-        public CoverageResult CoverageResultToReturn { get; set; } = new() { Success = true };
-        public string[]? LastCoveragePaths { get; private set; }
-        public int RunTestsCallCount { get; private set; }
-
-        public override Task<UnityTestRunResult> RunTestsAsync(
-            string[]? testNames,
-            string[]? groupNames,
-            string[]? categoryNames,
-            string[]? assemblyNames,
-            string? mode,
-            bool failedOnly = false,
-            bool coverage = false,
-            IProgress<ProgressNotificationValue>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            RunTestsCallCount++;
-            LastTestNames = testNames;
-            LastGroupNames = groupNames;
-            LastCategoryNames = categoryNames;
-            LastAssemblyNames = assemblyNames;
-            LastMode = mode;
-            LastFailedOnly = failedOnly;
-            LastCoverage = coverage;
-            return Task.FromResult(TestRunResultToReturn);
-        }
-
-        public override Task<CoverageResult> GetCoverageAsync(
-            string[] paths,
-            IProgress<ProgressNotificationValue>? progress = null,
-            CancellationToken cancellationToken = default)
-        {
-            LastCoveragePaths = paths;
-            return Task.FromResult(CoverageResultToReturn);
-        }
-    }
-
-    private static (string tempDir, FakeUnityProcessManager pm, FakeUnityClient client, UnityTools tools) CreateTestContext()
-    {
-        string tempDir = Path.Combine(Path.GetTempPath(), "unity_fmt_test_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "Temp"));
-        Directory.CreateDirectory(Path.Combine(tempDir, "ProjectSettings"));
-
-        var pathResolver = new UnityPathResolver(tempDir);
-        var pm = new FakeUnityProcessManager(pathResolver);
-        var client = new FakeUnityClient(pm, pathResolver);
-        var tools = new UnityTools(client, pathResolver);
-
-        return (tempDir, pm, client, tools);
-    }
-
-    private static string GetResultText(CallToolResult result)
-    {
-        return result.Content.Count > 0 && result.Content[0] is TextContentBlock textBlock
-            ? textBlock.Text
-            : "";
-    }
-
-
     [Fact]
     public void UnityProcessManager_GetUnityMode_DistinguishesBatchmodeAndGui()
     {
@@ -170,7 +27,6 @@ public class ToolFormattingTests
             };
             int testPid = Environment.ProcessId;
 
-            // When identity sidecar exists with matching PID and Mode = Batchmode -> Batchmode
             string identityFile = realPm.PathResolver.PidFile + ".identity.json";
             File.WriteAllText(identityFile, JsonSerializer.Serialize(new
             {
@@ -182,7 +38,6 @@ public class ToolFormattingTests
             }));
             Assert.Equal("Batchmode", realPm.GetUnityMode(testPid));
 
-            // When identity sidecar specifies Mode = GUI -> GUI
             File.WriteAllText(identityFile, JsonSerializer.Serialize(new
             {
                 ProcessId = testPid,
@@ -193,7 +48,6 @@ public class ToolFormattingTests
             }));
             Assert.Equal("GUI", realPm.GetUnityMode(testPid));
 
-            // When identity sidecar does not exist -> GUI
             File.Delete(identityFile);
             Assert.Equal("GUI", realPm.GetUnityMode(testPid));
         }
@@ -203,3251 +57,646 @@ public class ToolFormattingTests
         }
     }
 
-    // ==========================================
-    // 2. unity_refresh tests (including clean: true)
-    // ==========================================
-
     [Fact]
     public async Task UnityRefresh_WhenClean_ReturnsZeroErrorsMessage()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = true,
-                Message = ""
-            };
+            Success = true,
+            Message = ""
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.False(result.IsError);
-            Assert.Equal("AssetDatabase refresh completed with 0 errors.", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.IsError);
+        Assert.Equal("AssetDatabase refresh completed with 0 errors.", ToolFormattingTestContext.GetResultText(result));
     }
 
     [Fact]
     public async Task UnityRefresh_WhenCleanFlag_ReturnsZeroErrorsMessage()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = true,
-                Message = ""
-            };
+            Success = true,
+            Message = ""
+        };
 
-            var result = await tools.UnityRefreshAsync(clean: true);
+        var result = await ctx.Tools.UnityRefreshAsync(clean: true);
 
-            Assert.False(result.IsError);
-            Assert.Equal("Clean script recompilation completed with 0 errors.", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.IsError);
+        Assert.Equal("Clean script recompilation completed with 0 errors.", ToolFormattingTestContext.GetResultText(result));
     }
 
     [Fact]
     public async Task UnityRefresh_WhenBusy_ReportsBusyWithoutClaimingCompilationFailed()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Unity is busy with another operation: BUSY test"
-            };
+            Success = false,
+            Message = "Unity is busy with another operation: BUSY test"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Equal("Unity is busy with another operation: BUSY test", text);
-            Assert.DoesNotContain("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Equal("Unity is busy with another operation: BUSY test", text);
+        Assert.DoesNotContain("Error: Unity compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenCleanAndBusy_ReportsBusyWithoutClaimingRecompilationFailed()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Unity is busy with another operation: BUSY test"
-            };
+            Success = false,
+            Message = "Unity is busy with another operation: BUSY test"
+        };
 
-            var result = await tools.UnityRefreshAsync(clean: true);
+        var result = await ctx.Tools.UnityRefreshAsync(clean: true);
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Equal("Unity is busy with another operation: BUSY test", text);
-            Assert.DoesNotContain("Error: Unity recompilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Equal("Unity is busy with another operation: BUSY test", text);
+        Assert.DoesNotContain("Error: Unity recompilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenInterrupted_ReportsInterruptionCleanly()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Interrupted = true,
-                Message = "Unity operation was interrupted by domain reload or editor restart."
-            };
+            Success = false,
+            Interrupted = true,
+            Message = "Unity operation was interrupted by domain reload or editor restart."
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Equal("Unity operation was interrupted by domain reload or editor restart.", text);
-            Assert.DoesNotContain("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Equal("Unity operation was interrupted by domain reload or editor restart.", text);
+        Assert.DoesNotContain("Error: Unity compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenCompilationFails_ReportsDiagnosticsAndError()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Interrupted = false,
-                Message = "Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist in the current context"
-            };
+            Success = false,
+            Interrupted = false,
+            Message = "Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist in the current context"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("error CS0103", text);
-            Assert.Contains("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("error CS0103", text);
+        Assert.Contains("Error: Unity compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenCleanAndCompilationFails_ReportsDiagnosticsAndRecompilationError()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Interrupted = false,
-                Message = "Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist in the current context"
-            };
-
-            var result = await tools.UnityRefreshAsync(clean: true);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("error CS0103", text);
-            Assert.Contains("Error: Unity recompilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-
-    // ==========================================
-    // 4. unity_eval tests
-    // ==========================================
-
-    [Fact]
-    public async Task UnityEval_VoidWithNoLogs_ReturnsPlaceholderMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = null,
-                Logs = []
-            };
-
-            var result = await tools.UnityEvalAsync("Time.timeScale = 1.0f;");
-
-            Assert.False(result.IsError);
-            Assert.Equal("(Evaluation completed without a return statement. Use 'return <expr>;' to return a value.)", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_WhenLogsAreNull_ReturnsInterruptedMessageWithoutThrowing()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Interrupted = true,
-                Message = "Command interrupted by Unity recompilation.",
-                Logs = null!
-            };
-
-            var result = await tools.UnityEvalAsync("return 42;");
-
-            Assert.True(result.IsError);
-            Assert.Equal("Command interrupted by Unity recompilation.", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_WithNullReturnPayload_ReturnsNullLiteral()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = "null",
-                Logs = []
-            };
-
-            var result = await tools.UnityEvalAsync("return null;");
-
-            Assert.False(result.IsError);
-            Assert.Equal("null", GetResultText(result));
-            Assert.DoesNotContain("Logs:", GetResultText(result));
-            Assert.DoesNotContain("Result:", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_WithPayload_ReturnsPayload()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = "100",
-                Logs = []
-            };
-
-            var result = await tools.UnityEvalAsync("return 50 * 2;");
-
-            Assert.False(result.IsError);
-            Assert.Equal("100", GetResultText(result));
-            Assert.DoesNotContain("Logs:", GetResultText(result));
-            Assert.DoesNotContain("Result:", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_WithLogs_ReturnsLogs()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = null,
-                Logs = [new ConsoleLogEntry { LogType = "Log", Message = "Logged message from snippet" }]
-            };
-
-            var result = await tools.UnityEvalAsync("Debug.Log(\"Logged message from snippet\");");
-
-            Assert.False(result.IsError);
-            Assert.Equal("Logged message from snippet", GetResultText(result));
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_WithLogsAndPayload_SeparatesLogsAndResult()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = "42",
-                Logs =
-                [
-                    new ConsoleLogEntry { LogType = "Log", Message = "Calculating value..." },
-                    new ConsoleLogEntry { LogType = "Warning", Message = "Calculation took longer than expected" }
-                ],
-                Duration = 0.05
-            };
-
-            var result = await tools.UnityEvalAsync("Debug.Log(\"Calculating value...\"); return 42;");
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.StartsWith("Result:", text);
-            Assert.Contains("42", text);
-            Assert.Contains("Logs:", text);
-            Assert.Contains("Calculating value...", text);
-            Assert.Contains("[Warning] Calculation took longer than expected", text);
-            Assert.True(text.IndexOf("Result:") < text.IndexOf("Logs:"), "Result must precede Logs");
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_StructuredJsonInContentBlock1()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = "42",
-                Duration = 0.05,
-                Logs = [new ConsoleLogEntry { LogType = "Log", Message = "step 1" }]
-            };
-
-            var result = await tools.UnityEvalAsync("return 42;");
-
-            Assert.False(result.IsError);
-            Assert.Single(result.Content);
-            Assert.True(result.Content[0] is TextContentBlock);
-
-            string text = GetResultText(result);
-            Assert.Contains("step 1", text);
-            Assert.Contains("42", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_FailureWithLogs_SeparatesLogsAndError()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "NullReferenceException: Object reference not set to an instance of an object",
-                Logs = [new ConsoleLogEntry { LogType = "Error", Message = "Failed to locate target" }]
-            };
-
-            var result = await tools.UnityEvalAsync("return GameObject.Find(\"Missing\").name;");
-
-            Assert.True(result.IsError);
-            Assert.Single(result.Content);
-            string text = GetResultText(result);
-            Assert.StartsWith("Error:", text);
-            Assert.Contains("NullReferenceException:", text);
-            Assert.Contains("Logs:", text);
-            Assert.Contains("[Error] Failed to locate target", text);
-            Assert.True(text.IndexOf("Error:") < text.IndexOf("Logs:"), "Error must precede Logs");
-
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    // ==========================================
-    // 5. unity_test tests
-    // ==========================================
-
-    [Fact]
-    public async Task UnityRunTests_CompileError_FormatsAsTestExecutionAborted()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "CompileError",
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0,
-                Message = "Assets/Scripts/Test.cs(12,8): error CS1002: ; expected"
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.EndsWith("Test execution aborted: Script compilation failed.", text);
-            Assert.Contains("error CS1002", text);
-            Assert.DoesNotContain("Tests Failed: 0 failed", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenFailedTestsAreNull_ReturnsInterruptedMessageWithoutThrowing()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                Interrupted = true,
-                Message = "Test run interrupted by Unity recompilation.",
-                FailedTests = null!
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Equal("Test run interrupted: Test run interrupted by Unity recompilation.", text);
-            Assert.DoesNotContain("Failures:", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenModeIsUnsupported_ReturnsValidationErrorBeforeCallingClient()
-    {
-        var (tempDir, _, client, tools) = CreateTestContext();
-        try
-        {
-            var result = await tools.UnityTestAsync(mode: (UnityTestMode)999);
-
-            Assert.True(result.IsError);
-            Assert.Equal(TestModeParser.InvalidModeMessage, GetResultText(result));
-            Assert.Equal(0, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenModeEnumIsInvalid_ReturnsValidationErrorBeforeCallingClient()
-    {
-        var (tempDir, _, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 1
-            };
-
-            var result = await tools.UnityTestAsync(mode: (UnityTestMode)999);
-
-            Assert.True(result.IsError);
-            Assert.Equal(TestModeParser.InvalidModeMessage, GetResultText(result));
-            Assert.Equal(0, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData(UnityTestMode.EditMode, "editmode")]
-    [InlineData(UnityTestMode.PlayMode, "playmode")]
-    public async Task UnityRunTests_WhenModeIsValid_PassesCanonicalModeToClient(UnityTestMode mode, string expectedMode)
-    {
-        var (tempDir, _, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 1
-            };
-
-            var result = await tools.UnityTestAsync(mode: mode);
-
-            Assert.False(result.IsError);
-            Assert.Equal(expectedMode, client.LastMode);
-            Assert.Equal(1, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_MoreThan25Failures_CapsDetailedOutputAndSummarizesRemainder()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var failedTests = new List<FailedTestInfo>();
-            for (int i = 0; i < 30; i++)
-            {
-                failedTests.Add(new FailedTestInfo
-                {
-                    Name = $"Test_Method_{i}",
-                    FullName = $"MySuite.Test_Method_{i}",
-                    Message = $"Assertion failed in test {i}",
-                    StackTrace = $"at MySuite.Test_Method_{i}() line {i}",
-                    Duration = 0.05
-                });
-            }
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                FailCount = 30,
-                PassCount = 10,
-                SkipCount = 2,
-                FailedTests = failedTests
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-
-            Assert.Contains("Tests Failed: 30 failed, 10 passed, 2 skipped.", text);
-            // First 5 (0..4) are detailed with stack traces
-            Assert.Contains("• MySuite.Test_Method_0 (0.050s)", text);
-            Assert.Contains("at MySuite.Test_Method_0() line 0", text);
-            Assert.Contains("• MySuite.Test_Method_4 (0.050s)", text);
-            Assert.Contains("at MySuite.Test_Method_4() line 4", text);
-
-            // Next 20 (5..24) are concise one-line summaries without stack traces
-            Assert.Contains("• MySuite.Test_Method_5: Assertion failed in test 5", text);
-            Assert.Contains("• MySuite.Test_Method_24: Assertion failed in test 24", text);
-            Assert.DoesNotContain("at MySuite.Test_Method_5()", text);
-            Assert.DoesNotContain("at MySuite.Test_Method_24()", text);
-
-            // Past index 24 (25..29) are truncated and summarized
-            Assert.DoesNotContain("• MySuite.Test_Method_25", text);
-            Assert.Contains("... and 5 more failed test(s).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_LargeDetailedFailures_ReservesBudgetForLaterSummaries()
-    {
-        var (tempDir, _, client, tools) = CreateTestContext();
-        try
-        {
-            string largeStackTrace = new string('S', McpOutputLimits.MaxFailureStackTraceCharacters * 2);
-            var failedTests = new List<FailedTestInfo>();
-            for (int i = 0; i < 25; i++)
-            {
-                failedTests.Add(new FailedTestInfo
-                {
-                    Name = $"LargeFailure_{i}",
-                    FullName = $"Suite.LargeFailure_{i}",
-                    Message = $"Failure summary {i}",
-                    StackTrace = largeStackTrace,
-                    Duration = 0.05
-                });
-            }
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                FailCount = failedTests.Count,
-                FailedTests = failedTests
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-
-            Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
-            Assert.Contains("• Suite.LargeFailure_0 (0.050s)", text);
-            Assert.Contains(McpOutputLimits.FailureStackTraceTruncationMarker, text);
-            Assert.Contains(McpOutputLimits.DetailedFailureOutputTruncationMarker, text);
-
-            // Every later failure remains discoverable as a compact summary despite the large
-            // first-five detail payload consuming most of the aggregate response budget.
-            for (int i = 5; i < failedTests.Count; i++)
-            {
-                Assert.Contains($"• Suite.LargeFailure_{i}: Failure summary {i}", text);
-                Assert.DoesNotContain($"• Suite.LargeFailure_{i} (0.050s)", text);
-            }
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_Under25Failures_ShowsAllWithoutSummaryLine()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var failedTests = new List<FailedTestInfo>();
-            for (int i = 0; i < 3; i++)
-            {
-                failedTests.Add(new FailedTestInfo
-                {
-                    Name = $"Test_{i}",
-                    FullName = $"Suite.Test_{i}",
-                    Message = $"Fail {i}",
-                    StackTrace = $"at Suite.Test_{i}() line {i}",
-                    Duration = 0.01
-                });
-            }
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                FailCount = 3,
-                PassCount = 5,
-                SkipCount = 0,
-                FailedTests = failedTests
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-
-            // Failures <= 5: all detailed with full messages and stack traces
-            Assert.Contains("• Suite.Test_0 (0.010s)", text);
-            Assert.Contains("Message: Fail 0", text);
-            Assert.Contains("at Suite.Test_0() line 0", text);
-
-            Assert.Contains("• Suite.Test_1 (0.010s)", text);
-            Assert.Contains("Message: Fail 1", text);
-            Assert.Contains("at Suite.Test_1() line 1", text);
-
-            Assert.Contains("• Suite.Test_2 (0.010s)", text);
-            Assert.Contains("Message: Fail 2", text);
-            Assert.Contains("at Suite.Test_2() line 2", text);
-
-            // No one-line summary colon format or truncation note
-            Assert.DoesNotContain("• Suite.Test_0:", text);
-            Assert.DoesNotContain("• Suite.Test_1:", text);
-            Assert.DoesNotContain("• Suite.Test_2:", text);
-            Assert.DoesNotContain("more failed test(s).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenTenFailures_FirstFiveDetailedNextFiveSummarizedWithoutStackTraces()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var failedTests = new List<FailedTestInfo>();
-            for (int i = 0; i < 10; i++)
-            {
-                failedTests.Add(new FailedTestInfo
-                {
-                    Name = $"Test_{i}",
-                    FullName = $"Suite.Test_{i}",
-                    Message = $"Failure message {i}",
-                    StackTrace = $"at Suite.Test_{i}() line {i}",
-                    Duration = 0.02
-                });
-            }
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                FailCount = 10,
-                PassCount = 0,
-                SkipCount = 0,
-                FailedTests = failedTests
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-
-            // First 5 (0..4) are detailed with duration, message, and stack trace
-            for (int i = 0; i < 5; i++)
-            {
-                Assert.Contains($"• Suite.Test_{i} (0.020s)", text);
-                Assert.Contains($"Message: Failure message {i}", text);
-                Assert.Contains($"at Suite.Test_{i}() line {i}", text);
-                Assert.DoesNotContain($"• Suite.Test_{i}:", text);
-            }
-
-            // Next 5 (5..9) are one-line summaries without stack trace or duration
-            for (int i = 5; i < 10; i++)
-            {
-                Assert.Contains($"• Suite.Test_{i}: Failure message {i}", text);
-                Assert.DoesNotContain($"at Suite.Test_{i}()", text);
-                Assert.DoesNotContain($"• Suite.Test_{i} (0.020s)", text);
-            }
-
-            // Total is 10 <= 25, so no truncation note
-            Assert.DoesNotContain("more failed test(s).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityEval_PublicOutput_EnforcesUtf8BudgetWithoutSplittingEmoji()
-    {
-        var (tempDir, _, client, tools) = CreateTestContext();
-        try
-        {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = true,
-                Payload = string.Concat(Enumerable.Repeat("界😀", McpOutputLimits.MaxFormattedOutputCharacters / 2))
-            };
-
-            var result = await tools.UnityEvalAsync("return value;");
-            string text = GetResultText(result);
-
-            Assert.False(result.IsError);
-            Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
-            Assert.True(Encoding.UTF8.GetByteCount(text) <= McpOutputLimits.MaxFormattedOutputBytes);
-            Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, text);
-            AssertValidUtf16(text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void BoundedTextBuilder_ByteBudgetPreservesSurrogatePairs()
-    {
-        var builder = new BoundedTextBuilder(
-            maxCharacters: 64,
-            maxBytes: 16,
-            aggregateMarker: "[truncated]");
-
-        builder.Append("😀😀😀😀😀");
-        string text = builder.ToString();
-
-        Assert.True(text.Length <= 64);
-        Assert.True(Encoding.UTF8.GetByteCount(text) <= 16);
-        Assert.Equal("😀[truncated]", text);
-        AssertValidUtf16(text);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void BoundedTextBuilder_BoundedEntryPointsDoNotSplitSurrogatePairs(bool trimTrailingWhitespace)
-    {
-        var builder = new BoundedTextBuilder(
-            maxCharacters: 64,
-            maxBytes: 1024,
-            aggregateMarker: "[aggregate]");
-        const string marker = "[x]";
-        string value = trimTrailingWhitespace ? "😀😀😀😀  \t" : "😀😀😀😀";
-
-        if (trimTrailingWhitespace)
-        {
-            builder.AppendTrimmedBounded(value, maxCharacters: 6, marker: marker);
-        }
-        else
-        {
-            builder.AppendBounded(value, maxCharacters: 6, marker: marker);
-        }
-
-        string text = builder.ToString();
-
-        Assert.Equal("😀[x]", text);
-        AssertValidUtf16(text);
-    }
-
-    [Fact]
-    public void McpOutputLimits_TruncateDoesNotSplitSurrogatePairs()
-    {
-        string text = McpOutputLimits.Truncate("😀😀😀😀", maxCharacters: 6, marker: "[x]");
-
-        Assert.Equal("😀[x]", text);
-        AssertValidUtf16(text);
-    }
-
-    [Theory]
-    [InlineData(5, "😀[x]")]
-    [InlineData(6, "😀[x]")]
-    [InlineData(7, "😀😀[x]")]
-    [InlineData(4, "[x]")]
-    [InlineData(3, "[x]")]
-    public void McpOutputLimits_Truncate_PreservesSurrogatePairIntegrityAtAllCutoffs(int maxCharacters, string expected)
-    {
-        string input = "😀😀😀😀";
-        string result = McpOutputLimits.Truncate(input, maxCharacters, "[x]");
-        Assert.Equal(expected, result);
-        AssertValidUtf16(result);
-    }
-
-    private static void AssertValidUtf16(string value)
-    {
-        for (int i = 0; i < value.Length; i++)
-        {
-            if (char.IsHighSurrogate(value[i]))
-            {
-                Assert.True(i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]));
-                i++;
-            }
-            else
-            {
-                Assert.False(char.IsLowSurrogate(value[i]));
-            }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_SummarizedFailures_ExtractsFirstNonEmptyLineAndTruncatesLongMessages()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var failedTests = new List<FailedTestInfo>();
-            // 5 dummy detailed failures first
-            for (int i = 0; i < 5; i++)
-            {
-                failedTests.Add(new FailedTestInfo
-                {
-                    Name = $"Detailed_{i}",
-                    FullName = $"Suite.Detailed_{i}",
-                    Message = $"Detailed message {i}",
-                    StackTrace = $"at Suite.Detailed_{i}()",
-                    Duration = 0.01
-                });
-            }
-
-            // Summarized failure 5: multi-line message
-            failedTests.Add(new FailedTestInfo
-            {
-                Name = "MultiLineTest",
-                FullName = "Suite.MultiLineTest",
-                Message = "\r\n   Expected: 42\r\n   But was: 10\r\n   Extra stack",
-                StackTrace = "at Suite.MultiLineTest()",
-                Duration = 0.01
-            });
-
-            // Summarized failure 6: very long message (> 200 chars)
-            string veryLongMsg = new string('A', 250);
-            failedTests.Add(new FailedTestInfo
-            {
-                Name = "LongMsgTest",
-                FullName = "Suite.LongMsgTest",
-                Message = veryLongMsg,
-                StackTrace = "at Suite.LongMsgTest()",
-                Duration = 0.01
-            });
-
-            // Summarized failure 7: empty message
-            failedTests.Add(new FailedTestInfo
-            {
-                Name = "NoMsgTest",
-                FullName = "Suite.NoMsgTest",
-                Message = "   ",
-                StackTrace = "at Suite.NoMsgTest()",
-                Duration = 0.01
-            });
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                FailCount = 8,
-                PassCount = 0,
-                SkipCount = 0,
-                FailedTests = failedTests
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-
-            // Multiline: only first non-empty line extracted
-            Assert.Contains("• Suite.MultiLineTest: Expected: 42", text);
-            Assert.DoesNotContain("But was: 10", text);
-            Assert.DoesNotContain("at Suite.MultiLineTest()", text);
-
-            // Long message: truncated with ... at 200 chars
-            string expectedTruncated = new string('A', 197) + "...";
-            Assert.Contains($"• Suite.LongMsgTest: {expectedTruncated}", text);
-            Assert.DoesNotContain(veryLongMsg, text);
-
-            // Empty message: just test name without colon
-            Assert.Contains("• Suite.NoMsgTest", text);
-            Assert.DoesNotContain("• Suite.NoMsgTest:", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData(null, null)]
-    [InlineData("", null)]
-    [InlineData("   \r\n \t \n", null)]
-    [InlineData("Simple single line", "Simple single line")]
-    [InlineData("   Trimmed single line   ", "Trimmed single line")]
-    [InlineData("\r\n\r\nFirst non-empty line\r\nSecond line", "First non-empty line")]
-    [InlineData("Line 1\nLine 2\nLine 3", "Line 1")]
-    public void UnityTools_ExtractOneLineSummaryMessage_ExtractsCorrectly(string? input, string? expected)
-    {
-        string? actual = UnityToolOutputFormatter.ExtractOneLineSummaryMessage(input);
-        Assert.Equal(expected, actual);
-    }
-
-    [Fact]
-    public void UnityTools_ExtractOneLineSummaryMessage_TruncatesLongLines()
-    {
-        string longInput = new string('x', 250);
-        string? result = UnityToolOutputFormatter.ExtractOneLineSummaryMessage(longInput, maxLineLength: 200);
-        Assert.NotNull(result);
-        Assert.Equal(200, result.Length);
-        Assert.EndsWith("...", result);
-        Assert.Equal(new string('x', 197) + "...", result);
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenFilterSpecifiedAndZeroTestsRun_ReturnsErrorWithDescriptiveMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["SomeFilter"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching filter 'SomeFilter' (mode: editmode).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenCategorySpecifiedAndZeroTestsRun_ReturnsErrorWithDescriptiveMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, categoryNames: ["SomeCat"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching category 'SomeCat' (mode: editmode).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenFilterAndCategorySpecifiedAndZeroTestsRun_ReturnsErrorWithBoth()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["SomeFilter"], categoryNames: ["SomeCat"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching filter 'SomeFilter' and category 'SomeCat' (mode: editmode).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenUnfilteredAndZeroTestsRun_ReturnsSuccessWithEmptySuiteMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Equal("Tests Passed: 0 passed (no tests found in suite).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenTestsPassedAndZeroSkipped_OmitsZeroSkipped()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 27,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Tests Passed: 27 passed.", text);
-            Assert.DoesNotContain("skipped", text, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_ReportsCoverageStatusAlongsidePassingTestOutcome()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 1,
-                CoverageStatus = "available",
-                CoverageMessage = "Coverage report captured for the completed test run."
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, coverage: true);
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Tests Passed: 1 passed.", text);
-            Assert.Contains("Coverage captured.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_ReportsUnavailableCoverageWithoutChangingPassingTestStatus()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 1,
-                CoverageStatus = "unavailable",
-                CoverageMessage = "Profiler restoration compilation failed."
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, coverage: true);
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Tests Passed: 1 passed.", text);
-            Assert.Contains("Coverage unavailable: Profiler restoration compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenTestsPassedAndSkippedGreaterThanZero_IncludesSkipped()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 27,
-                SkipCount = 1
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Tests Passed: 27 passed, 1 skipped.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenTestsFailedAndZeroSkipped_OmitsZeroSkipped()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                FailCount = 1,
-                PassCount = 27,
-                SkipCount = 0,
-                FailedTests = [new FailedTestInfo { Name = "FailTest", FullName = "Suite.FailTest", Message = "Failed assertion" }]
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Tests Failed: 1 failed, 27 passed.", text);
-            Assert.DoesNotContain("skipped", text, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenTestsFailedAndSkippedGreaterThanZero_IncludesSkipped()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                FailCount = 1,
-                PassCount = 27,
-                SkipCount = 2,
-                FailedTests = [new FailedTestInfo { Name = "FailTest", FullName = "Suite.FailTest", Message = "Failed assertion" }]
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Tests Failed: 1 failed, 27 passed, 2 skipped.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_PreExecutionFailure_PrioritizesFailureOverFilterMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                PassCount = 0,
-                FailCount = 0,
-                SkipCount = 0,
-                Message = "Test framework initialization failed."
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["SomeFilter"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Test run failed: Test framework initialization failed.", text);
-            Assert.DoesNotContain("No tests found matching filter", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_FailedOnly_ZeroTests_ReportsNoPreviouslyFailedTestsFound()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 0,
-                FailCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, failedOnly: true);
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No previously failed tests found.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_InterruptedWithCancelledState_ReportsInterrupted()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                ResultState = "Cancelled",
-                Message = "Cancelled by user"
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Test run interrupted: Cancelled by user", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_ArrayParameters_PassThroughToClient()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 1
-            };
-
-            var result = await tools.UnityTestAsync(
-                mode: UnityTestMode.EditMode,
-                testNames: ["MyNamespace.MyTestClass.MyMethod"],
-                groupNames: ["MyNamespace\\.MyTestClass"],
-                categoryNames: ["Integration"],
-                assemblyNames: ["MyProject.Tests"]);
-
-            Assert.False(result.IsError);
-            Assert.NotNull(client.LastTestNames);
-            Assert.Equal(["MyNamespace.MyTestClass.MyMethod"], client.LastTestNames);
-            Assert.NotNull(client.LastGroupNames);
-            Assert.Equal(["MyNamespace\\.MyTestClass"], client.LastGroupNames);
-            Assert.NotNull(client.LastCategoryNames);
-            Assert.Equal(["Integration"], client.LastCategoryNames);
-            Assert.NotNull(client.LastAssemblyNames);
-            Assert.Equal(["MyProject.Tests"], client.LastAssemblyNames);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_ArrayParameters_PassThroughToClientVerbatim()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 2
-            };
-
-            var testNames = new[] { "TestA", "TestB" };
-            var groupNames = new[] { "GroupA.*", "GroupB.*" };
-            var catNames = new[] { "Cat1", "Cat2" };
-            var asmNames = new[] { "Asm1", "Asm2" };
-
-            var result = await tools.UnityTestAsync(
-                mode: UnityTestMode.EditMode,
-                testNames: testNames,
-                groupNames: groupNames,
-                categoryNames: catNames,
-                assemblyNames: asmNames);
-
-            Assert.False(result.IsError);
-            Assert.Equal(testNames, client.LastTestNames);
-            Assert.Equal(groupNames, client.LastGroupNames);
-            Assert.Equal(catNames, client.LastCategoryNames);
-            Assert.Equal(asmNames, client.LastAssemblyNames);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_SingleAndMultipleArrayParameters_PassThroughProperly()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 2
-            };
-
-            // Passing a single-element array
-            var singleResult = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["TestA"]);
-            Assert.False(singleResult.IsError);
-            Assert.NotNull(client.LastTestNames);
-            Assert.Equal(["TestA"], client.LastTestNames);
-
-            // Passing an array with multiple strings
-            var arrayResult = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["TestA", "TestB"]);
-            Assert.False(arrayResult.IsError);
-            Assert.NotNull(client.LastTestNames);
-            Assert.Equal(["TestA", "TestB"], client.LastTestNames);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("testNames", "")]
-    [InlineData("testNames", " ")]
-    [InlineData("groupNames", "")]
-    [InlineData("groupNames", " ")]
-    [InlineData("categoryNames", "")]
-    [InlineData("categoryNames", " ")]
-    [InlineData("assemblyNames", "")]
-    [InlineData("assemblyNames", " ")]
-    public async Task UnityRunTests_BlankFilterArray_ReturnsErrorBeforeCallingClient(string filterName, string value)
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            CallToolResult result = filterName switch
-            {
-                "testNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: [value]),
-                "groupNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: [value]),
-                "categoryNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, categoryNames: [value]),
-                "assemblyNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, assemblyNames: [value]),
-                _ => throw new ArgumentOutOfRangeException(nameof(filterName))
-            };
-
-            Assert.True(result.IsError);
-            Assert.Contains($"Invalid test filter '{filterName}[0]'", GetResultText(result));
-            Assert.Equal(0, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("testNames")]
-    [InlineData("groupNames")]
-    [InlineData("categoryNames")]
-    [InlineData("assemblyNames")]
-    public async Task UnityRunTests_BlankArrayElement_ReturnsErrorBeforeCallingClient(string filterName)
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            CallToolResult result = filterName switch
-            {
-                "testNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["Valid", " ", "AlsoValid"]),
-                "groupNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["Valid.*", " ", "AlsoValid.*"]),
-                "categoryNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, categoryNames: ["Valid", " ", "AlsoValid"]),
-                "assemblyNames" => await tools.UnityTestAsync(mode: UnityTestMode.EditMode, assemblyNames: ["Valid", " ", "AlsoValid"]),
-                _ => throw new ArgumentOutOfRangeException(nameof(filterName))
-            };
-
-            Assert.True(result.IsError);
-            Assert.Contains($"Invalid test filter '{filterName}[1]'", GetResultText(result));
-            Assert.Equal(0, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("[")]
-    [InlineData("(")]
-    [InlineData("*Movement*")]
-    public async Task UnityRunTests_InvalidRegex_ReturnsIndexedParseErrorBeforeCallingClient(string pattern)
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["Valid.*", pattern]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Invalid test filter 'groupNames[1]'", text);
-            Assert.Contains("invalid .NET regular expression:", text);
-            Assert.Contains(pattern, text);
-            Assert.Equal(0, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("testNames")]
-    [InlineData("categoryNames")]
-    [InlineData("assemblyNames")]
-    public void LiteralTestFilters_DoNotRequireValidRegex(string filterName)
-    {
-        Assert.True(TestFilterValidation.TryValidate(filterName, ["[", "("], out _));
-    }
-
-    [Fact]
-    public async Task UnityRunTests_ValidArrayFilters_PassThroughWithoutBroadening()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 1
-            };
-
-            var result = await tools.UnityTestAsync(
-                mode: UnityTestMode.EditMode,
-                testNames: ["Namespace.Fixture.Test"],
-                groupNames: ["Namespace.Fixture.*", "OtherFixture.*"],
-                categoryNames: ["Fast"],
-                assemblyNames: ["Project.Tests", "Project.EditorTests"]);
-
-            Assert.False(result.IsError);
-            Assert.NotNull(client.LastTestNames);
-            Assert.Equal(["Namespace.Fixture.Test"], client.LastTestNames);
-            Assert.NotNull(client.LastGroupNames);
-            Assert.Equal(["Namespace.Fixture.*", "OtherFixture.*"], client.LastGroupNames);
-            Assert.NotNull(client.LastCategoryNames);
-            Assert.Equal(["Fast"], client.LastCategoryNames);
-            Assert.NotNull(client.LastAssemblyNames);
-            Assert.Equal(["Project.Tests", "Project.EditorTests"], client.LastAssemblyNames);
-            Assert.Equal(1, client.RunTestsCallCount);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_PluralArrayParameters_PassThroughToClient()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                PassCount = 1
-            };
-
-            var result = await tools.UnityTestAsync(
-                mode: UnityTestMode.EditMode,
-                groupNames: ["MyLegacyFilter"],
-                categoryNames: ["MyLegacyCat"]);
-
-            Assert.False(result.IsError);
-            Assert.NotNull(client.LastGroupNames);
-            Assert.Equal(["MyLegacyFilter"], client.LastGroupNames);
-            Assert.NotNull(client.LastCategoryNames);
-            Assert.Equal(["MyLegacyCat"], client.LastCategoryNames);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenFailureOccursWithZeroTests_SurfacesFailureMessageInsteadOfNoTestsFound()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            // Simulates Unity Test Runner failing with a regex or compilation error before executing any tests
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0,
-                Message = "Regex parsing error: Quantifier * following nothing"
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["Movement.*"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Test run failed: Regex parsing error: Quantifier * following nothing", text);
-            Assert.DoesNotContain("No tests found matching", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenTestNamesSpecifiedAndZeroTestsRun_ReturnsDescriptiveErrorMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["MyNamespace.MyTest"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching testNames 'MyNamespace.MyTest' (mode: editmode).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenAssemblyNamesSpecifiedAndZeroTestsRun_ReturnsDescriptiveErrorMessage()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, assemblyNames: ["MyCompany.MyTests"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching assemblyNames 'MyCompany.MyTests' (mode: editmode).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-
-    // ==========================================
-    // 7. Structured Data & Diagnostics tests
-    // ==========================================
-
-    [Fact]
-    public async Task UnityRunTests_ReturnsStructuredDataWithCountsAndFailures()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var failed = new List<FailedTestInfo>
-            {
-                new FailedTestInfo
-                {
-                    Name = "Test_AssertFailure",
-                    FullName = "MySuite.Test_AssertFailure",
-                    Duration = 0.25,
-                    Message = "Expected 10 but got 5",
-                    StackTrace = "  at MySuite.Test_AssertFailure () [0x00010] in Assets/Tests/Editor/DummyTest.cs:42\n"
-                }
-            };
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                PassCount = 7,
-                FailCount = 1,
-                SkipCount = 2,
-                FailedTests = failed
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            Assert.Single(result.Content);
-
-            string humanText = GetResultText(result);
-            Assert.Contains("Tests Failed: 1 failed, 7 passed, 2 skipped.", humanText);
-            Assert.Contains("• MySuite.Test_AssertFailure (0.250s)", humanText);
-            Assert.Contains("Location: file:///", humanText);
-            Assert.Contains("#L42", humanText);
-            Assert.DoesNotContain("[Assets/Tests/Editor/DummyTest.cs:42]", humanText);
-            Assert.DoesNotContain("](file:///", humanText);
-            Assert.Contains("Message: Expected 10 but got 5", humanText);
-            Assert.Contains("Stack trace:", humanText);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityRunTests_WhenStackTraceContainsRunnerPlumbing_SanitizesPlumbingFromOutput()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            var failed = new List<FailedTestInfo>
-            {
-                new FailedTestInfo
-                {
-                    Name = "Test_AssertFailure",
-                    FullName = "MySuite.Test_AssertFailure",
-                    Duration = 0.25,
-                    Message = "Expected 10 but got 5",
-                    StackTrace = string.Join(Environment.NewLine, new[]
-                    {
-                        "  at MySuite.Test_AssertFailure () [0x00010] in Assets/Tests/Editor/DummyTest.cs:42",
-                        "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
-                        "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj, System.Reflection.BindingFlags invokeAttr, System.Reflection.Binder binder, System.Object[] parameters, System.Globalization.CultureInfo culture) [0x0006a] in <...>:0",
-                        "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0",
-                        "  at UnityEditor.TestTools.TestRunner.EditorEnumeratorTestWorkItem.Execute () [0x0003b] in <...>:0"
-                    })
-                }
-            };
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "Failed",
-                PassCount = 1,
-                FailCount = 1,
-                SkipCount = 0,
-                FailedTests = failed
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-
-            Assert.True(result.IsError);
-            string humanText = GetResultText(result);
-            Assert.Contains("MySuite.Test_AssertFailure ()", humanText);
-            Assert.DoesNotContain("System.Reflection", humanText);
-            Assert.DoesNotContain("TestMethodCommand", humanText);
-            Assert.DoesNotContain("EditorEnumeratorTestWorkItem", humanText);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
+        {
+            Success = false,
+            Interrupted = false,
+            Message = "Assets/Scripts/Foo.cs(10,5): error CS0103: The name 'bar' does not exist in the current context"
+        };
+
+        var result = await ctx.Tools.UnityRefreshAsync(clean: true);
+
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("error CS0103", text);
+        Assert.Contains("Error: Unity recompilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_ReturnsStructuredDiagnostics()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Interrupted = false,
-                Message = "Assets/Scripts/Game.cs(12,4): error CS0103: The name 'player' does not exist in the current context\n" +
-                          "Assets/Scripts/Util.cs(88,16): warning CS0219: The variable 'temp' is assigned but its value is never used"
-            };
+            Success = false,
+            Interrupted = false,
+            Message = "Assets/Scripts/Game.cs(12,4): error CS0103: The name 'player' does not exist in the current context\n" +
+                      "Assets/Scripts/Util.cs(88,16): warning CS0219: The variable 'temp' is assigned but its value is never used"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            Assert.Single(result.Content);
+        Assert.True(result.IsError);
+        Assert.Single(result.Content);
 
-            string text = GetResultText(result);
-            Assert.Contains("Warnings:", text);
-            Assert.Contains("Assets/Scripts/Util.cs#L88", text);
-            Assert.Contains("warning CS0219: The variable 'temp' is assigned but its value is never used", text);
-            Assert.Contains("Errors:", text);
-            Assert.Contains("Assets/Scripts/Game.cs#L12", text);
-            Assert.Contains("error CS0103: The name 'player' does not exist in the current context", text);
-            Assert.EndsWith("Error: Unity compilation failed.", text);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Warnings:", text);
+        Assert.Contains("Assets/Scripts/Util.cs#L88", text);
+        Assert.Contains("warning CS0219: The variable 'temp' is assigned but its value is never used", text);
+        Assert.Contains("Errors:", text);
+        Assert.Contains("Assets/Scripts/Game.cs#L12", text);
+        Assert.Contains("error CS0103: The name 'player' does not exist in the current context", text);
+        Assert.EndsWith("Error: Unity compilation failed.", text);
 
-            int warningsIndex = text.IndexOf("Warnings:");
-            int errorsIndex = text.IndexOf("Errors:");
-            Assert.True(errorsIndex < warningsIndex, "Errors must precede warnings");
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        int warningsIndex = text.IndexOf("Warnings:");
+        int errorsIndex = text.IndexOf("Errors:");
+        Assert.True(errorsIndex < warningsIndex, "Errors must precede warnings");
     }
 
     [Fact]
     public async Task UnityRefresh_WhenClean_ReturnsStructuredDiagnostics()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Interrupted = false,
-                Message = "Assets/Scripts/RecompileTest.cs(5,10): error CS1002: ; expected"
-            };
-
-            var result = await tools.UnityRefreshAsync(clean: true);
-
-            Assert.True(result.IsError);
-            Assert.Single(result.Content);
-
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/RecompileTest.cs#L5", text);
-            Assert.Contains("error CS1002: ; expected", text);
-            Assert.EndsWith("Error: Unity recompilation failed.", text);
-            Assert.DoesNotContain("Errors:", text);
-            Assert.DoesNotContain("Warnings:", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-
-    [Theory]
-    [InlineData("  at MySuite.Test () [0x00000] in C:/Code/Assets/Tests/Test.cs:55", "C:/Code/Assets/Tests/Test.cs", 55)]
-    [InlineData("   at MySuite.Test() in C:\\Code\\Assets\\Tests\\Test.cs:line 102", "C:\\Code\\Assets\\Tests\\Test.cs", 102)]
-    [InlineData("MySuite.Test () (at Assets/Tests/Test.cs:23)", "Assets/Tests/Test.cs", 23)]
-    [InlineData("  at NUnit.Framework.Assert.Fail() in <filename unknown>:0\n  at MySuite.Run() in Assets/Tests/Run.cs:99", "Assets/Tests/Run.cs", 99)]
-    public void ExtractSourceLocation_ExtractsExpectedFileAndLine(string stackTrace, string expectedFile, int expectedLine)
-    {
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/ProjectRoot");
-
-        Assert.Equal(expectedFile, file);
-        Assert.Equal(expectedLine, line);
-        Assert.NotNull(uri);
-        Assert.StartsWith("file:///", uri);
-        Assert.EndsWith($"#L{expectedLine}", uri);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData(null)]
-    [InlineData("  at MySuite.TestMethod() line 42")]
-    [InlineData("  at NUnit.Framework.Assert.AreEqual() in <filename unknown>:0")]
-    public void ExtractSourceLocation_WhenNoSourceLocation_ReturnsNulls(string? stackTrace)
-    {
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/ProjectRoot");
-
-        Assert.Null(file);
-        Assert.Null(line);
-        Assert.Null(uri);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_ParsesErrorsAndWarningsCorrectly()
-    {
-        string text = @"Assets/Scripts/Player.cs(10,15): error CS0103: The name 'foo' does not exist in the current context
-Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned but its value is never used";
-
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Equal(2, diagnostics.Count);
-
-        Assert.Equal("Assets/Scripts/Player.cs", diagnostics[0].File);
-        Assert.Equal(10, diagnostics[0].Line);
-        Assert.Equal(15, diagnostics[0].Column);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("CS0103", diagnostics[0].Code);
-        Assert.Equal("The name 'foo' does not exist in the current context", diagnostics[0].Message);
-
-        Assert.Equal("Assets/Scripts/Enemy.cs", diagnostics[1].File);
-        Assert.Equal(42, diagnostics[1].Line);
-        Assert.Equal(5, diagnostics[1].Column);
-        Assert.Equal("warning", diagnostics[1].Severity);
-        Assert.Equal("CS0219", diagnostics[1].Code);
-        Assert.Equal("The variable 'bar' is assigned but its value is never used", diagnostics[1].Message);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("Compilation succeeded with no diagnostics.")]
-    public void ParseCompilerDiagnostics_WhenNoDiagnostics_ReturnsEmpty(string? text)
-    {
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-        Assert.Empty(diagnostics);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_NonCsErrors_ShaderAndMissingScript_ParsesSuccessfully()
-    {
-        string text = "Assets/Shaders/Water.shader(45): error undeclared identifier 'foo'\n" +
-                      "Assets/Prefabs/Player.prefab: error The referenced script on this Behaviour is missing!";
-
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Equal(2, diagnostics.Count);
-
-        Assert.Equal("Assets/Shaders/Water.shader", diagnostics[0].File);
-        Assert.Equal(45, diagnostics[0].Line);
-        Assert.Equal(0, diagnostics[0].Column);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("", diagnostics[0].Code);
-        Assert.Equal("undeclared identifier 'foo'", diagnostics[0].Message);
-
-        Assert.Equal("Assets/Prefabs/Player.prefab", diagnostics[1].File);
-        Assert.Equal(0, diagnostics[1].Line);
-        Assert.Equal(0, diagnostics[1].Column);
-        Assert.Equal("error", diagnostics[1].Severity);
-        Assert.Equal("", diagnostics[1].Code);
-        Assert.Equal("The referenced script on this Behaviour is missing!", diagnostics[1].Message);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_NonCsError_GeneratesClickableFileUri()
-    {
-        string text = "Assets/Shaders/Water.shader(45): error undeclared identifier 'foo'";
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Refresh failed.",
-            isSuccess: false);
-
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'foo'", formatted);
-        Assert.Contains("Refresh failed.", formatted);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_ColonDelimitedLocations_ParsesSuccessfully()
-    {
-        string text = "Assets/Shaders/Water.shader:45: error undeclared identifier 'foo'\n" +
-                      "Assets/Shaders/Surface.shader:12:8: warning division by zero";
-
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Equal(2, diagnostics.Count);
-
-        Assert.Equal("Assets/Shaders/Water.shader", diagnostics[0].File);
-        Assert.Equal(45, diagnostics[0].Line);
-        Assert.Equal(0, diagnostics[0].Column);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("undeclared identifier 'foo'", diagnostics[0].Message);
-
-        Assert.Equal("Assets/Shaders/Surface.shader", diagnostics[1].File);
-        Assert.Equal(12, diagnostics[1].Line);
-        Assert.Equal(8, diagnostics[1].Column);
-        Assert.Equal("warning", diagnostics[1].Severity);
-        Assert.Equal("division by zero", diagnostics[1].Message);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_ColonDelimitedLocation_GeneratesClickableFileUri()
-    {
-        string text = "Assets/Shaders/Water.shader:45: error undeclared identifier 'foo'";
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Refresh failed.",
-            isSuccess: false);
-
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'foo'", formatted);
-        Assert.Contains("Refresh failed.", formatted);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_StandaloneDiagnosticWithoutFile_ParsesCorrectly()
-    {
-        string text = "error: The referenced script on this Behaviour (Game Object 'Player') is missing!";
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Single(diagnostics);
-        Assert.Equal("", diagnostics[0].File);
-        Assert.Equal(0, diagnostics[0].Line);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("The referenced script on this Behaviour (Game Object 'Player') is missing!", diagnostics[0].Message);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_StandaloneError_FormatsWithUnknownLocationAndNoDoubleColon()
-    {
-        string text = "error: The referenced script on this Behaviour is missing!";
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Refresh failed.",
-            isSuccess: false);
-
-        Assert.Contains("Unknown: error: The referenced script on this Behaviour is missing!", formatted);
-        Assert.DoesNotContain("error::", formatted);
-        Assert.Contains("Refresh failed.", formatted);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_MixedDiagnostics_AllParsedWithoutDroppingAny()
-    {
-        string text = "Assets/Scripts/Player.cs(12,34): error CS0103: The name 'foo' does not exist in the current context\n" +
-                      "Assets/Shaders/Water.shader(45): error undeclared identifier 'bar'\n" +
-                      "Assets/Prefabs/Player.prefab: error The referenced script on this Behaviour is missing!\n" +
-                      "Assets/Textures/bad.png: error Asset import failed: \"Assets/Textures/bad.png\"\n" +
-                      "Assets/Editor/MyAssetPostprocessor.cs(15): error System.NullReferenceException: Object reference not set to an instance of an object\n" +
-                      "error: Standalone error without file path\n" +
-                      "Assets/Scripts/Other.cs(5,1): warning CS0168: The variable 'unused' is declared but never used";
-
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-        Assert.Equal(7, diagnostics.Count);
-
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Refresh failed.",
-            isSuccess: false);
-
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Scripts/Player.cs#L12: error CS0103: The name 'foo' does not exist", formatted);
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'bar'", formatted);
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Prefabs/Player.prefab: error: The referenced script on this Behaviour is missing!", formatted);
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Textures/bad.png: error: Asset import failed: \"Assets/Textures/bad.png\"", formatted);
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Editor/MyAssetPostprocessor.cs#L15: error: System.NullReferenceException: Object reference not set to an instance of an object", formatted);
-        Assert.Contains("Unknown: error: Standalone error without file path", formatted);
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Scripts/Other.cs#L5: warning CS0168: The variable 'unused' is declared but never used", formatted);
-        Assert.Contains("Refresh failed.", formatted);
-        Assert.DoesNotContain("::", formatted);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_WindowsAbsolutePathColonDelimited_ParsesSuccessfully()
-    {
-        string text = @"C:\Code\MyProject\Assets\Shaders\Water.shader:45:12: error undeclared identifier 'foo'" + "\n" +
-                      "C:/Code/MyProject/Assets/Shaders/Surface.shader:12:8: warning division by zero\n" +
-                      @"C:\Code\MyProject\Assets\Prefabs\Player.prefab: error Missing script";
-
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Equal(3, diagnostics.Count);
-
-        Assert.Equal(@"C:\Code\MyProject\Assets\Shaders\Water.shader", diagnostics[0].File);
-        Assert.Equal(45, diagnostics[0].Line);
-        Assert.Equal(12, diagnostics[0].Column);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("undeclared identifier 'foo'", diagnostics[0].Message);
-
-        Assert.Equal("C:/Code/MyProject/Assets/Shaders/Surface.shader", diagnostics[1].File);
-        Assert.Equal(12, diagnostics[1].Line);
-        Assert.Equal(8, diagnostics[1].Column);
-        Assert.Equal("warning", diagnostics[1].Severity);
-        Assert.Equal("division by zero", diagnostics[1].Message);
-
-        Assert.Equal(@"C:\Code\MyProject\Assets\Prefabs\Player.prefab", diagnostics[2].File);
-        Assert.Equal(0, diagnostics[2].Line);
-        Assert.Equal("error", diagnostics[2].Severity);
-        Assert.Equal("Missing script", diagnostics[2].Message);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_SpaceAfterCommaInLocation_ParsesLineAndColumn()
-    {
-        string text = "Assets/Scripts/Player.cs(10, 5): error CS0103: The name 'foo' does not exist";
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Single(diagnostics);
-        Assert.Equal("Assets/Scripts/Player.cs", diagnostics[0].File);
-        Assert.Equal(10, diagnostics[0].Line);
-        Assert.Equal(5, diagnostics[0].Column);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("CS0103", diagnostics[0].Code);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_WindowsAbsolutePathColonDelimited_GeneratesClickableFileUri()
-    {
-        string text = @"C:\Code\MyProject\Assets\Shaders\Water.shader:45:12: error undeclared identifier 'foo'";
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Refresh failed.",
-            isSuccess: false);
-
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Shaders/Water.shader#L45: error: undeclared identifier 'foo'", formatted);
-        Assert.Contains("Refresh failed.", formatted);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_StackTraceWithPackageVersionAndHash_ExtractsCorrectLocation()
-    {
-        string stackTrace = "  at PackageNamespace.Class.Method () [0x00001] in Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs:42";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Code/MyProject");
-
-        Assert.Equal("Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs", file);
-        Assert.Equal(42, line);
-        Assert.Contains("file:///C:/Code/MyProject/Packages/com.company.pkg@1.0.0+hash123/Runtime/Script.cs#L42", uri);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_StackTraceWithParenthesesAndSpaces_ExtractsCorrectLocation()
-    {
-        string stackTrace = @"  at MyTest.Run () in C:\Build (x64)\Assets\Tests\MyTest.cs:line 25";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Build (x64)");
-
-        Assert.Equal(@"C:\Build (x64)\Assets\Tests\MyTest.cs", file);
-        Assert.Equal(25, line);
-        Assert.Equal("file:///C:/Build%20(x64)/Assets/Tests/MyTest.cs#L25", uri);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_RelativePathWithParenthesesAndSpaces_ExtractsCorrectLocation()
-    {
-        string stackTrace = @"  at MyTest.Run () in Plugins (x86)/Tests/MyTest.cs:line 25";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
-
-        Assert.Equal("Plugins (x86)/Tests/MyTest.cs", file);
-        Assert.Equal(25, line);
-        Assert.Equal("file:///C:/Project/Plugins%20(x86)/Tests/MyTest.cs#L25", uri);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_RelativePathWithSpaces_ExtractsCorrectLocation()
-    {
-        string stackTrace = @"  at MyTest.Run () in My Folder/Tests/MyTest.cs:line 25";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
-
-        Assert.Equal("My Folder/Tests/MyTest.cs", file);
-        Assert.Equal(25, line);
-        Assert.Equal("file:///C:/Project/My%20Folder/Tests/MyTest.cs#L25", uri);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_UnityFormatWithParenthesesAndSpaces_ExtractsCorrectLocation()
-    {
-        string stackTrace = @"MySuite.Test () (at Plugins (x86)/Test.cs:23)";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
-
-        Assert.Equal("Plugins (x86)/Test.cs", file);
-        Assert.Equal(23, line);
-        Assert.Equal("file:///C:/Project/Plugins%20(x86)/Test.cs#L23", uri);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_StrippedTraceBareAtWithSpaces_ExtractsCorrectLocation()
-    {
-        string stackTrace = @"  at My Folder/Test.cs:42";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
-
-        Assert.Equal("My Folder/Test.cs", file);
-        Assert.Equal(42, line);
-        Assert.Equal("file:///C:/Project/My%20Folder/Test.cs#L42", uri);
-    }
-
-    [Fact]
-    public void ExtractSourceLocation_MethodWithInParametersAndParentheses_ExtractsCorrectLocation()
-    {
-        string stackTrace = @"  at MyTest.Run (in int value, in string other) in Plugins (x86)/Tests/MyTest.cs:line 25";
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
-
-        Assert.Equal("Plugins (x86)/Tests/MyTest.cs", file);
-        Assert.Equal(25, line);
-        Assert.Equal("file:///C:/Project/Plugins%20(x86)/Tests/MyTest.cs#L25", uri);
-    }
-
-    [Fact]
-    public void ParseCompilerDiagnostics_PathWithParenthesesAndSpaces_ParsesSuccessfully()
-    {
-        string text = "Assets/Plugins (x86)/Plugin.cs(10, 5): error CS0103: The name 'foo' does not exist";
-        var diagnostics = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Single(diagnostics);
-        Assert.Equal("Assets/Plugins (x86)/Plugin.cs", diagnostics[0].File);
-        Assert.Equal(10, diagnostics[0].Line);
-        Assert.Equal(5, diagnostics[0].Column);
-        Assert.Equal("error", diagnostics[0].Severity);
-        Assert.Equal("CS0103", diagnostics[0].Code);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_UnquotedAssetImportFailure_GeneratesClickableFileUri()
-    {
-        string text = "Assets/Textures/bad.png: error Asset import failed: Assets/Textures/bad.png";
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Refresh failed.",
-            isSuccess: false);
-
-        Assert.Contains("file:///C:/Code/MyProject/Assets/Textures/bad.png: error: Asset import failed: Assets/Textures/bad.png", formatted);
-        Assert.Contains("Refresh failed.", formatted);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_WhenRawTextIsOversized_PreservesSuccessTrailerWithinLimit()
-    {
-        string diagnosticText = new string('r', McpOutputLimits.MaxFormattedOutputCharacters * 2);
-
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            diagnosticText,
-            projectRoot: null,
-            successTrailer: "Refresh succeeded.",
-            isSuccess: true);
-
-        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
-        Assert.EndsWith("Refresh succeeded.", formatted);
-        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, formatted);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_WhenManyStructuredErrors_PreservesFailureTrailerWithinLimit()
-    {
-        string diagnosticText = string.Join(
-            Environment.NewLine,
-            Enumerable.Range(1, 10_000).Select(i =>
-                $"Assets/Scripts/Error{i}.cs(1,1): error CS1000: Failure {i}"));
-
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            diagnosticText,
-            projectRoot: "/project",
-            failureTrailer: "Compilation failed.");
-
-        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
-        Assert.True(Encoding.UTF8.GetByteCount(formatted) <= McpOutputLimits.MaxFormattedOutputBytes);
-        Assert.EndsWith("Compilation failed.", formatted);
-        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, formatted);
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_WhenDiagnosticMessageIsOversized_PreservesFailureTrailerWithinLimit()
-    {
-        string diagnosticText =
-            $"Assets/Scripts/Error.cs(1,1): error CS1000: {new string('m', McpOutputLimits.MaxFormattedOutputCharacters * 2)}";
-
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            diagnosticText,
-            projectRoot: "/project",
-            failureTrailer: "Compilation failed.");
-
-        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
-        Assert.True(Encoding.UTF8.GetByteCount(formatted) <= McpOutputLimits.MaxFormattedOutputBytes);
-        Assert.EndsWith("Compilation failed.", formatted);
-        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, formatted);
-    }
-
-    [Fact]
-    public async Task DiagnosticFormatter_CustomImplementationCanBeInjectedIntoUnityTools()
-    {
-        var customFormatter = new TestCustomDiagnosticFormatter();
-        var (tempDir, pm, client, _) = CreateTestContext();
-        try
-        {
-            var customTools = new UnityTools(client, pm.PathResolver, customFormatter);
-
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = true,
-                Message = "Dummy message"
-            };
-
-            var refreshResult = await customTools.UnityRefreshAsync();
-            Assert.True(customFormatter.FormatCompilerDiagnosticsCalled);
-
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                FailedTests =
-                {
-                    new FailedTestInfo { Name = "Test1", StackTrace = "dummy stack trace" }
-                }
-            };
-
-            var testResult = await customTools.UnityTestAsync(mode: UnityTestMode.EditMode);
-            Assert.True(customFormatter.ExtractSourceLocationCalled);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    private class TestCustomDiagnosticFormatter : IDiagnosticFormatter
-    {
-        public bool ExtractSourceLocationCalled { get; private set; }
-        public bool ParseCompilerDiagnosticsCalled { get; private set; }
-        public bool FormatCompilerDiagnosticsCalled { get; private set; }
-        public bool FormatDiagnosticCalled { get; private set; }
-
-        public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
-        {
-            ExtractSourceLocationCalled = true;
-            return ("CustomFile.cs", 1, "file:///CustomFile.cs#L1");
-        }
-
-        public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
-        public string CompactTestStackTrace(string? stackTrace, int maxLines = 3) => stackTrace ?? string.Empty;
-
-        public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
-        {
-            ParseCompilerDiagnosticsCalled = true;
-            return new List<StructuredCompilerDiagnostic>
-            {
-                new StructuredCompilerDiagnostic
-                {
-                    File = "CustomFile.cs",
-                    Line = 1,
-                    Column = 1,
-                    Severity = "warning",
-                    Code = "CS9999",
-                    Message = "Custom diagnostic"
-                }
-            };
-        }
-
-        public string FormatCompilerDiagnostics(
-            string? diagnosticText,
-            string? projectRoot,
-            string? successTrailer = null,
-            string? failureTrailer = null,
-            bool isSuccess = false,
-            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
-            bool isEval = false)
-        {
-            FormatCompilerDiagnosticsCalled = true;
-            return DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-                diagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings, isEval);
-        }
-
-        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
-        {
-            FormatDiagnosticCalled = true;
-            return DiagnosticFormatter.Default.FormatDiagnostic(diagnostic, projectRoot, isEval);
-        }
+            Success = false,
+            Interrupted = false,
+            Message = "Assets/Scripts/RecompileTest.cs(5,10): error CS1002: ; expected"
+        };
+
+        var result = await ctx.Tools.UnityRefreshAsync(clean: true);
+
+        Assert.True(result.IsError);
+        Assert.Single(result.Content);
+
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/RecompileTest.cs#L5", text);
+        Assert.Contains("error CS1002: ; expected", text);
+        Assert.EndsWith("Error: Unity recompilation failed.", text);
+        Assert.DoesNotContain("Errors:", text);
+        Assert.DoesNotContain("Warnings:", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenSuccessWithWarningsUnderCap_ReportsFormattedWarningsWithoutTruncation()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = true,
-                Message = "Assets/Scripts/A.cs(10,5): warning CS0219: Variable 'x' is unused\n" +
-                          "Assets/Scripts/B.cs(20,5): warning CS0219: Variable 'y' is unused\n" +
-                          "Assets/Scripts/C.cs(30,5): warning CS0219: Variable 'z' is unused"
-            };
+            Success = true,
+            Message = "Assets/Scripts/A.cs(10,5): warning CS0219: Variable 'x' is unused\n" +
+                      "Assets/Scripts/B.cs(20,5): warning CS0219: Variable 'y' is unused\n" +
+                      "Assets/Scripts/C.cs(30,5): warning CS0219: Variable 'z' is unused"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/A.cs#L10", text);
-            Assert.Contains("Assets/Scripts/B.cs#L20", text);
-            Assert.Contains("Assets/Scripts/C.cs#L30", text);
-            Assert.DoesNotContain("omitted", text);
-            Assert.DoesNotContain("Warnings:", text);
-            Assert.DoesNotContain("Errors:", text);
-            Assert.EndsWith("AssetDatabase refresh completed with 0 errors (3 warnings).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/A.cs#L10", text);
+        Assert.Contains("Assets/Scripts/B.cs#L20", text);
+        Assert.Contains("Assets/Scripts/C.cs#L30", text);
+        Assert.DoesNotContain("omitted", text);
+        Assert.DoesNotContain("Warnings:", text);
+        Assert.DoesNotContain("Errors:", text);
+        Assert.EndsWith("AssetDatabase refresh completed with 0 errors (3 warnings).", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenSuccessWithSingleWarning_ReportsSingularSummary()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = true,
-                Message = "Assets/Scripts/A.cs(10,5): warning CS0219: Variable 'x' is unused"
-            };
+            Success = true,
+            Message = "Assets/Scripts/A.cs(10,5): warning CS0219: Variable 'x' is unused"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/A.cs#L10", text);
-            Assert.DoesNotContain("omitted", text);
-            Assert.EndsWith("AssetDatabase refresh completed with 0 errors (1 warning).", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/A.cs#L10", text);
+        Assert.DoesNotContain("omitted", text);
+        Assert.EndsWith("AssetDatabase refresh completed with 0 errors (1 warning).", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenSuccessWithWarningsOverCap_ReportsCappedWarningsAndTruncationNotice()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        var lines = new List<string>();
+        for (int i = 1; i <= 15; i++)
         {
-            var lines = new List<string>();
-            for (int i = 1; i <= 15; i++)
-            {
-                lines.Add($"Assets/Scripts/File{i}.cs({i},1): warning CS0168: The variable 'v{i}' is declared but never used");
-            }
-
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = true,
-                Message = string.Join("\n", lines)
-            };
-
-            var result = await tools.UnityRefreshAsync();
-
-            Assert.False(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/File1.cs#L1", text);
-            Assert.Contains("Assets/Scripts/File10.cs#L10", text);
-            Assert.DoesNotContain("Assets/Scripts/File11.cs#L11", text);
-            Assert.Contains("... and 5 more warning(s) omitted to preserve context window.", text);
-            Assert.EndsWith("AssetDatabase refresh completed with 0 errors (15 warnings).", text);
+            lines.Add($"Assets/Scripts/File{i}.cs({i},1): warning CS0168: The variable 'v{i}' is declared but never used");
         }
-        finally
+
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+            Success = true,
+            Message = string.Join("\n", lines)
+        };
+
+        var result = await ctx.Tools.UnityRefreshAsync();
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/File1.cs#L1", text);
+        Assert.Contains("Assets/Scripts/File10.cs#L10", text);
+        Assert.DoesNotContain("Assets/Scripts/File11.cs#L11", text);
+        Assert.Contains("... and 5 more warning(s) omitted to preserve context window.", text);
+        Assert.EndsWith("AssetDatabase refresh completed with 0 errors (15 warnings).", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenErrorsAndWarnings_DisplaysWarningsFirstAndErrorsAtEndWithHeaders()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Assets/Scripts/Error1.cs(10,1): error CS0103: The name 'foo' does not exist\n" +
-                          "Assets/Scripts/Warn1.cs(20,1): warning CS0219: Variable 'w1' is unused\n" +
-                          "Assets/Scripts/Error2.cs(30,1): error CS0103: The name 'bar' does not exist\n" +
-                          "Assets/Scripts/Warn2.cs(40,1): warning CS0219: Variable 'w2' is unused"
-            };
+            Success = false,
+            Message = "Assets/Scripts/Error1.cs(10,1): error CS0103: The name 'foo' does not exist\n" +
+                      "Assets/Scripts/Warn1.cs(20,1): warning CS0219: Variable 'w1' is unused\n" +
+                      "Assets/Scripts/Error2.cs(30,1): error CS0103: The name 'bar' does not exist\n" +
+                      "Assets/Scripts/Warn2.cs(40,1): warning CS0219: Variable 'w2' is unused"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Warnings:", text);
-            Assert.Contains("Errors:", text);
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Warnings:", text);
+        Assert.Contains("Errors:", text);
 
-            int warnHeaderIdx = text.IndexOf("Warnings:");
-            int errHeaderIdx = text.IndexOf("Errors:");
-            Assert.True(errHeaderIdx < warnHeaderIdx, "Errors header must precede Warnings header");
+        int warnHeaderIdx = text.IndexOf("Warnings:");
+        int errHeaderIdx = text.IndexOf("Errors:");
+        Assert.True(errHeaderIdx < warnHeaderIdx, "Errors header must precede Warnings header");
 
-            int warn1Idx = text.IndexOf("Warn1.cs#L20");
-            int err1Idx = text.IndexOf("Error1.cs#L10");
-            Assert.True(err1Idx < warn1Idx, "Errors must appear before Warnings");
+        int warn1Idx = text.IndexOf("Warn1.cs#L20");
+        int err1Idx = text.IndexOf("Error1.cs#L10");
+        Assert.True(err1Idx < warn1Idx, "Errors must appear before Warnings");
 
-            Assert.EndsWith("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.EndsWith("Error: Unity compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_MessageContainingBusyIdentifier_DoesNotBypassCompilerDiagnosticFormatting()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Assets/Scripts/Worker.cs(10,5): error CS0103: The name 'busy' does not exist in the current context"
-            };
+            Success = false,
+            Message = "Assets/Scripts/Worker.cs(10,5): error CS0103: The name 'busy' does not exist in the current context"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/Worker.cs#L10: error CS0103", text);
-            Assert.EndsWith("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/Worker.cs#L10: error CS0103", text);
+        Assert.EndsWith("Error: Unity compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenErrorsOnly_DisplaysErrorsWithoutHeaders()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Assets/Scripts/Error1.cs(10,1): error CS0103: The name 'foo' does not exist\n" +
-                          "Assets/Scripts/Error2.cs(20,1): error CS0103: The name 'bar' does not exist"
-            };
+            Success = false,
+            Message = "Assets/Scripts/Error1.cs(10,1): error CS0103: The name 'foo' does not exist\n" +
+                      "Assets/Scripts/Error2.cs(20,1): error CS0103: The name 'bar' does not exist"
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.DoesNotContain("Warnings:", text);
-            Assert.DoesNotContain("Errors:", text);
-            Assert.Contains("Assets/Scripts/Error1.cs#L10", text);
-            Assert.Contains("Assets/Scripts/Error2.cs#L20", text);
-            Assert.EndsWith("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.DoesNotContain("Warnings:", text);
+        Assert.DoesNotContain("Errors:", text);
+        Assert.Contains("Assets/Scripts/Error1.cs#L10", text);
+        Assert.Contains("Assets/Scripts/Error2.cs#L20", text);
+        Assert.EndsWith("Error: Unity compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityRefresh_WhenUnparseableError_FallsBackToRawMessage()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
         {
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Internal compiler crash occurred during Roslyn emit."
-            };
+            Success = false,
+            Message = "Internal compiler crash occurred during Roslyn emit."
+        };
 
-            var result = await tools.UnityRefreshAsync();
+        var result = await ctx.Tools.UnityRefreshAsync();
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Internal compiler crash occurred during Roslyn emit.", text);
-            Assert.EndsWith("Error: Unity compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Internal compiler crash occurred during Roslyn emit.", text);
+        Assert.EndsWith("Error: Unity compilation failed.", text);
     }
 
     [Fact]
-    public async Task UnityRunTests_WhenCompileErrorWithWarningsAndErrors_FormatsStructuredDiagnostics()
+    public async Task UnityEval_VoidWithNoLogs_ReturnsPlaceholderMessage()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = false,
-                ResultState = "CompileError",
-                Message = "Assets/Scripts/Util.cs(5,1): warning CS0219: Variable 't' unused\n" +
-                          "Assets/Scripts/Test.cs(12,8): error CS1002: ; expected"
-            };
+            Success = true,
+            Payload = null,
+            Logs = []
+        };
 
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
+        var result = await ctx.Tools.UnityEvalAsync("Time.timeScale = 1.0f;");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Warnings:", text);
-            Assert.Contains("Errors:", text);
-            Assert.Contains("Assets/Scripts/Util.cs#L5", text);
-            Assert.Contains("Assets/Scripts/Test.cs#L12", text);
-            Assert.EndsWith("Test execution aborted: Script compilation failed.", text);
+        Assert.False(result.IsError);
+        Assert.Equal("(Evaluation completed without a return statement. Use 'return <expr>;' to return a value.)", ToolFormattingTestContext.GetResultText(result));
+    }
 
-            int warnIdx = text.IndexOf("Util.cs#L5");
-            int errIdx = text.IndexOf("Test.cs#L12");
-            Assert.True(errIdx < warnIdx, "Errors must precede warnings");
-        }
-        finally
+    [Fact]
+    public async Task UnityEval_WhenLogsAreNull_ReturnsInterruptedMessageWithoutThrowing()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+            Success = false,
+            Interrupted = true,
+            Message = "Command interrupted by Unity recompilation.",
+            Logs = null!
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return 42;");
+
+        Assert.True(result.IsError);
+        Assert.Equal("Command interrupted by Unity recompilation.", ToolFormattingTestContext.GetResultText(result));
+    }
+
+    [Fact]
+    public async Task UnityEval_WithNullReturnPayload_ReturnsNullLiteral()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = "null",
+            Logs = []
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return null;");
+
+        Assert.False(result.IsError);
+        Assert.Equal("null", ToolFormattingTestContext.GetResultText(result));
+        Assert.DoesNotContain("Logs:", ToolFormattingTestContext.GetResultText(result));
+        Assert.DoesNotContain("Result:", ToolFormattingTestContext.GetResultText(result));
+    }
+
+    [Fact]
+    public async Task UnityEval_WithPayload_ReturnsPayload()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = "100",
+            Logs = []
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return 50 * 2;");
+
+        Assert.False(result.IsError);
+        Assert.Equal("100", ToolFormattingTestContext.GetResultText(result));
+        Assert.DoesNotContain("Logs:", ToolFormattingTestContext.GetResultText(result));
+        Assert.DoesNotContain("Result:", ToolFormattingTestContext.GetResultText(result));
+    }
+
+    [Fact]
+    public async Task UnityEval_WithLogs_ReturnsLogs()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = null,
+            Logs = [new ConsoleLogEntry { LogType = "Log", Message = "Logged message from snippet" }]
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("Debug.Log(\"Logged message from snippet\");");
+
+        Assert.False(result.IsError);
+        Assert.Equal("Logged message from snippet", ToolFormattingTestContext.GetResultText(result));
+    }
+
+    [Fact]
+    public async Task UnityEval_WithLogsAndPayload_SeparatesLogsAndResult()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = "42",
+            Logs =
+            [
+                new ConsoleLogEntry { LogType = "Log", Message = "Calculating value..." },
+                new ConsoleLogEntry { LogType = "Warning", Message = "Calculation took longer than expected" }
+            ],
+            Duration = 0.05
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("Debug.Log(\"Calculating value...\"); return 42;");
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith("Result:", text);
+        Assert.Contains("42", text);
+        Assert.Contains("Logs:", text);
+        Assert.Contains("Calculating value...", text);
+        Assert.Contains("[Warning] Calculation took longer than expected", text);
+        Assert.True(text.IndexOf("Result:") < text.IndexOf("Logs:"), "Result must precede Logs");
+    }
+
+    [Fact]
+    public async Task UnityEval_StructuredJsonInContentBlock1()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = "42",
+            Duration = 0.05,
+            Logs = [new ConsoleLogEntry { LogType = "Log", Message = "step 1" }]
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return 42;");
+
+        Assert.False(result.IsError);
+        Assert.Single(result.Content);
+        Assert.True(result.Content[0] is TextContentBlock);
+
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("step 1", text);
+        Assert.Contains("42", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_FailureWithLogs_SeparatesLogsAndError()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = false,
+            Message = "NullReferenceException: Object reference not set to an instance of an object",
+            Logs = [new ConsoleLogEntry { LogType = "Error", Message = "Failed to locate target" }]
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return GameObject.Find(\"Missing\").name;");
+
+        Assert.True(result.IsError);
+        Assert.Single(result.Content);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith("Error:", text);
+        Assert.Contains("NullReferenceException:", text);
+        Assert.Contains("Logs:", text);
+        Assert.Contains("[Error] Failed to locate target", text);
+        Assert.True(text.IndexOf("Error:") < text.IndexOf("Logs:"), "Error must precede Logs");
     }
 
     [Fact]
     public async Task UnityEval_WhenPreRefreshHasCompilerDiagnostics_FormatsStructuredDiagnostics()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "Assets/Scripts/Player.cs(42,15): error CS0103: The name 'speed' does not exist in the current context"
-            };
+            Success = false,
+            Message = "Assets/Scripts/Player.cs(42,15): error CS0103: The name 'speed' does not exist in the current context"
+        };
 
-            var result = await tools.UnityEvalAsync("return 42;");
+        var result = await ctx.Tools.UnityEvalAsync("return 42;");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/Player.cs#L42", text);
-            Assert.Contains("error CS0103: The name 'speed' does not exist in the current context", text);
-            Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/Player.cs#L42", text);
+        Assert.Contains("error CS0103: The name 'speed' does not exist in the current context", text);
+        Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityEval_WhenSnippetCompilationFails_FormatsSyntheticLocationAndSnippetTrailer()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "eval(1,5): error CS0103: The name 'xyz' does not exist in the current context"
-            };
+            Success = false,
+            Message = "eval(1,5): error CS0103: The name 'xyz' does not exist in the current context"
+        };
 
-            var result = await tools.UnityEvalAsync("xyz;");
+        var result = await ctx.Tools.UnityEvalAsync("xyz;");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'xyz' does not exist in the current context", text);
-            Assert.DoesNotContain("file:///", text);
-            Assert.DoesNotContain("eval#", text);
-            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'xyz' does not exist in the current context", text);
+        Assert.DoesNotContain("file:///", text);
+        Assert.DoesNotContain("eval#", text);
+        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityEval_WhenSnippetCompilationFailsWithMultipleErrorsAndWarnings_FormatsAllDiagnostics()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "eval(1,4): error CS1002: ; expected | eval(1,1): error CS0103: The name 'xyz' does not exist in the current context | eval(2,10): warning CS0219: Variable 'foo' unused"
-            };
+            Success = false,
+            Message = "eval(1,4): error CS1002: ; expected | eval(1,1): error CS0103: The name 'xyz' does not exist in the current context | eval(2,10): warning CS0219: Variable 'foo' unused"
+        };
 
-            var result = await tools.UnityEvalAsync("xyz");
+        var result = await ctx.Tools.UnityEvalAsync("xyz");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Warnings:", text);
-            Assert.Contains("• snippet line 2, col 10: warning CS0219: Variable 'foo' unused", text);
-            Assert.Contains("Errors:", text);
-            Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
-            Assert.Contains("• snippet line 1, col 1: error CS0103: The name 'xyz' does not exist in the current context", text);
-            Assert.DoesNotContain("file:///", text);
-            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Warnings:", text);
+        Assert.Contains("• snippet line 2, col 10: warning CS0219: Variable 'foo' unused", text);
+        Assert.Contains("Errors:", text);
+        Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
+        Assert.Contains("• snippet line 1, col 1: error CS0103: The name 'xyz' does not exist in the current context", text);
+        Assert.DoesNotContain("file:///", text);
+        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityEval_WhenSnippetCompilationFailsWithCS0103ForCommonUnityType_AppendsMissingNamespaceHint()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context"
-            };
+            Success = false,
+            Message = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context"
+        };
 
-            var result = await tools.UnityEvalAsync("GameObject.Find(\"test\");");
+        var result = await ctx.Tools.UnityEvalAsync("GameObject.Find(\"test\");");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'GameObject' does not exist in the current context", text);
-            Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'GameObject' does not exist in the current context", text);
+        Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
     }
 
     [Fact]
     public async Task UnityEval_WhenSnippetCompilationFailsWithCS0246ForCommonUnityType_AppendsMissingNamespaceHint()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "eval(1,1): error CS0246: The type or namespace name 'Selection' could not be found (are you missing a using directive or an assembly reference?)"
-            };
+            Success = false,
+            Message = "eval(1,1): error CS0246: The type or namespace name 'Selection' could not be found (are you missing a using directive or an assembly reference?)"
+        };
 
-            var result = await tools.UnityEvalAsync("Selection.activeGameObject = null;");
+        var result = await ctx.Tools.UnityEvalAsync("Selection.activeGameObject = null;");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("• snippet line 1, col 1: error CS0246: The type or namespace name 'Selection' could not be found", text);
-            Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("• snippet line 1, col 1: error CS0246: The type or namespace name 'Selection' could not be found", text);
+        Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
     }
 
     [Fact]
     public async Task UnityEval_WhenSnippetCompilationFailsWithoutCommonUnityType_DoesNotAppendMissingNamespaceHint()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "eval(1,4): error CS1002: ; expected"
-            };
+            Success = false,
+            Message = "eval(1,4): error CS1002: ; expected"
+        };
 
-            var result = await tools.UnityEvalAsync("int x = 1");
+        var result = await ctx.Tools.UnityEvalAsync("int x = 1");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
-            Assert.DoesNotContain("Hint: Missing using directive?", text);
-            Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
+        Assert.DoesNotContain("Hint: Missing using directive?", text);
+        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
     }
 
     [Fact]
     public async Task UnityEval_WhenProjectCompilationFailsWithCommonUnityType_DoesNotAppendMissingNamespaceHint()
     {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'GameObject' does not exist in the current context"
-            };
+            Success = false,
+            Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'GameObject' does not exist in the current context"
+        };
 
-            var result = await tools.UnityEvalAsync("return 42;");
+        var result = await ctx.Tools.UnityEvalAsync("return 42;");
 
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("Assets/Scripts/Player.cs", text);
-            Assert.DoesNotContain("Hint: Missing using directive?", text);
-            Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void DiagnosticFormatter_ParseCompilerDiagnostics_WhenPipeSeparated_ParsesMultipleDiagnostics()
-    {
-        string text = "eval(1,4): error CS1002: ; expected | eval(1,1): error CS0103: The name 'xyz' does not exist in the current context";
-        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Equal(2, diags.Count);
-        Assert.Equal("eval", diags[0].File);
-        Assert.Equal(1, diags[0].Line);
-        Assert.Equal(4, diags[0].Column);
-        Assert.Equal("CS1002", diags[0].Code);
-        Assert.Equal("; expected", diags[0].Message);
-
-        Assert.Equal("eval", diags[1].File);
-        Assert.Equal(1, diags[1].Line);
-        Assert.Equal(1, diags[1].Column);
-        Assert.Equal("CS0103", diags[1].Code);
-        Assert.Equal("The name 'xyz' does not exist in the current context", diags[1].Message);
-    }
-
-    [Fact]
-    public void DiagnosticFormatter_ParseCompilerDiagnostics_PreservesPipeInsideSingleDiagnosticMessage()
-    {
-        string text = "Assets/Scripts/Flags.cs(12,9): error CS0019: Operator '|' cannot be applied to operands a | b";
-        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Single(diags);
-        Assert.Equal("Assets/Scripts/Flags.cs", diags[0].File);
-        Assert.Equal(12, diags[0].Line);
-        Assert.Equal(9, diags[0].Column);
-        Assert.Equal("CS0019", diags[0].Code);
-        Assert.Equal("Operator '|' cannot be applied to operands a | b", diags[0].Message);
-    }
-
-    [Fact]
-    public void DiagnosticFormatter_ParseCompilerDiagnostics_SplitsJoinedDiagnosticsWhilePreservingMessagePipes()
-    {
-        string text = "Assets/Scripts/Flags.cs(12,9): error CS0019: Bad expression a | b | Assets/Scripts/Other.cs(4,1): error CS1002: ; expected";
-        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
-
-        Assert.Equal(2, diags.Count);
-        Assert.Equal("Assets/Scripts/Flags.cs", diags[0].File);
-        Assert.Equal("CS0019", diags[0].Code);
-        Assert.Equal("Bad expression a | b", diags[0].Message);
-
-        Assert.Equal("Assets/Scripts/Other.cs", diags[1].File);
-        Assert.Equal("CS1002", diags[1].Code);
-        Assert.Equal("; expected", diags[1].Message);
-    }
-
-    [Theory]
-    [InlineData("eval", true)]
-    [InlineData("EVAL", true)]
-    [InlineData("<eval>", true)]
-    [InlineData("<stdin>", true)]
-    [InlineData("snippet", true)]
-    [InlineData("SNIPPET", true)]
-    [InlineData("Assets/Scripts/Player.cs", false)]
-    [InlineData("eval.cs", false)]
-    [InlineData("snippet.cs", false)]
-    [InlineData("", false)]
-    [InlineData(null, false)]
-    public void DiagnosticFormatter_IsEvalSynthetic_IdentifiesSyntheticFileNames(string? file, bool expected)
-    {
-        Assert.Equal(expected, DiagnosticFormatter.IsEvalSynthetic(file));
-    }
-
-    [Theory]
-    [InlineData("eval")]
-    [InlineData("EVAL")]
-    [InlineData("<eval>")]
-    [InlineData("snippet")]
-    public void DiagnosticFormatter_BuildFileUri_WhenSyntheticFile_ReturnsEmpty(string file)
-    {
-        string uri = DiagnosticFormatter.BuildFileUri(file, 1, "C:/Repo");
-        Assert.Equal(string.Empty, uri);
-    }
-
-    [Theory]
-    [InlineData("Assets/Scripts/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("Assets/Scripts/Foo.cs", 10, "C:\\Repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("Assets/Scripts/Foo.cs", 10, "C:\\Repo\\", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("Assets/Scripts/Foo.cs", 10, "/home/user/repo", "file:///home/user/repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("Assets/Scripts/Foo.cs", 10, "/home/user/repo/", "file:///home/user/repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("./Assets/Scripts/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData(".\\Assets\\Scripts\\Foo.cs", 10, "C:\\Repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("C:/Repo/Assets/Scripts/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("C:\\Repo\\Assets\\Scripts\\Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("C:/Repo/Assets/Scripts/Foo.cs", 10, "/home/user/repo", "file:///C:/Repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("/home/user/repo/Assets/Scripts/Foo.cs", 10, "/home/user/repo", "file:///home/user/repo/Assets/Scripts/Foo.cs#L10")]
-    [InlineData("/home/user/repo/Assets/Scripts/Foo.cs", 10, "C:/Repo", "file:///home/user/repo/Assets/Scripts/Foo.cs#L10")]
-    public void BuildFileUri_WindowsAndPosixPaths_FormatsCorrectFileUris(string file, int line, string projectRoot, string expectedUri)
-    {
-        string uri = DiagnosticFormatter.BuildFileUri(file, line, projectRoot);
-        Assert.Equal(expectedUri, uri);
-    }
-
-    [Theory]
-    [InlineData(
-        "Assets/My Scripts/50% complete/#draft?.cs",
-        7,
-        "/Users/tester/My Project",
-        "file:///Users/tester/My%20Project/Assets/My%20Scripts/50%25%20complete/%23draft%3F.cs#L7")]
-    [InlineData(
-        "C:\\Work Folder\\foo#bar%?.cs",
-        42,
-        "C:\\Project",
-        "file:///C:/Work%20Folder/foo%23bar%25%3F.cs#L42")]
-    [InlineData(
-        "/home/tester/Проект/naïve file.cs",
-        3,
-        "/home/tester",
-        "file:///home/tester/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82/na%C3%AFve%20file.cs#L3")]
-    [InlineData(
-        "\\\\build-server\\Shared Folder\\foo#bar.cs",
-        5,
-        "C:/Project",
-        "file://build-server/Shared%20Folder/foo%23bar.cs#L5")]
-    public void BuildFileUri_EncodesRawPathComponentsAcrossPlatformStyles(
-        string file,
-        int line,
-        string projectRoot,
-        string expectedUri)
-    {
-        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, projectRoot));
-    }
-
-    [Fact]
-    public void BuildFileUri_EncodesExtractedSpecialCharactersAndPreservesLineAnchor()
-    {
-        const string stackTrace = "at Suite.Test() in C:\\Project Folder\\Assets\\file#name%.cs:line 12";
-
-        var (file, line, uri) = DiagnosticFormatter.Default.ExtractSourceLocation(stackTrace, "C:/Project");
-
-        Assert.Equal("C:\\Project Folder\\Assets\\file#name%.cs", file);
-        Assert.Equal(12, line);
-        Assert.Equal("file:///C:/Project%20Folder/Assets/file%23name%25.cs#L12", uri);
-    }
-
-    [Theory]
-    [InlineData(
-        "file:///C:/Project%20Folder/Source%23.cs",
-        19,
-        "file:///C:/Project%20Folder/Source%23.cs#L19")]
-    [InlineData(
-        "file://build-server/Shared Folder/naïve%20file.cs#L8",
-        19,
-        "file://build-server/Shared%20Folder/na%C3%AFve%20file.cs#L8")]
-    public void BuildFileUri_EncodesExistingFileUriWithoutDoubleEncodingOrReplacingAnchor(
-        string fileUri,
-        int line,
-        string expectedUri)
-    {
-        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(fileUri, line, "C:/Project"));
-    }
-
-    [Theory]
-    [InlineData("Packages/com.unity.test-framework/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
-    [InlineData("Packages\\com.unity.test-framework\\Foo.cs", 10, "C:\\Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
-    [InlineData("Packages/com.unity.test-framework/Foo.cs", 10, "/home/user/repo", "file:///home/user/repo/Packages/com.unity.test-framework/Foo.cs#L10")]
-    [InlineData("/Packages/com.unity.test-framework/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
-    [InlineData("\\Packages\\com.unity.test-framework\\Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
-    [InlineData("./Packages/com.unity.test-framework/Foo.cs", 10, "C:/Repo", "file:///C:/Repo/Packages/com.unity.test-framework/Foo.cs#L10")]
-    [InlineData("Packages/com.unity.test-framework/Foo.cs", 10, null, "file:///Packages/com.unity.test-framework/Foo.cs#L10")]
-    public void BuildFileUri_PackageDependencies_ResolvesAgainstProjectRootWithLineAnchors(
-        string file,
-        int line,
-        string? projectRoot,
-        string expectedUri)
-    {
-        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, projectRoot));
-    }
-
-    [Theory]
-    [InlineData("/mnt/c/Repo/Assets/Foo.cs", 15, "C:/Repo", "file:///mnt/c/Repo/Assets/Foo.cs#L15")]
-    [InlineData("/mnt/c/Repo/Assets/Foo.cs", 15, null, "file:///mnt/c/Repo/Assets/Foo.cs#L15")]
-    [InlineData("/mnt/d/Project/Packages/com.foo/Bar.cs", 42, "C:/Repo", "file:///mnt/d/Project/Packages/com.foo/Bar.cs#L42")]
-    public void BuildFileUri_WslMountPaths_GeneratesValidFileUrisAcrossHosts(
-        string file,
-        int line,
-        string? projectRoot,
-        string expectedUri)
-    {
-        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, projectRoot));
-    }
-
-    [Theory]
-    [InlineData("\\\\server\\share\\Assets\\Foo.cs", 20, "file://server/share/Assets/Foo.cs#L20")]
-    [InlineData("//server/share/Assets/Foo.cs", 20, "file://server/share/Assets/Foo.cs#L20")]
-    [InlineData("\\\\build-server\\Shared Folder\\foo#bar.cs", 5, "file://build-server/Shared%20Folder/foo%23bar.cs#L5")]
-    [InlineData("//build-server/Shared Folder/naïve file.cs", 8, "file://build-server/Shared%20Folder/na%C3%AFve%20file.cs#L8")]
-    public void BuildFileUri_UncPaths_PreservesAuthorityAndLineAnchors(
-        string file,
-        int line,
-        string expectedUri)
-    {
-        Assert.Equal(expectedUri, DiagnosticFormatter.BuildFileUri(file, line, "C:/Project"));
-    }
-
-    [Fact]
-    public void BuildFileUri_CrossDriveAndUnanchoredUnc_ProducesValidUris()
-    {
-        // Unanchored UNC path
-        Assert.Equal("file://server/share/file.cs", DiagnosticFormatter.BuildFileUri(@"\\server\share\file.cs", null, "C:/Project"));
-        Assert.Equal("file://server/share/file.cs", DiagnosticFormatter.BuildFileUri("//server/share/file.cs", null, "C:/Project"));
-
-        // Cross-drive paths
-        Assert.Equal("file:///D:/OtherDrive/Assets/Script.cs#L99", DiagnosticFormatter.BuildFileUri("D:/OtherDrive/Assets/Script.cs", 99, "C:/Project"));
-        Assert.Equal("file:///D:/OtherDrive/Assets/Script.cs#L99", DiagnosticFormatter.BuildFileUri(@"D:\OtherDrive\Assets\Script.cs", 99, "C:/Project"));
-    }
-
-    [Fact]
-    public void FormatCompilerDiagnostics_WithPackageDependencyPath_ResolvesAgainstProjectRoot()
-    {
-        string diagText = "Packages/com.unity.test-framework/Runner.cs(42,10): error CS0103: The name 'Runner' does not exist in the current context";
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(diagText, "C:/UnityProject", isSuccess: false);
-
-        Assert.Contains("file:///C:/UnityProject/Packages/com.unity.test-framework/Runner.cs#L42", formatted);
-        Assert.Contains("error CS0103", formatted);
-    }
-
-    // ==========================================
-    // 7. Tool description regression tests
-    // ==========================================
-
-    [Theory]
-    [InlineData("unity_refresh", "Refreshes AssetDatabase and returns compiler and asset import diagnostics. C# compiler errors persist across no-op refreshes, while non-C# diagnostics (shaders, import failures) are captured only during active imports and not re-emitted if assets are unchanged. Normal refresh is fast when unchanged; set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
-    [InlineData("unity_eval", "Evaluates C# top-level statements in the active Unity Editor with top-level await. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Call 'return Inspect.Help();' for cheatsheet.")]
-    [InlineData("unity_test", "Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. To discover available tests or verify exact test names before running, evaluate Inspect.Tests(\"<filter>\") via unity_eval. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
-    [InlineData("unity_coverage", "Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
-    public void UnityTools_Methods_HaveExpectedRefinedDescriptions(string toolName, string expectedDescription)
-    {
-        var methods = typeof(UnityTools).GetMethods(BindingFlags.Public | BindingFlags.Instance);
-        var targetMethod = methods.FirstOrDefault(m =>
-            m.GetCustomAttribute<McpServerToolAttribute>()?.Name == toolName);
-
-        Assert.NotNull(targetMethod);
-        var descAttr = targetMethod.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Equal(expectedDescription, descAttr.Description);
-    }
-
-    [Fact]
-    public void UnityTools_UnityEval_CodeParameter_HasAccurateDescription()
-    {
-        var evalMethod = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityEvalAsync));
-        Assert.NotNull(evalMethod);
-        var codeParam = evalMethod.GetParameters().FirstOrDefault(p => p.Name == "code");
-        Assert.NotNull(codeParam);
-        var descAttr = codeParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Equal("Raw C# source text to evaluate. Send plain text directly—do not wrap in JSON.", descAttr.Description);
-    }
-
-    [Theory]
-    [InlineData("return 1 + 1;", "return 1 + 1;")]
-    [InlineData("using System.IO;\nreturn 42;", "using System.IO;\nreturn 42;")]
-    [InlineData("{\"code\": \"return 50;\"}", "return 50;")]
-    [InlineData("{\n  \"code\": \"using UnityEngine;\\nDebug.Log(1);\"\n}", "using UnityEngine;\nDebug.Log(1);")]
-    public void UnityTools_UnwrapJsonCodeIfPresent_ExtractsCodeProperly(string input, string expected)
-    {
-        string actual = UnityTools.UnwrapJsonCodeIfPresent(input);
-        Assert.Equal(expected, actual);
-    }
-
-    [Fact]
-    public void UnityTools_UnityRefresh_CleanParameter_HasAccurateDescription()
-    {
-        var refreshMethod = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityRefreshAsync));
-        Assert.NotNull(refreshMethod);
-        var cleanParam = refreshMethod.GetParameters().FirstOrDefault(p => p.Name == "clean");
-        Assert.NotNull(cleanParam);
-        var descAttr = cleanParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Contains("full script recompilation", descAttr.Description);
-    }
-
-    [Fact]
-    public void UnityTools_AllTools_HaveNonEmptyDescriptions()
-    {
-        var methods = typeof(UnityTools).GetMethods(BindingFlags.Public | BindingFlags.Instance);
-        var toolMethods = methods.Where(m => m.GetCustomAttribute<McpServerToolAttribute>() != null).ToList();
-        Assert.NotEmpty(toolMethods);
-        foreach (var m in toolMethods)
-        {
-            var desc = m.GetCustomAttribute<DescriptionAttribute>();
-            Assert.NotNull(desc);
-            Assert.False(string.IsNullOrWhiteSpace(desc.Description));
-        }
-    }
-
-    [Fact]
-    public void UnityTools_UnityTest_Parameters_OnlyExposeCanonicalPluralParameters()
-    {
-        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityTestAsync));
-        Assert.NotNull(method);
-
-        var paramNames = method.GetParameters().Select(p => p.Name).ToList();
-
-        // Canonical plural parameters
-        Assert.Contains("testNames", paramNames);
-        Assert.Contains("groupNames", paramNames);
-        Assert.Contains("categoryNames", paramNames);
-        Assert.Contains("assemblyNames", paramNames);
-        Assert.Contains("mode", paramNames);
-        Assert.Contains("failedOnly", paramNames);
-        Assert.Contains("coverage", paramNames);
-
-        // Deprecated singular / legacy aliases MUST NOT exist
-        Assert.DoesNotContain("testName", paramNames);
-        Assert.DoesNotContain("group", paramNames);
-        Assert.DoesNotContain("filter", paramNames);
-        Assert.DoesNotContain("category", paramNames);
-        Assert.DoesNotContain("assembly", paramNames);
-
-        // Check default parameter values
-        var modeParam = method.GetParameters().First(p => p.Name == "mode");
-        Assert.False(modeParam.HasDefaultValue);
-
-        var failedOnlyParam = method.GetParameters().First(p => p.Name == "failedOnly");
-        Assert.Equal(false, failedOnlyParam.DefaultValue);
-
-        var coverageParam = method.GetParameters().First(p => p.Name == "coverage");
-        Assert.Equal(false, coverageParam.DefaultValue);
-    }
-
-    [Fact]
-    public void UnityTools_UnityTest_GroupNames_HasAccurateDescription()
-    {
-        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityTestAsync));
-        Assert.NotNull(method);
-
-        var groupNamesParam = method.GetParameters().FirstOrDefault(p => p.Name == "groupNames");
-        Assert.NotNull(groupNamesParam);
-
-        var descAttr = groupNamesParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Equal(
-            ".NET Regular Expression patterns to match test names, fixtures, or namespaces (e.g. ['.*Movement.*']). Evaluated as .NET Regex (do not use glob syntax like *Test*).",
-            descAttr.Description);
-    }
-
-    [Fact]
-    public void UnityTools_UnityTest_FailedOnly_HasAccurateDescription()
-    {
-        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityTestAsync));
-        Assert.NotNull(method);
-
-        var failedOnlyParam = method.GetParameters().FirstOrDefault(p => p.Name == "failedOnly");
-        Assert.NotNull(failedOnlyParam);
-
-        var descAttr = failedOnlyParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Equal(
-            "Only run tests that previously failed. Recommended for slow test suites; skip if tests run quickly.",
-            descAttr.Description);
-    }
-
-    [Fact]
-    public void UnityTools_UnityTest_Mode_HasAccurateDescription()
-    {
-        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityTestAsync));
-        Assert.NotNull(method);
-
-        var modeParam = method.GetParameters().FirstOrDefault(p => p.Name == "mode");
-        Assert.NotNull(modeParam);
-
-        var descAttr = modeParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Equal(
-            "Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.",
-            descAttr.Description);
-    }
-
-    [Fact]
-    public void UnityTools_UnityTest_Coverage_HasAccurateDescription()
-    {
-        var method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityTestAsync));
-        Assert.NotNull(method);
-
-        var coverageParam = method.GetParameters().FirstOrDefault(p => p.Name == "coverage");
-        Assert.NotNull(coverageParam);
-
-        var descAttr = coverageParam.GetCustomAttribute<DescriptionAttribute>();
-        Assert.NotNull(descAttr);
-        Assert.Contains("in-memory code coverage", descAttr.Description);
-    }
-
-    [Theory]
-    [InlineData("testNames")]
-    [InlineData("groupNames")]
-    [InlineData("categoryNames")]
-    [InlineData("assemblyNames")]
-    public async Task UnityTest_IndividualFilters_SupportSingleAndMultipleArrayValues(string filterParam)
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult { Success = true, PassCount = 1 };
-
-            // Single-element array call
-            switch (filterParam)
-            {
-                case "testNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["MyTest"]);
-                    Assert.NotNull(client.LastTestNames);
-                    Assert.Equal(["MyTest"], client.LastTestNames);
-                    break;
-                case "groupNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["MyGroup.*"]);
-                    Assert.NotNull(client.LastGroupNames);
-                    Assert.Equal(["MyGroup.*"], client.LastGroupNames);
-                    break;
-                case "categoryNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, categoryNames: ["Unit"]);
-                    Assert.NotNull(client.LastCategoryNames);
-                    Assert.Equal(["Unit"], client.LastCategoryNames);
-                    break;
-                case "assemblyNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, assemblyNames: ["MyAssembly"]);
-                    Assert.NotNull(client.LastAssemblyNames);
-                    Assert.Equal(["MyAssembly"], client.LastAssemblyNames);
-                    break;
-            }
-
-            // Multiple-element array call
-            switch (filterParam)
-            {
-                case "testNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["Test1", "Test2"]);
-                    Assert.NotNull(client.LastTestNames);
-                    Assert.Equal(["Test1", "Test2"], client.LastTestNames);
-                    break;
-                case "groupNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: ["Group1.*", "Group2.*"]);
-                    Assert.NotNull(client.LastGroupNames);
-                    Assert.Equal(["Group1.*", "Group2.*"], client.LastGroupNames);
-                    break;
-                case "categoryNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, categoryNames: ["Unit", "Integration"]);
-                    Assert.NotNull(client.LastCategoryNames);
-                    Assert.Equal(["Unit", "Integration"], client.LastCategoryNames);
-                    break;
-                case "assemblyNames":
-                    await tools.UnityTestAsync(mode: UnityTestMode.EditMode, assemblyNames: ["Asm1", "Asm2"]);
-                    Assert.NotNull(client.LastAssemblyNames);
-                    Assert.Equal(["Asm1", "Asm2"], client.LastAssemblyNames);
-                    break;
-            }
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Theory]
-    [InlineData("HelloWorld", 3, "Hel")]
-    [InlineData("HelloWorld", 2, "He")]
-    [InlineData("HelloWorld", 1, "H")]
-    [InlineData("HelloWorld", 0, "HelloWorld")]
-    [InlineData("HelloWorld", -1, "HelloWorld")]
-    public void UnityTools_ExtractOneLineSummaryMessage_HandlesShortMaxLineLengthsSafely(string input, int maxLen, string expected)
-    {
-        string? result = UnityToolOutputFormatter.ExtractOneLineSummaryMessage(input, maxLineLength: maxLen);
-        Assert.Equal(expected, result);
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Assets/Scripts/Player.cs", text);
+        Assert.DoesNotContain("Hint: Missing using directive?", text);
+        Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
     }
 
     [Fact]
@@ -3469,29 +718,26 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             string customRootNormalized = customPathResolver.ProjectRoot.Replace('\\', '/');
             string pmRootNormalized = pmPathResolver.ProjectRoot.Replace('\\', '/');
 
-            // 1. UnityRefreshAsync with compilation errors uses custom path resolver
             client.RefreshResultToReturn = new UnityRefreshResult
             {
                 Success = false,
                 Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
             };
             var refreshResult = await tools.UnityRefreshAsync();
-            string refreshText = GetResultText(refreshResult);
+            string refreshText = ToolFormattingTestContext.GetResultText(refreshResult);
             Assert.Contains(customRootNormalized, refreshText);
             Assert.DoesNotContain(pmRootNormalized, refreshText);
 
-            // 2. UnityEvalAsync with compilation error uses custom path resolver
             client.EvalResultToReturn = new UnityEvalResult
             {
                 Success = false,
                 Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
             };
             var evalResult = await tools.UnityEvalAsync("var x = 1;");
-            string evalText = GetResultText(evalResult);
+            string evalText = ToolFormattingTestContext.GetResultText(evalResult);
             Assert.Contains(customRootNormalized, evalText);
             Assert.DoesNotContain(pmRootNormalized, evalText);
 
-            // 3. UnityTestAsync with CompileError uses custom path resolver
             client.TestRunResultToReturn = new UnityTestRunResult
             {
                 Success = false,
@@ -3499,11 +745,10 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
                 Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'speed' does not exist in the current context"
             };
             var testCompileResult = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-            string testCompileText = GetResultText(testCompileResult);
+            string testCompileText = ToolFormattingTestContext.GetResultText(testCompileResult);
             Assert.Contains(customRootNormalized, testCompileText);
             Assert.DoesNotContain(pmRootNormalized, testCompileText);
 
-            // 4. UnityTestAsync with test failure source location uses custom path resolver
             client.TestRunResultToReturn = new UnityTestRunResult
             {
                 Success = false,
@@ -3522,7 +767,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
                 ]
             };
             var testRunResult = await tools.UnityTestAsync(mode: UnityTestMode.EditMode);
-            string testRunText = GetResultText(testRunResult);
+            string testRunText = ToolFormattingTestContext.GetResultText(testRunResult);
             Assert.Contains(customRootNormalized, testRunText);
             Assert.DoesNotContain(pmRootNormalized, testRunText);
         }
@@ -3534,387 +779,27 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
-    public async Task UnityTools_UsesInjectedDiagnosticFormatter()
-    {
-        var (tempDir, pm, client, _) = CreateTestContext();
-        try
-        {
-            var customFormatter = new CustomMockDiagnosticFormatter();
-            var tools = new UnityTools(client, pm.PathResolver, diagnosticFormatter: customFormatter);
-
-            client.RefreshResultToReturn = new UnityRefreshResult
-            {
-                Success = false,
-                Message = "Assets/Scripts/Foo.cs(1,1): error CS0001: Error"
-            };
-
-            var result = await tools.UnityRefreshAsync();
-            string text = GetResultText(result);
-            Assert.Contains("CUSTOM_FORMATTED_DIAGNOSTIC", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void DiagnosticFormatter_WhenProjectErrorsExist_SuppressesPackageCacheWarnings()
-    {
-        string text = "Assets/Scripts/Player.cs(12,4): error CS0103: The name 'player' does not exist\n" +
-                      "Library/PackageCache/com.unity.ugui@2.0.0/Runtime/UI.cs(50,1): warning CS0219: Variable 'foo' is unused\n" +
-                      "Assets/Scripts/Game.cs(8,2): warning CS0168: Variable 'bar' is unused";
-
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            failureTrailer: "Compilation failed.",
-            isSuccess: false);
-
-        Assert.Contains("Assets/Scripts/Player.cs", formatted);
-        Assert.Contains("Assets/Scripts/Game.cs", formatted);
-        Assert.DoesNotContain("com.unity.ugui", formatted);
-        Assert.DoesNotContain("Library/PackageCache", formatted);
-    }
-
-    [Fact]
-    public void DiagnosticFormatter_WhenNoProjectErrorsExist_PreservesPackageCacheWarnings()
-    {
-        string text = "Library/PackageCache/com.unity.ugui@2.0.0/Runtime/UI.cs(50,1): warning CS0219: Variable 'foo' is unused\n" +
-                      "Assets/Scripts/Game.cs(8,2): warning CS0168: Variable 'bar' is unused";
-
-        string formatted = DiagnosticFormatter.Default.FormatCompilerDiagnostics(
-            text,
-            projectRoot: "C:/Code/MyProject",
-            successTrailer: "Compilation succeeded.",
-            isSuccess: true);
-
-        Assert.Contains("com.unity.ugui", formatted);
-        Assert.Contains("Assets/Scripts/Game.cs", formatted);
-    }
-
-    [Fact]
-    public void DiagnosticFormatter_CompactTestStackTrace_SelectsTopActionableProjectLines()
-    {
-        var formatter = new DiagnosticFormatter();
-        string rawTrace = string.Join(Environment.NewLine, new[]
-        {
-            "  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual) [0x00000] in <...>:0",
-            "  at MyProject.Engine.ComputeInternal () [0x00005] in Assets/Scripts/Engine.cs:10",
-            "  at MyProject.Engine.Compute () [0x00010] in Assets/Scripts/Engine.cs:25",
-            "  at MyProject.Tests.PlayerTests.MoveTest () [0x00025] in Assets/Tests/PlayerTests.cs:42",
-            "  at MyProject.Tests.PlayerTests.BaseRunner () [0x00001] in Assets/Tests/BaseRunner.cs:99",
-            "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke(System.Reflection.RuntimeMethodInfo,object,object[],System.Exception&)",
-            "  at NUnit.Framework.Internal.Commands.TestMethodCommand.Execute (NUnit.Framework.Internal.TestExecutionContext context) [0x0001c] in <...>:0"
-        });
-
-        string compacted = formatter.CompactTestStackTrace(rawTrace, maxLines: 3);
-
-        Assert.Contains("ComputeInternal", compacted);
-        Assert.Contains("Compute ()", compacted);
-        Assert.Contains("MoveTest", compacted);
-        Assert.DoesNotContain("BaseRunner", compacted);
-        Assert.DoesNotContain("TestMethodCommand", compacted);
-        Assert.DoesNotContain("InternalInvoke", compacted);
-        Assert.DoesNotContain("Assert.AreEqual", compacted);
-    }
-
-    // ==========================================
-    // Empty-filter diagnostic hints tests (#133)
-    // ==========================================
-
-    [Fact]
-    public async Task UnityTest_ZeroTests_WithOtherModeMatches_FormatsCrossModeHint()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0,
-                OtherModeMatches = ["MyCompany.GameplayTests.CombatTest"]
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, groupNames: [".*Combat.*"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching filter '.*Combat.*' (mode: editmode).", text);
-            Assert.Contains("Matching tests were found in mode 'playmode' (1 matching test exists, e.g. 'MyCompany.GameplayTests.CombatTest'). Did you mean to run with mode 'playmode'?", text);
-            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"Combat\");' to discover available tests in loaded assemblies.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityTest_ZeroTests_WithMultipleOtherModeMatches_FormatsCountAndExample()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0,
-                OtherModeMatches = ["Suite.Test1", "Suite.Test2", "Suite.Test3"]
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.PlayMode, testNames: ["Suite.Test1"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching testNames 'Suite.Test1' (mode: playmode).", text);
-            Assert.Contains("Matching tests were found in mode 'editmode' (3 matching tests exist, e.g. 'Suite.Test1'). Did you mean to run with mode 'editmode'?", text);
-            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"Suite.Test1\");' to discover available tests in loaded assemblies.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityTest_ZeroTests_WithNearMatches_FormatsDidYouMeanSuggestions()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0,
-                NearMatches =
-                [
-                    "UnityLeanMcpTests.UnityInspectTests.Hierarchy_ActiveScene_ReturnsFormattedHierarchy",
-                    "UnityLeanMcpTests.UnityInspectTests.Hierarchy_TransformRoot_ReturnsFormattedHierarchy"
-                ]
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["UnityInspectTests"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching testNames 'UnityInspectTests' (mode: editmode).", text);
-            Assert.Contains("Did you mean one of these tests?", text);
-            Assert.Contains("  • UnityLeanMcpTests.UnityInspectTests.Hierarchy_ActiveScene_ReturnsFormattedHierarchy", text);
-            Assert.Contains("  • UnityLeanMcpTests.UnityInspectTests.Hierarchy_TransformRoot_ReturnsFormattedHierarchy", text);
-            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"UnityInspectTests\");' to discover available tests in loaded assemblies.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public async Task UnityTest_ZeroTests_WithoutMatches_FormatsGenericModeHintAndInspectHint()
-    {
-        var (tempDir, pm, client, tools) = CreateTestContext();
-        try
-        {
-            client.TestRunResultToReturn = new UnityTestRunResult
-            {
-                Success = true,
-                FailCount = 0,
-                PassCount = 0,
-                SkipCount = 0
-            };
-
-            var result = await tools.UnityTestAsync(mode: UnityTestMode.EditMode, testNames: ["NonExistentTest"]);
-
-            Assert.True(result.IsError);
-            string text = GetResultText(result);
-            Assert.Contains("No tests found matching testNames 'NonExistentTest' (mode: editmode).", text);
-            Assert.Contains("Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'.", text);
-            Assert.Contains("Hint: Use unity_eval with 'return Inspect.Tests(\"NonExistentTest\");' to discover available tests in loaded assemblies.", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void TestDiscoveryHelper_DiscoverHints_FindsCrossModeAndNearMatches()
-    {
-        var mockItems = new List<TestDiscoveryHelper.DiscoveredItem>
-        {
-            new()
-            {
-                FullName = "MyCompany.Tests.PlayModeCombatTests.AttackTest",
-                FixtureFullName = "MyCompany.Tests.PlayModeCombatTests",
-                Name = "AttackTest",
-                AssemblyName = "CombatTests",
-                Mode = "playmode"
-            },
-            new()
-            {
-                FullName = "MyCompany.Tests.EditModeTests.MovementTest",
-                FixtureFullName = "MyCompany.Tests.EditModeTests",
-                Name = "MovementTest",
-                AssemblyName = "EditTests",
-                Mode = "editmode"
-            },
-            new()
-            {
-                FullName = "MyCompany.Tests.EditModeTests.JumpTest",
-                FixtureFullName = "MyCompany.Tests.EditModeTests",
-                Name = "JumpTest",
-                AssemblyName = "EditTests",
-                Mode = "editmode"
-            }
-        };
-
-        // 1. Cross-mode: looking for AttackTest in editmode should find it in playmode
-        TestDiscoveryHelper.DiscoverHints(
-            currentMode: "editmode",
-            testNames: ["MyCompany.Tests.PlayModeCombatTests.AttackTest"],
-            groupNames: null,
-            categoryNames: null,
-            assemblyNames: null,
-            out var otherModeMatches,
-            out var nearMatches,
-            preloadedItems: mockItems);
-
-        Assert.Single(otherModeMatches);
-        Assert.Equal("MyCompany.Tests.PlayModeCombatTests.AttackTest", otherModeMatches[0]);
-
-        // 2. Near-match: looking for "Movement" in editmode should near-match "MyCompany.Tests.EditModeTests.MovementTest"
-        TestDiscoveryHelper.DiscoverHints(
-            currentMode: "editmode",
-            testNames: ["Movement"],
-            groupNames: null,
-            categoryNames: null,
-            assemblyNames: null,
-            out otherModeMatches,
-            out nearMatches,
-            preloadedItems: mockItems);
-
-        Assert.Empty(otherModeMatches);
-        Assert.Single(nearMatches);
-        Assert.Equal("MyCompany.Tests.EditModeTests.MovementTest", nearMatches[0]);
-
-        // 3. Near-match on fixture name: "EditModeTests" should find both MovementTest and JumpTest
-        TestDiscoveryHelper.DiscoverHints(
-            currentMode: "editmode",
-            testNames: ["EditModeTests"],
-            groupNames: null,
-            categoryNames: null,
-            assemblyNames: null,
-            out otherModeMatches,
-            out nearMatches,
-            preloadedItems: mockItems);
-
-        Assert.Equal(2, nearMatches.Count);
-        Assert.Contains("MyCompany.Tests.EditModeTests.MovementTest", nearMatches);
-        Assert.Contains("MyCompany.Tests.EditModeTests.JumpTest", nearMatches);
-    }
-
-    [Fact]
     public async Task UnityEval_WhenCompilationFails_ParsesBoundedDiagnosticsOnce()
     {
-        var (tempDir, pm, client, _) = CreateTestContext();
-        try
+        using var ctx = new ToolFormattingTestContext();
+        var spyFormatter = new CountingDiagnosticFormatter();
+        var tools = new UnityTools(ctx.Client, ctx.PathResolver, spyFormatter);
+        string hugePrefix = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context\n";
+        string oversizedError = hugePrefix + new string('X', McpOutputLimits.MaxFormattedOutputCharacters * 2);
+
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
-            var spyFormatter = new CountingDiagnosticFormatter();
-            var tools = new UnityTools(client, pm.PathResolver, spyFormatter);
-            string hugePrefix = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context\n";
-            string oversizedError = hugePrefix + new string('X', McpOutputLimits.MaxFormattedOutputCharacters * 2);
+            Success = false,
+            Message = oversizedError
+        };
 
-            client.EvalResultToReturn = new UnityEvalResult
-            {
-                Success = false,
-                Message = oversizedError
-            };
+        var result = await tools.UnityEvalAsync("GameObject.Find(\"x\");");
 
-            var result = await tools.UnityEvalAsync("GameObject.Find(\"x\");");
-
-            Assert.True(result.IsError);
-            Assert.Equal(1, spyFormatter.ParseCallCount);
-            Assert.NotNull(spyFormatter.LastParsedInput);
-            Assert.True(spyFormatter.LastParsedInput!.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
-            string text = GetResultText(result);
-            Assert.Contains("Hint: Missing using directive?", text);
-        }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    private sealed class CountingDiagnosticFormatter : IDiagnosticFormatter
-    {
-        private readonly IDiagnosticFormatter _inner = DiagnosticFormatter.Default;
-        public int ParseCallCount { get; private set; }
-        public string? LastParsedInput { get; private set; }
-
-        public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
-            => _inner.ExtractSourceLocation(stackTrace, projectRoot);
-
-        public string SanitizeTestStackTrace(string? stackTrace)
-            => _inner.SanitizeTestStackTrace(stackTrace);
-
-        public string CompactTestStackTrace(string? stackTrace, int maxLines = 3)
-            => _inner.CompactTestStackTrace(stackTrace, maxLines);
-
-        public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
-        {
-            ParseCallCount++;
-            LastParsedInput = diagnosticText;
-            return _inner.ParseCompilerDiagnostics(diagnosticText);
-        }
-
-        public string FormatCompilerDiagnostics(
-            string? diagnosticText,
-            string? projectRoot,
-            string? successTrailer = null,
-            string? failureTrailer = null,
-            bool isSuccess = false,
-            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
-            bool isEval = false)
-            => _inner.FormatCompilerDiagnostics(diagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings, isEval);
-
-        public string FormatCompilerDiagnostics(
-            IReadOnlyList<StructuredCompilerDiagnostic> diagnostics,
-            string? rawDiagnosticText,
-            string? projectRoot,
-            string? successTrailer = null,
-            string? failureTrailer = null,
-            bool isSuccess = false,
-            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
-            bool isEval = false)
-            => _inner.FormatCompilerDiagnostics(diagnostics, rawDiagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings, isEval);
-
-        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
-            => _inner.FormatDiagnostic(diagnostic, projectRoot, isEval);
-    }
-
-    private sealed class CustomMockDiagnosticFormatter : IDiagnosticFormatter
-    {
-        public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
-            => (null, null, null);
-        public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
-        public string CompactTestStackTrace(string? stackTrace, int maxLines = 3) => stackTrace ?? string.Empty;
-        public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText) => [];
-        public string FormatCompilerDiagnostics(
-            string? diagnosticText,
-            string? projectRoot,
-            string? successTrailer = null,
-            string? failureTrailer = null,
-            bool isSuccess = false,
-            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
-            bool isEval = false) => "CUSTOM_FORMATTED_DIAGNOSTIC";
-        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
-            => "CUSTOM_DIAGNOSTIC";
+        Assert.True(result.IsError);
+        Assert.Equal(1, spyFormatter.ParseCallCount);
+        Assert.NotNull(spyFormatter.LastParsedInput);
+        Assert.True(spyFormatter.LastParsedInput!.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("Hint: Missing using directive?", text);
     }
 }

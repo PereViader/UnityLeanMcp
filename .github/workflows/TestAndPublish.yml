@@ -74,6 +74,8 @@ jobs:
           echo "changelog<<EOF"$'\n'"$payload"$'\n'EOF >> "$GITHUB_OUTPUT"
 
       - name: Run build script
+        env:
+          KEEP_BUILD_DIR: "1"
         run: |
           bash ./build.sh
 
