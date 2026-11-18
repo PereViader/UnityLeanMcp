@@ -59,7 +59,7 @@ namespace UnityLeanMcpTests
                     CancelOperationHandler.CancelActiveOperation(scope.Id, cancelWriter);
                 ICommandHandler handler = kind == "eval" ? (ICommandHandler)new EvalHandler() :
                     kind == "test" ? new RunTestsHandler() : kind == "refresh" ?
-                    new PereViader.UnityLeanMcp.Editor.RefreshHandler() : new PereViader.UnityLeanMcp.Editor.RecompileHandler();
+                    new RefreshHandler() : new RecompileHandler();
                 var dispatch = typeof(UnityLeanMcpServer).GetMethod("ExecuteMainThreadCommand", BindingFlags.NonPublic | BindingFlags.Static);
                 using (var stream = new MemoryStream())
                 using (var writer = new StreamWriter(stream) { AutoFlush = true })

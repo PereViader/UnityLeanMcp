@@ -1,9 +1,8 @@
 using System;
 using System.IO;
 using UnityEngine;
-using UnityLeanMcp;
 
-namespace PereViader.UnityLeanMcp.Editor
+namespace UnityLeanMcp
 {
     internal abstract class CompilationCommandHandlerBase : ICommandHandler
     {

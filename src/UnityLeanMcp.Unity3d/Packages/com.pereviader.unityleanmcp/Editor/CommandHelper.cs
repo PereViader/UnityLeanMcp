@@ -1,10 +1,6 @@
 using System;
 using System.IO;
-using System.Reflection;
-using System.Text;
 using System.Threading;
-using UnityEditor;
-using UnityEngine;
 
 namespace UnityLeanMcp
 {
@@ -13,21 +9,6 @@ namespace UnityLeanMcp
         // Shared protocol helpers
         public static string FormatResult(object result, bool isVoidStatement = false, bool prettyPrint = true) =>
             UnityResultFormatter.FormatResult(result, isVoidStatement, prettyPrint);
-
-        public static Type FindType(string fullName)
-        {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                try
-                {
-                    var type = assembly.GetType(fullName);
-                    if (type != null)
-                        return type;
-                }
-                catch { }
-            }
-            return null;
-        }
 
         public static bool IsAssetImportWorkerProcess()
         {
@@ -56,31 +37,7 @@ namespace UnityLeanMcp
 
         public static string ReadFileWithRetry(string path, int maxRetries = 5, int delayMs = 10)
         {
-            for (int i = 0; i < maxRetries; i++)
-            {
-                try
-                {
-                    using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                    using (var reader = new StreamReader(fs, Encoding.UTF8))
-                    {
-                        return reader.ReadToEnd();
-                    }
-                }
-                catch (IOException) when (i < maxRetries - 1)
-                {
-                    Thread.Sleep(delayMs);
-                }
-                catch (UnauthorizedAccessException) when (i < maxRetries - 1)
-                {
-                    Thread.Sleep(delayMs);
-                }
-            }
-
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var reader = new StreamReader(fs, Encoding.UTF8))
-            {
-                return reader.ReadToEnd();
-            }
+            return WorkerThreadSnapshots.ReadFileWithRetry(path, maxRetries, delayMs);
         }
 
         public static bool DeleteFileWithRetry(string path, int maxRetries = 5, int delayMs = 10)

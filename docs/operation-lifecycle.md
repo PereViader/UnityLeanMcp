@@ -62,7 +62,7 @@ Unity-dependent initialization and execution run on the main thread. Asset-impor
 - Lifecycle handlers return domain results; dispatchers own wire framing. Refresh and recompile share their common lifecycle implementation.
 - Resource cancellation and disposal occur outside synchronization locks, after checking the owning operation ID.
 
-During reload or shutdown, signal waiting dispatchers, close the listener under lifecycle synchronization, join the listener thread, then remove endpoint metadata. The listener retries endpoint publication until successful or stopped; a transient metadata write failure cannot leave a permanently undiscoverable listener. Signal and close client sockets without joining workers from the Unity main thread. `EXIT` notifies operation lifecycle handlers before stopping the server and requesting Editor exit; abrupt termination still cannot guarantee terminal publication.
+During reload or shutdown, signal waiting dispatchers, close the listener under lifecycle synchronization, join the listener thread, then remove endpoint metadata. The listener retries endpoint publication until successful or stopped; a transient metadata write failure cannot leave a permanently undiscoverable listener. Signal and close client sockets without joining workers from the Unity main thread. `EXIT` replies `EXITING`, stops the server, and requests Editor exit via `EditorApplication.Exit(0)` without publishing terminal operation results; abrupt termination cannot guarantee terminal publication.
 
 ### Compilation and diagnostics
 

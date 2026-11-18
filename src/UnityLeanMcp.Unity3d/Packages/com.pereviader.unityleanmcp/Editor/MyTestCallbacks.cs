@@ -246,7 +246,8 @@ namespace UnityLeanMcp
                 // reload. Once a result exists for this run it is authoritative.
                 if (!string.IsNullOrEmpty(runId) && File.Exists(resultsPath))
                 {
-                    var existing = JsonUtility.FromJson<UnityTestRunResult>(CommandHelper.ReadFileWithRetry(resultsPath, maxRetries: 3, delayMs: 10));
+                    string existingJson = CommandHelper.ReadFileWithRetry(resultsPath, maxRetries: 3, delayMs: 10);
+                    var existing = !string.IsNullOrEmpty(existingJson) ? JsonUtility.FromJson<UnityTestRunResult>(existingJson) : null;
                     if (existing != null && existing.runId == runId)
                     {
                         m_TerminalResultClaimed = true;

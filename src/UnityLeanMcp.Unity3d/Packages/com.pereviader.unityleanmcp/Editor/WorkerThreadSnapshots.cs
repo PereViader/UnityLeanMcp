@@ -8,28 +8,10 @@ using System.Threading;
 namespace UnityLeanMcp
 {
     /// <summary>
-    /// Immutable data read by socket worker threads. This type deliberately has
+    /// Immutable data read by socket worker threads. These types deliberately have
     /// no Unity dependencies so a worker can inspect durable state while the
     /// main thread is executing synchronously or reloading its domain.
     /// </summary>
-    internal sealed class WorkerOperationStateSnapshot
-    {
-        public WorkerOperationStateSnapshot(string operationId, string kind, string status, string startedUtc, string updatedUtc)
-        {
-            OperationId = operationId;
-            Kind = kind;
-            Status = status;
-            StartedUtc = startedUtc;
-            UpdatedUtc = updatedUtc;
-        }
-
-        public string OperationId { get; }
-        public string Kind { get; }
-        public string Status { get; }
-        public string StartedUtc { get; }
-        public string UpdatedUtc { get; }
-    }
-
     internal sealed class WorkerTestRunStateSnapshot
     {
         public WorkerTestRunStateSnapshot(string runId)

@@ -1032,7 +1032,6 @@ namespace UnityLeanMcp
 
     internal static class CommandHelper
     {
-        public static Type? FindType(string name) => null;
         public static bool IsAssetImportWorkerProcess() => false;
         public static string ReadFileWithRetry(string path, int maxRetries = 3, int delayMs = 10) =>
             System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : string.Empty;

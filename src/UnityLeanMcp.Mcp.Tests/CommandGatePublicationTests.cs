@@ -62,7 +62,7 @@ public sealed class CommandGatePublicationTests : IDisposable
         Assert.Null(UnityCommandGate.ReadSnapshot());
     }
 
-    private sealed class CompilationProbe(string kind) : PereViader.UnityLeanMcp.Editor.CompilationCommandHandlerBase
+    private sealed class CompilationProbe(string kind) : CompilationCommandHandlerBase
     {
         public int Executions { get; private set; }
         protected override string OperationKind => kind;

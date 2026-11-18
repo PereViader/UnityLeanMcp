@@ -63,7 +63,7 @@ namespace UnityLeanMcp
             WriteAtomic(configPath, UnityLeanJson.Serialize(document, prettyPrint: true));
         }
 
-        private static void WriteAtomic(string path, string content)
+        internal static void WriteAtomic(string path, string content)
         {
             string directory = Path.GetDirectoryName(Path.GetFullPath(path));
             Directory.CreateDirectory(directory);

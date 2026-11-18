@@ -205,7 +205,7 @@ namespace UnityLeanMcp
                 (path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\'));
         }
 
-        private static string MakeRelativePath(string fromPath, string toPath)
+        internal static string MakeRelativePath(string fromPath, string toPath)
         {
             var fromUri = new Uri(AppendSlash(Path.GetFullPath(fromPath)));
             var toUri = new Uri(Path.GetFullPath(toPath));

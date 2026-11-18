@@ -6,6 +6,8 @@ namespace UnityLeanMcp
 {
     internal static class UnityLeanMcpPaths
     {
+        private static readonly object s_InitLock = new object();
+        private static volatile bool s_Initialized;
         private static string s_ProjectRoot;
         private static string s_TempDir;
         private static string s_PortFile;
@@ -21,7 +23,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_ProjectRoot)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_ProjectRoot;
             }
         }
@@ -30,7 +32,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_TempDir)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_TempDir;
             }
         }
@@ -38,7 +40,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_PortFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_PortFile;
             }
         }
@@ -46,7 +48,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_DiagnosticsFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_DiagnosticsFile;
             }
         }
@@ -54,7 +56,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_RefreshResultFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_RefreshResultFile;
             }
         }
@@ -65,7 +67,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_TestRunningFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_TestRunningFile;
             }
         }
@@ -73,7 +75,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_TestCancellationFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_TestCancellationFile;
             }
         }
@@ -81,7 +83,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_TestResultsFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_TestResultsFile;
             }
         }
@@ -89,7 +91,7 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_EvalResultFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_EvalResultFile;
             }
         }
@@ -125,32 +127,40 @@ namespace UnityLeanMcp
         {
             get
             {
-                if (string.IsNullOrEmpty(s_WorkerLogFile)) EnsureInitialized();
+                if (!s_Initialized) EnsureInitialized();
                 return s_WorkerLogFile;
             }
         }
 
         public static void EnsureInitialized()
         {
-            if (!string.IsNullOrEmpty(s_TempDir)) return;
-            try
+            if (s_Initialized) return;
+            lock (s_InitLock)
             {
-                s_ProjectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                if (s_Initialized) return;
+                string projectRoot = null;
+                try
+                {
+                    projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"UnityLeanMcp: Failed to initialize ProjectRoot: {ex}");
+                }
+                if (string.IsNullOrEmpty(projectRoot)) return;
+                string tempDir = Path.Combine(projectRoot, "Temp");
+                s_ProjectRoot = projectRoot;
+                s_PortFile = Path.Combine(tempDir, "unity_lean_mcp_port.txt");
+                s_DiagnosticsFile = Path.Combine(tempDir, "unity_compilation_errors.txt");
+                s_RefreshResultFile = Path.Combine(tempDir, "unity_refresh_result.json");
+                s_TestRunningFile = Path.Combine(tempDir, "unity_test_running.txt");
+                s_TestCancellationFile = Path.Combine(tempDir, "unity_test_cancellation.txt");
+                s_TestResultsFile = Path.Combine(tempDir, "unity_test_results.json");
+                s_EvalResultFile = Path.Combine(tempDir, "unity_eval_result.json");
+                s_WorkerLogFile = Path.Combine(tempDir, "unity_lean_mcp_worker.log");
+                s_TempDir = tempDir;
+                s_Initialized = true;
             }
-            catch (Exception ex)
-            {
-                Debug.LogError($"UnityLeanMcp: Failed to initialize ProjectRoot: {ex}");
-            }
-            if (string.IsNullOrEmpty(s_ProjectRoot)) return;
-            s_TempDir = Path.Combine(s_ProjectRoot, "Temp");
-            s_PortFile = Path.Combine(s_TempDir, "unity_lean_mcp_port.txt");
-            s_DiagnosticsFile = Path.Combine(s_TempDir, "unity_compilation_errors.txt");
-            s_RefreshResultFile = Path.Combine(s_TempDir, "unity_refresh_result.json");
-            s_TestRunningFile = Path.Combine(s_TempDir, "unity_test_running.txt");
-            s_TestCancellationFile = Path.Combine(s_TempDir, "unity_test_cancellation.txt");
-            s_TestResultsFile = Path.Combine(s_TempDir, "unity_test_results.json");
-            s_EvalResultFile = Path.Combine(s_TempDir, "unity_eval_result.json");
-            s_WorkerLogFile = Path.Combine(s_TempDir, "unity_lean_mcp_worker.log");
         }
     }
 }

@@ -43,9 +43,7 @@ namespace UnityLeanMcp
                 string pluginJsonPath = Path.Combine(rootFolder, ".agents", "plugins", "unity-lean-mcp", "plugin.json");
                 if (!File.Exists(pluginJsonPath))
                 {
-                    string pluginDir = Path.GetDirectoryName(pluginJsonPath);
-                    if (!Directory.Exists(pluginDir)) Directory.CreateDirectory(pluginDir);
-                    File.WriteAllText(pluginJsonPath, "{\n  \"name\": \"unity-lean-mcp\"\n}\n", Encoding.UTF8);
+                    McpConfigurationWriter.WriteAtomic(pluginJsonPath, "{\n  \"name\": \"unity-lean-mcp\"\n}\n");
                 }
 
                 string[] targetConfigs = new[]
@@ -62,12 +60,12 @@ namespace UnityLeanMcp
                 foreach (string configPath in targetConfigs)
                 {
                     UpdateOrWriteMcpConfig(configPath, mcpDir, "mcpServers", rootFolder);
-                    sb.AppendLine($"• {MakeRelativePath(rootFolder, configPath).Replace('\\', '/')}");
+                    sb.AppendLine($"• {McpConfigurationPaths.MakeRelativePath(rootFolder, configPath).Replace('\\', '/')}");
                 }
 
                 string codexConfigPath = Path.Combine(rootFolder, ".codex", "config.toml");
                 AppendCodexMcpConfig(codexConfigPath, mcpDir);
-                sb.AppendLine($"• {MakeRelativePath(rootFolder, codexConfigPath).Replace('\\', '/')}");
+                sb.AppendLine($"• {McpConfigurationPaths.MakeRelativePath(rootFolder, codexConfigPath).Replace('\\', '/')}");
 
                 Debug.Log($"[UnityLeanMcp] {sb}");
                 if (showDialog && !Application.isBatchMode)
@@ -171,25 +169,5 @@ namespace UnityLeanMcp
 
         public static void AppendCodexMcpConfig(string configPath, string mcpDir) =>
             McpConfigurationWriter.AppendCodexMcpConfig(configPath, mcpDir);
-
-        private static string MakeRelativePath(string fromPath, string toPath)
-        {
-            var fromUri = new Uri(AppendSlash(Path.GetFullPath(fromPath)));
-            var toUri = new Uri(Path.GetFullPath(toPath));
-            if (fromUri.Scheme != toUri.Scheme)
-            {
-                return toPath;
-            }
-            var relativeUri = fromUri.MakeRelativeUri(toUri);
-            string relPath = Uri.UnescapeDataString(relativeUri.ToString());
-            return relPath.Replace('\\', '/');
-        }
-
-        private static string AppendSlash(string path)
-        {
-            return path.EndsWith(Path.DirectorySeparatorChar.ToString())
-                ? path
-                : path + Path.DirectorySeparatorChar;
-        }
     }
 }

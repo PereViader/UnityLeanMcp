@@ -1,7 +1,6 @@
 using UnityEditor;
-using UnityLeanMcp;
 
-namespace PereViader.UnityLeanMcp.Editor
+namespace UnityLeanMcp
 {
     internal sealed class RefreshHandler : CompilationCommandHandlerBase
     {

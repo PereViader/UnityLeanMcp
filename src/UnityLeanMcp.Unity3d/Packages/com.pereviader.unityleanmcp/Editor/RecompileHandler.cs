@@ -1,8 +1,7 @@
 using UnityEditor;
 using UnityEditor.Compilation;
-using UnityLeanMcp;
 
-namespace PereViader.UnityLeanMcp.Editor
+namespace UnityLeanMcp
 {
     internal sealed class RecompileHandler : CompilationCommandHandlerBase
     {

@@ -14,7 +14,6 @@ namespace UnityLeanMcp
             PollHelper.PollOperationResult(
                 operationId,
                 UnityLeanMcpPaths.GetEvalResultFile(operationId),
-                null,
                 writer,
                 PollHelper.WriteOperationResultResponse);
         }

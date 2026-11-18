@@ -543,7 +543,7 @@ namespace UnityLeanMcp
                 if (File.Exists(path))
                 {
                     string json = CommandHelper.ReadFileWithRetry(path, maxRetries: 3, delayMs: 10);
-                    var result = JsonUtility.FromJson<UnityTestRunResult>(json);
+                    var result = !string.IsNullOrEmpty(json) ? JsonUtility.FromJson<UnityTestRunResult>(json) : null;
                     if (result?.failedTests != null)
                     {
                         foreach (var fail in result.failedTests)

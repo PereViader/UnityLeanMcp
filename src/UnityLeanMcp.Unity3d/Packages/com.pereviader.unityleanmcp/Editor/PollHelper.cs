@@ -36,10 +36,8 @@ namespace UnityLeanMcp
         public static void PollOperationResult(
             string operationId,
             string resultFilePath,
-            string runningFilePath,
             StreamWriter writer,
-            Action<WorkerOperationResultSnapshot, StreamWriter> writeResultResponse,
-            Func<string, string, bool> isRunningMatch = null)
+            Action<WorkerOperationResultSnapshot, StreamWriter> writeResultResponse)
         {
             bool TryWriteTerminalResult()
             {
@@ -58,7 +56,7 @@ namespace UnityLeanMcp
                     }
                     catch (Exception)
                     {
-                        // Transient read or deserialization error during reload/transition; fall through to running check
+                        // Transient read or deserialization error during reload/transition; fall through to command gate check
                     }
                 }
                 return false;
@@ -70,40 +68,7 @@ namespace UnityLeanMcp
                 return;
             }
 
-            // 2. Active running state for this operation
-            if (isRunningMatch != null)
-            {
-                if (isRunningMatch(runningFilePath, operationId))
-                {
-                    writer.WriteLine("RUNNING");
-                    return;
-                }
-            }
-            else if (!string.IsNullOrEmpty(runningFilePath) && File.Exists(runningFilePath))
-            {
-                bool matches = false;
-                try
-                {
-                    string runningOperationId = WorkerThreadSnapshots.ReadFileWithRetry(runningFilePath)?.Trim();
-                    matches = string.IsNullOrEmpty(operationId) || runningOperationId == operationId;
-                }
-                catch (IOException)
-                {
-                    matches = false;
-                }
-                catch (Exception)
-                {
-                    matches = false;
-                }
-
-                if (matches)
-                {
-                    writer.WriteLine("RUNNING");
-                    return;
-                }
-            }
-
-            // 3. Fallback to command gate for busy vs idle state
+            // 2. Fallback to command gate for busy vs idle state
             var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null)
             {
