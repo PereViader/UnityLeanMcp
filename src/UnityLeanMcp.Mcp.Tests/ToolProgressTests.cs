@@ -301,7 +301,7 @@ public class ToolProgressTests
             return null;
         });
 
-        var tools = new UnityTools(server.Client, server.ProcessManager);
+        var tools = new UnityTools(server.Client, server.ProcessManager.PathResolver);
         var result = await tools.UnityCoverageAsync(new[] { "Assets/Scripts/Foo.cs" }, progress, CancellationToken.None);
 
         Assert.False(result.IsError);

@@ -15,7 +15,7 @@ public sealed class ToolSchemaTests
     [Fact]
     public void UnityTest_ExposesTypedFilterArraysModeEnumAndCoverage()
     {
-        var tools = new UnityTools(null!, null!, new UnityPathResolver("/tmp"));
+        var tools = new UnityTools(null!, new UnityPathResolver("/tmp"));
         MethodInfo method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityTestAsync))!;
         var tool = McpServerTool.Create(method, tools, new McpServerToolCreateOptions());
         Assert.Equal("unity_test", tool.ProtocolTool.Name);
@@ -46,7 +46,7 @@ public sealed class ToolSchemaTests
     [Fact]
     public void UnityCoverage_ExposesRequiredPathsArray()
     {
-        var tools = new UnityTools(null!, null!, new UnityPathResolver("/tmp"));
+        var tools = new UnityTools(null!, new UnityPathResolver("/tmp"));
         MethodInfo method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityCoverageAsync))!;
         var tool = McpServerTool.Create(method, tools, new McpServerToolCreateOptions());
         Assert.Equal("unity_coverage", tool.ProtocolTool.Name);

@@ -19,14 +19,14 @@ public class CoverageFormattingTests
     [Fact]
     public void FormatUncoveredSpans_EmptyOrNull_ReturnsEmptyList()
     {
-        Assert.Empty(UnityTools.FormatUncoveredSpans(null!));
-        Assert.Empty(UnityTools.FormatUncoveredSpans([]));
+        Assert.Empty(UnityToolOutputFormatter.FormatUncoveredSpans(null!));
+        Assert.Empty(UnityToolOutputFormatter.FormatUncoveredSpans([]));
     }
 
     [Fact]
     public void FormatUncoveredSpans_SingleLine_ReturnsSingleSpan()
     {
-        var spans = UnityTools.FormatUncoveredSpans([42]);
+        var spans = UnityToolOutputFormatter.FormatUncoveredSpans([42]);
         Assert.Single(spans);
         Assert.Equal(42, spans[0].StartLine);
         Assert.Equal(42, spans[0].EndLine);
@@ -35,7 +35,7 @@ public class CoverageFormattingTests
     [Fact]
     public void FormatUncoveredSpans_ConsecutiveLines_CollapsedIntoSingleSpan()
     {
-        var spans = UnityTools.FormatUncoveredSpans([10, 11, 12, 13]);
+        var spans = UnityToolOutputFormatter.FormatUncoveredSpans([10, 11, 12, 13]);
         Assert.Single(spans);
         Assert.Equal(10, spans[0].StartLine);
         Assert.Equal(13, spans[0].EndLine);
@@ -44,7 +44,7 @@ public class CoverageFormattingTests
     [Fact]
     public void FormatUncoveredSpans_MultipleGapsAndDuplicates_ReturnsSortedMergedSpans()
     {
-        var spans = UnityTools.FormatUncoveredSpans([5, 1, 2, 3, 10, 10, 11, 20]);
+        var spans = UnityToolOutputFormatter.FormatUncoveredSpans([5, 1, 2, 3, 10, 10, 11, 20]);
         Assert.Equal(4, spans.Count);
 
         Assert.Equal(1, spans[0].StartLine);
@@ -63,8 +63,8 @@ public class CoverageFormattingTests
     [Fact]
     public void FormatUncoveredMethodSpans_EmptyOrNull_ReturnsEmptyString()
     {
-        Assert.Equal("", UnityTools.FormatUncoveredMethodSpans(null!));
-        Assert.Equal("", UnityTools.FormatUncoveredMethodSpans([]));
+        Assert.Equal("", UnityToolOutputFormatter.FormatUncoveredMethodSpans(null!));
+        Assert.Equal("", UnityToolOutputFormatter.FormatUncoveredMethodSpans([]));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class CoverageFormattingTests
         {
             new() { Method = "MovePlayer", StartLine = 42, EndLine = 50 }
         };
-        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        string formatted = UnityToolOutputFormatter.FormatUncoveredMethodSpans(spans);
         Assert.Equal("MovePlayer (42-50)", formatted);
     }
 
@@ -85,7 +85,7 @@ public class CoverageFormattingTests
         {
             new() { Method = "TakeDamage", StartLine = 15, EndLine = 15 }
         };
-        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        string formatted = UnityToolOutputFormatter.FormatUncoveredMethodSpans(spans);
         Assert.Equal("TakeDamage (15)", formatted);
     }
 
@@ -98,7 +98,7 @@ public class CoverageFormattingTests
             new() { Method = "MovePlayer", StartLine = 48, EndLine = 50 },
             new() { Method = "MovePlayer", StartLine = 55, EndLine = 55 }
         };
-        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        string formatted = UnityToolOutputFormatter.FormatUncoveredMethodSpans(spans);
         Assert.Equal("MovePlayer (42-45, 48-50, 55)", formatted);
     }
 
@@ -111,7 +111,7 @@ public class CoverageFormattingTests
             new() { Method = "ApplyDamage", StartLine = 78, EndLine = 84 },
             new() { Method = "Parry", StartLine = 90, EndLine = 90 }
         };
-        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        string formatted = UnityToolOutputFormatter.FormatUncoveredMethodSpans(spans);
         Assert.Equal("MovePlayer (42-50), ApplyDamage (78-84), Parry (90)", formatted);
     }
 
@@ -123,7 +123,7 @@ public class CoverageFormattingTests
             new() { Method = "", StartLine = 10, EndLine = 12 },
             new() { Method = "", StartLine = 15, EndLine = 15 }
         };
-        string formatted = UnityTools.FormatUncoveredMethodSpans(spans);
+        string formatted = UnityToolOutputFormatter.FormatUncoveredMethodSpans(spans);
         Assert.Equal("10-12, 15", formatted);
     }
 
@@ -1094,7 +1094,7 @@ public class CoverageFormattingTests
 
         var pm = new FakeUnityProcessManager(tempDir);
         var client = new FakeUnityClient(pm);
-        var tools = new UnityTools(client, pm);
+        var tools = new UnityTools(client, pm.PathResolver);
         return (tempDir, pm, client, tools);
     }
 

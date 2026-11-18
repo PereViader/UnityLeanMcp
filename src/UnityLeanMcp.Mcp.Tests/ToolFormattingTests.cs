@@ -143,7 +143,7 @@ public class ToolFormattingTests
         var pathResolver = new UnityPathResolver(tempDir);
         var pm = new FakeUnityProcessManager(pathResolver);
         var client = new FakeUnityClient(pm, pathResolver);
-        var tools = new UnityTools(client, pm, pathResolver);
+        var tools = new UnityTools(client, pathResolver);
 
         return (tempDir, pm, client, tools);
     }
@@ -1170,7 +1170,7 @@ public class ToolFormattingTests
     [InlineData("Line 1\nLine 2\nLine 3", "Line 1")]
     public void UnityTools_ExtractOneLineSummaryMessage_ExtractsCorrectly(string? input, string? expected)
     {
-        string? actual = UnityTools.ExtractOneLineSummaryMessage(input);
+        string? actual = UnityToolOutputFormatter.ExtractOneLineSummaryMessage(input);
         Assert.Equal(expected, actual);
     }
 
@@ -1178,7 +1178,7 @@ public class ToolFormattingTests
     public void UnityTools_ExtractOneLineSummaryMessage_TruncatesLongLines()
     {
         string longInput = new string('x', 250);
-        string? result = UnityTools.ExtractOneLineSummaryMessage(longInput, maxLineLength: 200);
+        string? result = UnityToolOutputFormatter.ExtractOneLineSummaryMessage(longInput, maxLineLength: 200);
         Assert.NotNull(result);
         Assert.Equal(200, result.Length);
         Assert.EndsWith("...", result);
@@ -2469,7 +2469,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         var (tempDir, pm, client, _) = CreateTestContext();
         try
         {
-            var customTools = new UnityTools(client, pm, pm.PathResolver, customFormatter);
+            var customTools = new UnityTools(client, pm.PathResolver, customFormatter);
 
             client.RefreshResultToReturn = new UnityRefreshResult
             {
@@ -3446,7 +3446,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     [InlineData("HelloWorld", -1, "HelloWorld")]
     public void UnityTools_ExtractOneLineSummaryMessage_HandlesShortMaxLineLengthsSafely(string input, int maxLen, string expected)
     {
-        string? result = UnityTools.ExtractOneLineSummaryMessage(input, maxLineLength: maxLen);
+        string? result = UnityToolOutputFormatter.ExtractOneLineSummaryMessage(input, maxLineLength: maxLen);
         Assert.Equal(expected, result);
     }
 
@@ -3464,7 +3464,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             var customPathResolver = new UnityPathResolver(customDir);
             var pm = new FakeUnityProcessManager(pmPathResolver);
             var client = new FakeUnityClient(pm, pmPathResolver);
-            var tools = new UnityTools(client, pm, pathResolver: customPathResolver);
+            var tools = new UnityTools(client, customPathResolver);
 
             string customRootNormalized = customPathResolver.ProjectRoot.Replace('\\', '/');
             string pmRootNormalized = pmPathResolver.ProjectRoot.Replace('\\', '/');
@@ -3540,7 +3540,7 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         try
         {
             var customFormatter = new CustomMockDiagnosticFormatter();
-            var tools = new UnityTools(client, pm, diagnosticFormatter: customFormatter);
+            var tools = new UnityTools(client, pm.PathResolver, diagnosticFormatter: customFormatter);
 
             client.RefreshResultToReturn = new UnityRefreshResult
             {
@@ -3818,6 +3818,85 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Equal(2, nearMatches.Count);
         Assert.Contains("MyCompany.Tests.EditModeTests.MovementTest", nearMatches);
         Assert.Contains("MyCompany.Tests.EditModeTests.JumpTest", nearMatches);
+    }
+
+    [Fact]
+    public async Task UnityEval_WhenCompilationFails_ParsesBoundedDiagnosticsOnce()
+    {
+        var (tempDir, pm, client, _) = CreateTestContext();
+        try
+        {
+            var spyFormatter = new CountingDiagnosticFormatter();
+            var tools = new UnityTools(client, pm.PathResolver, spyFormatter);
+            string hugePrefix = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context\n";
+            string oversizedError = hugePrefix + new string('X', McpOutputLimits.MaxFormattedOutputCharacters * 2);
+
+            client.EvalResultToReturn = new UnityEvalResult
+            {
+                Success = false,
+                Message = oversizedError
+            };
+
+            var result = await tools.UnityEvalAsync("GameObject.Find(\"x\");");
+
+            Assert.True(result.IsError);
+            Assert.Equal(1, spyFormatter.ParseCallCount);
+            Assert.NotNull(spyFormatter.LastParsedInput);
+            Assert.True(spyFormatter.LastParsedInput!.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+            string text = GetResultText(result);
+            Assert.Contains("Hint: Missing using directive?", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private sealed class CountingDiagnosticFormatter : IDiagnosticFormatter
+    {
+        private readonly IDiagnosticFormatter _inner = DiagnosticFormatter.Default;
+        public int ParseCallCount { get; private set; }
+        public string? LastParsedInput { get; private set; }
+
+        public (string? filePath, int? lineNumber, string? fileUri) ExtractSourceLocation(string? stackTrace, string? projectRoot)
+            => _inner.ExtractSourceLocation(stackTrace, projectRoot);
+
+        public string SanitizeTestStackTrace(string? stackTrace)
+            => _inner.SanitizeTestStackTrace(stackTrace);
+
+        public string CompactTestStackTrace(string? stackTrace, int maxLines = 3)
+            => _inner.CompactTestStackTrace(stackTrace, maxLines);
+
+        public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
+        {
+            ParseCallCount++;
+            LastParsedInput = diagnosticText;
+            return _inner.ParseCompilerDiagnostics(diagnosticText);
+        }
+
+        public string FormatCompilerDiagnostics(
+            string? diagnosticText,
+            string? projectRoot,
+            string? successTrailer = null,
+            string? failureTrailer = null,
+            bool isSuccess = false,
+            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
+            bool isEval = false)
+            => _inner.FormatCompilerDiagnostics(diagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings, isEval);
+
+        public string FormatCompilerDiagnostics(
+            IReadOnlyList<StructuredCompilerDiagnostic> diagnostics,
+            string? rawDiagnosticText,
+            string? projectRoot,
+            string? successTrailer = null,
+            string? failureTrailer = null,
+            bool isSuccess = false,
+            int maxWarnings = DiagnosticFormatter.DefaultMaxWarnings,
+            bool isEval = false)
+            => _inner.FormatCompilerDiagnostics(diagnostics, rawDiagnosticText, projectRoot, successTrailer, failureTrailer, isSuccess, maxWarnings, isEval);
+
+        public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)
+            => _inner.FormatDiagnostic(diagnostic, projectRoot, isEval);
     }
 
     private sealed class CustomMockDiagnosticFormatter : IDiagnosticFormatter
