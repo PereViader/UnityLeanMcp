@@ -111,18 +111,25 @@ public sealed class UnityClientCancellationTests
     [Theory]
     [InlineData("eval")]
     [InlineData("test")]
+    [InlineData("refresh")]
+    [InlineData("recompile")]
     public async Task LostAcknowledgement_CancellationBeforeRetry_CancelsSameOperation(string kind)
     {
         var paths = new UnityPathResolver(System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N")));
         using var cancellation = new CancellationTokenSource();
-        var transport = new LostAcknowledgementTransport(cancellation);
+        var transport = new LostAcknowledgementTransport(cancellation, cancelOnRefresh: kind is "refresh" or "recompile");
         var poller = new RecordingOperationPoller();
         var client = new UnityClient(new StubProcessManager(paths), paths,
             NullLogger<UnityClient>.Instance, transport, poller);
 
-        Task operation = kind == "eval"
-            ? client.EvalAsync("return 42;", cancellation.Token)
-            : client.RunTestsAsync(testNames: null, groupNames: null, categoryNames: null, assemblyNames: null, mode: "editmode", failedOnly: false, cancellationToken: cancellation.Token);
+        Task operation = kind switch
+        {
+            "eval" => client.EvalAsync("return 42;", cancellation.Token),
+            "test" => client.RunTestsAsync(testNames: null, groupNames: null, categoryNames: null, assemblyNames: null, mode: "editmode", failedOnly: false, cancellationToken: cancellation.Token),
+            "refresh" => client.RefreshAsync(isRecompile: false, cancellationToken: cancellation.Token),
+            "recompile" => client.RefreshAsync(isRecompile: true, cancellationToken: cancellation.Token),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
         Assert.Equal(1, poller.CancellationCount);
@@ -243,15 +250,19 @@ public sealed class UnityClientCancellationTests
             CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 
-    private sealed class LostAcknowledgementTransport(CancellationTokenSource cancellation) : IUnitySocketTransport
+    private sealed class LostAcknowledgementTransport(CancellationTokenSource cancellation, bool cancelOnRefresh = false) : IUnitySocketTransport
     {
         public string? OperationId { get; private set; }
         public Task<string?> SendCommandAsync(int port, string projectRoot, string command,
             int timeoutSeconds = 10, CancellationToken cancellationToken = default)
         {
             if (command.StartsWith("POLL_REFRESH", StringComparison.Ordinal)) return Task.FromResult<string?>("READY");
-            if (command.StartsWith("REFRESH ")) return Task.FromResult<string?>("REFRESHING");
-            Assert.True(command.StartsWith("EVAL ") || command.StartsWith("RUN_TESTS "));
+            if (!cancelOnRefresh && command.StartsWith("REFRESH ", StringComparison.Ordinal)) return Task.FromResult<string?>("REFRESHING");
+            Assert.True(
+                command.StartsWith("EVAL ", StringComparison.Ordinal) ||
+                command.StartsWith("RUN_TESTS ", StringComparison.Ordinal) ||
+                command.StartsWith("REFRESH ", StringComparison.Ordinal) ||
+                command.StartsWith("RECOMPILE ", StringComparison.Ordinal));
             OperationId = command.Split(' ')[1];
             // Admission happened, but no acknowledgement reached the caller. Cancel before
             // returning null: the next cancellable await is the dispatch retry delay.

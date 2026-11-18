@@ -107,9 +107,6 @@ public class UnityTestRunResult : IOperationResult
     [JsonPropertyName("coverageMessage")]
     public string? CoverageMessage { get; set; }
 
-    [JsonPropertyName("duration")]
-    public double Duration { get; set; }
-
     [JsonPropertyName("failedTests")]
     public List<FailedTestInfo> FailedTests { get; set; } = new();
 
@@ -218,15 +215,6 @@ public class UnityEvalResult : UnityOperationResult
 {
 }
 
-public class UnityStatusResult
-{
-    [JsonPropertyName("status")]
-    public string Status { get; set; } = ""; // Ready, Not Running, Compiling, Running Unreachable
-
-    [JsonPropertyName("details")]
-    public string? Details { get; set; }
-}
-
 public class UnityCompilationException : System.Exception
 {
     public List<string> ErrorLines { get; }
@@ -238,52 +226,24 @@ public class UnityCompilationException : System.Exception
 
 public class StructuredTestFailure
 {
-    [JsonPropertyName("name")]
     public string Name { get; set; } = "";
-
-    [JsonPropertyName("fullName")]
     public string FullName { get; set; } = "";
-
-    [JsonPropertyName("duration")]
     public double Duration { get; set; }
-
-    [JsonPropertyName("message")]
     public string Message { get; set; } = "";
-
-    [JsonPropertyName("stackTrace")]
     public string StackTrace { get; set; } = "";
-
-    [JsonPropertyName("filePath")]
     public string? FilePath { get; set; }
-
-    [JsonPropertyName("lineNumber")]
     public int? LineNumber { get; set; }
-
-    [JsonPropertyName("fileUri")]
     public string? FileUri { get; set; }
 }
 
 public class StructuredCompilerDiagnostic
 {
-    [JsonPropertyName("file")]
     public string File { get; set; } = "";
-
-    [JsonPropertyName("line")]
     public int Line { get; set; }
-
-    [JsonPropertyName("column")]
     public int Column { get; set; }
-
-    [JsonPropertyName("severity")]
     public string Severity { get; set; } = "";
-
-    [JsonPropertyName("code")]
     public string Code { get; set; } = "";
-
-    [JsonPropertyName("message")]
     public string Message { get; set; } = "";
-
-    [JsonPropertyName("assembly")]
     public string? Assembly { get; set; }
 }
 

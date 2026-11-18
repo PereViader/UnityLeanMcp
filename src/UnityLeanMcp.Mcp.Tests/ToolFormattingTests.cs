@@ -65,7 +65,6 @@ public class ToolFormattingTests
 
     private sealed class FakeUnityClient : UnityClient
     {
-        public string StatusToReturn { get; set; } = "Ready";
         public UnityRefreshResult RefreshResultToReturn { get; set; } = new();
         public UnityEvalResult EvalResultToReturn { get; set; } = new();
         public UnityTestRunResult TestRunResultToReturn { get; set; } = new();
@@ -79,9 +78,6 @@ public class ToolFormattingTests
             : this(pm, pm.PathResolver)
         {
         }
-
-        public override Task<string> GetStatusAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(StatusToReturn);
 
         public override Task<UnityRefreshResult> RefreshAsync(
             bool isRecompile = false,
@@ -1907,7 +1903,6 @@ public class ToolFormattingTests
                 PassCount = 7,
                 FailCount = 1,
                 SkipCount = 2,
-                Duration = 1.85,
                 FailedTests = failed
             };
 
@@ -1964,7 +1959,6 @@ public class ToolFormattingTests
                 PassCount = 1,
                 FailCount = 1,
                 SkipCount = 0,
-                Duration = 0.5,
                 FailedTests = failed
             };
 
@@ -3006,6 +3000,36 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Equal(1, diags[1].Column);
         Assert.Equal("CS0103", diags[1].Code);
         Assert.Equal("The name 'xyz' does not exist in the current context", diags[1].Message);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_ParseCompilerDiagnostics_PreservesPipeInsideSingleDiagnosticMessage()
+    {
+        string text = "Assets/Scripts/Flags.cs(12,9): error CS0019: Operator '|' cannot be applied to operands a | b";
+        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Single(diags);
+        Assert.Equal("Assets/Scripts/Flags.cs", diags[0].File);
+        Assert.Equal(12, diags[0].Line);
+        Assert.Equal(9, diags[0].Column);
+        Assert.Equal("CS0019", diags[0].Code);
+        Assert.Equal("Operator '|' cannot be applied to operands a | b", diags[0].Message);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_ParseCompilerDiagnostics_SplitsJoinedDiagnosticsWhilePreservingMessagePipes()
+    {
+        string text = "Assets/Scripts/Flags.cs(12,9): error CS0019: Bad expression a | b | Assets/Scripts/Other.cs(4,1): error CS1002: ; expected";
+        var diags = DiagnosticFormatter.Default.ParseCompilerDiagnostics(text);
+
+        Assert.Equal(2, diags.Count);
+        Assert.Equal("Assets/Scripts/Flags.cs", diags[0].File);
+        Assert.Equal("CS0019", diags[0].Code);
+        Assert.Equal("Bad expression a | b", diags[0].Message);
+
+        Assert.Equal("Assets/Scripts/Other.cs", diags[1].File);
+        Assert.Equal("CS1002", diags[1].Code);
+        Assert.Equal("; expected", diags[1].Message);
     }
 
     [Theory]

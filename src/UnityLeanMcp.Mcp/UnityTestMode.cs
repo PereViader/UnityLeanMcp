@@ -15,7 +15,7 @@ public sealed class UnityTestModeJsonConverter : JsonConverter<UnityTestMode>
             {
                 return mode;
             }
-            throw new JsonException($"Invalid test mode: '{str}'. Expected 'editmode' or 'playmode'.");
+            throw new JsonException(TestModeParser.GetInvalidModeMessage(str));
         }
         if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int intVal))
         {

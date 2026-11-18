@@ -24,9 +24,6 @@ public class UnityPathResolver : IUnityPathResolver
         UnityOperationKind.Eval => string.IsNullOrEmpty(operationId)
             ? Path.Combine(TempDir, "unity_eval_result.json")
             : Path.Combine(TempDir, $"unity_eval_{operationId}.json"),
-        UnityOperationKind.Coverage => string.IsNullOrEmpty(operationId)
-            ? Path.Combine(TempDir, "unity_coverage_result.json")
-            : Path.Combine(TempDir, $"unity_coverage_{operationId}.json"),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 

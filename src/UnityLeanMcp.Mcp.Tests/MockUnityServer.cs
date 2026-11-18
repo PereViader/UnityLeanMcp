@@ -201,6 +201,26 @@ public sealed class MockUnityServer : IAsyncDisposable, IDisposable
             return "READY";
         }
 
+        if (line.StartsWith("POLL_TESTS", StringComparison.OrdinalIgnoreCase))
+        {
+            string[] parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            string? opId = parts.Length > 1 ? parts[1] : null;
+            if (File.Exists(PathResolver.TestRunningFile))
+            {
+                string json = File.ReadAllText(PathResolver.TestRunningFile);
+                if (!string.IsNullOrWhiteSpace(json))
+                {
+                    if (string.IsNullOrEmpty(opId) ||
+                        (JsonSerializer.Deserialize<UnityTestRunState>(json) is { } state && state.RunId == opId))
+                    {
+                        return $"RUNNING {ProtocolCodec.EscapeLine(json)}";
+                    }
+                }
+            }
+
+            return "IDLE";
+        }
+
         if (line.StartsWith("GET_COVERAGE", StringComparison.OrdinalIgnoreCase))
         {
             return "SUCCESS {\"files\":[]}";

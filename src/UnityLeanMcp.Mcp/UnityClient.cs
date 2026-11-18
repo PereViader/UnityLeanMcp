@@ -59,54 +59,6 @@ public class UnityClient : IUnityClient
     /// </summary>
     public int PollIntervalMs { get; init; } = 500;
 
-    /// <summary>
-    /// Returns current Editor connection state: Ready, Not Running, Compiling, Running Unreachable, Busy, PlayMode, Compilation Error.
-    /// </summary>
-    public virtual async Task<string> GetStatusAsync(CancellationToken cancellationToken = default)
-    {
-        int port = _processManager.ReadPortFile();
-        if (port > 0)
-        {
-            // The project-scoped endpoint is the primary evidence of a live Editor.
-            // Process discovery is a fallback only: macOS GUI Editor command lines
-            // and zero-byte lockfiles are not reliably inspectable.
-            string? pingResp = await SendCommandAsync("PING", 2, cancellationToken);
-            if (pingResp == "PONG")
-            {
-                string? pollResp = await SendCommandAsync("POLL_REFRESH", 10, cancellationToken);
-                if (pollResp == "COMPILING" || pollResp == "UPDATING")
-                {
-                    return "Compiling";
-                }
-                if (string.Equals(pollResp, "PLAYMODE", StringComparison.OrdinalIgnoreCase))
-                {
-                    return "PlayMode";
-                }
-                if (string.Equals(pollResp, "COMPILATION_ERROR", StringComparison.OrdinalIgnoreCase))
-                {
-                    return "Compilation Error";
-                }
-                if (pollResp != null && pollResp.StartsWith("BUSY ", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parts = pollResp.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length >= 2)
-                    {
-                        return $"Busy ({parts[1]})";
-                    }
-                }
-
-                return pollResp == "READY" ? "Ready" : "Running Unreachable";
-            }
-        }
-
-        if (!_processManager.IsUnityRunning(out _))
-        {
-            return "Not Running";
-        }
-
-        return "Running Unreachable";
-    }
-
     internal static (bool isBusy, bool isCompilation, string? kind, string? opId) ParseBusyResponse(string? response)
     {
         if (string.IsNullOrWhiteSpace(response))
@@ -239,48 +191,58 @@ public class UnityClient : IUnityClient
                 : "Triggering AssetDatabase refresh..."
         });
 
-        while (true)
+        string operationKind = isRecompile ? "recompile" : "refresh";
+        bool cancellationMayBeNeeded = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
 
-            var persistedResult = TryReadJsonFile<UnityRefreshResult>(
-                _pathResolver.GetResultFilePath(isRecompile ? UnityOperationKind.Recompile : UnityOperationKind.Refresh, opId),
-                result => result.OperationId == opId);
-            if (persistedResult != null)
-                return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+                var persistedResult = TryReadJsonFile<UnityRefreshResult>(
+                    _pathResolver.GetResultFilePath(isRecompile ? UnityOperationKind.Recompile : UnityOperationKind.Refresh, opId),
+                    result => result.OperationId == opId);
+                if (persistedResult != null)
+                {
+                    cancellationMayBeNeeded = false;
+                    return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+                }
 
-            string? initialResponse;
-            try
-            {
-                initialResponse = await SendCommandAsync(triggerCommand, 10, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                await CancelOperationAsync(opId, isRecompile ? "recompile" : "refresh", CancellationToken.None);
-                throw;
-            }
-            if (initialResponse == null)
-            {
-                if (!_processManager.IsUnityRunning(out _))
-                    return new UnityRefreshResult { OperationId = opId, Success = false, Interrupted = true, Message = "Unity exited before the refresh completed." };
-                // A reload can discard an unaccepted main-thread dispatch. Resend the
-                // same ID; gate ownership and terminal results make this idempotent.
-                await Task.Delay(PollIntervalMs, cancellationToken);
-                continue;
-            }
-            var initialTerminalResult = ProtocolCodec.TryCreateImmediateTerminalResult<UnityRefreshResult>(initialResponse, opId);
-            if (initialTerminalResult != null)
-            {
-                return initialTerminalResult;
-            }
+                cancellationMayBeNeeded = true;
+                string? initialResponse = await SendCommandAsync(triggerCommand, 10, cancellationToken);
+                if (initialResponse == null)
+                {
+                    if (!_processManager.IsUnityRunning(out _))
+                        return new UnityRefreshResult { OperationId = opId, Success = false, Interrupted = true, Message = "Unity exited before the refresh completed." };
+                    // A reload can discard an unaccepted main-thread dispatch. Resend the
+                    // same ID; gate ownership and terminal results make this idempotent.
+                    await Task.Delay(PollIntervalMs, cancellationToken);
+                    continue;
+                }
+                var initialTerminalResult = ProtocolCodec.TryCreateImmediateTerminalResult<UnityRefreshResult>(initialResponse, opId);
+                if (initialTerminalResult != null)
+                {
+                    return initialTerminalResult;
+                }
 
-            var initBusy = ParseBusyResponse(initialResponse);
-            if (!initBusy.isBusy || string.Equals(initBusy.opId, opId, StringComparison.Ordinal))
-            {
-                return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
-            }
+                var initBusy = ParseBusyResponse(initialResponse);
+                if (!initBusy.isBusy || string.Equals(initBusy.opId, opId, StringComparison.Ordinal))
+                {
+                    cancellationMayBeNeeded = false;
+                    return await WaitForCompilationToSettleAsync(opId, isRecompile, progress, cancellationToken);
+                }
 
-            await WaitForActiveOperationAsync(initBusy.kind, initBusy.opId, progress, cancellationToken);
+                cancellationMayBeNeeded = false;
+                await WaitForActiveOperationAsync(initBusy.kind, initBusy.opId, progress, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (cancellationMayBeNeeded)
+            {
+                await CancelOperationAsync(opId, operationKind, CancellationToken.None);
+            }
+            throw;
         }
     }
 
@@ -644,12 +606,6 @@ public class UnityClient : IUnityClient
                                 }
                             }
                         }
-                        return Task.CompletedTask;
-                    },
-                    OnPollTick = _ =>
-                    {
-                        var runningState = TryReadJsonFile<UnityTestRunState>(_pathResolver.TestRunningFile, s => s.RunId == opId);
-                        ReportState(runningState);
                         return Task.CompletedTask;
                     }
                 };

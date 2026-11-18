@@ -83,6 +83,19 @@ public sealed class ToolSchemaTests
     }
 
     [Fact]
+    public void UnityTestMode_Deserialization_WhenAll_ThrowsRemovedAllModeMessage()
+    {
+        var ex = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<UnityTestMode>("\"all\""));
+        Assert.Equal(TestModeParser.RemovedAllModeMessage, ex.Message);
+
+        var exUpper = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<UnityTestMode>("\" ALL \""));
+        Assert.Equal(TestModeParser.RemovedAllModeMessage, exUpper.Message);
+
+        var exInvalid = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<UnityTestMode>("\"smoketest\""));
+        Assert.Equal(TestModeParser.InvalidModeMessage, exInvalid.Message);
+    }
+
+    [Fact]
     public void NormalizeToolArguments_NormalizesJsonElementStringToArray()
     {
         using var doc = JsonDocument.Parse("{\"testNames\":\"MySuite.MyTest\",\"paths\":\"Assets/Foo.cs\"}");

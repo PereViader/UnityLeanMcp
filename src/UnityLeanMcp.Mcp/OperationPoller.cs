@@ -200,16 +200,14 @@ public class OperationPoller : IOperationPoller
                         var custom = await spec.CustomResponseHandler(pollResp, cancellationToken);
                         if (custom != null)
                         {
-                            DeleteResultFileSilently(spec);
-                            return spec.OnResultFound != null ? spec.OnResultFound(custom) : custom;
+                            return CompleteResult(spec, custom);
                         }
                     }
 
                     var immediateTerminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(pollResp, spec.OperationId);
                     if (immediateTerminal != null && immediateTerminal.Interrupted)
                     {
-                        DeleteResultFileSilently(spec);
-                        return spec.OnResultFound != null ? spec.OnResultFound(immediateTerminal) : immediateTerminal;
+                        return CompleteResult(spec, immediateTerminal);
                     }
 
                     if (pollResp.StartsWith("BUSY", StringComparison.OrdinalIgnoreCase))
@@ -303,8 +301,7 @@ public class OperationPoller : IOperationPoller
         var terminal = ProtocolCodec.TryCreateImmediateTerminalResult<TResult>(pollResp, spec.OperationId);
         if (terminal != null)
         {
-            DeleteResultFileSilently(spec);
-            return spec.OnResultFound != null ? spec.OnResultFound(terminal) : terminal;
+            return CompleteResult(spec, terminal);
         }
 
         if (pollResp.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase))
@@ -325,8 +322,7 @@ public class OperationPoller : IOperationPoller
             {
                 opRes.Payload = ProtocolCodec.UnescapeLine(payload);
             }
-            DeleteResultFileSilently(spec);
-            return spec.OnResultFound != null ? spec.OnResultFound(successRes) : successRes;
+            return CompleteResult(spec, successRes);
         }
 
         return null;
@@ -339,13 +335,21 @@ public class OperationPoller : IOperationPoller
         var fileRes = TryReadJsonFile(spec.ResultFilePath, spec.IsMatch);
         if (fileRes != null)
         {
-            DeleteResultFileSilently(spec);
-            result = spec.OnResultFound != null ? spec.OnResultFound(fileRes) : fileRes;
+            result = CompleteResult(spec, fileRes);
             return true;
         }
 
         result = null;
         return false;
+    }
+
+    private static TResult CompleteResult<TResult>(
+        OperationPollingSpec<TResult> spec,
+        TResult result) where TResult : class, IOperationResult, new()
+    {
+        TResult completed = spec.OnResultFound != null ? spec.OnResultFound(result) : result;
+        DeleteResultFileSilently(spec);
+        return completed;
     }
 
     private static void DeleteResultFileSilently<TResult>(OperationPollingSpec<TResult> spec) where TResult : class, IOperationResult, new()

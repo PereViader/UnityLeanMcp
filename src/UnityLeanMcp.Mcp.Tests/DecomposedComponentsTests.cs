@@ -14,69 +14,6 @@ namespace UnityLeanMcp.Mcp.Tests;
 public class DecomposedComponentsTests
 {
     [Fact]
-    public async Task UnityClient_GetStatusAsync_WhenPollIsLostAfterPing_DoesNotReportReady()
-    {
-        var resolver = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
-        var manager = new StubProcessManager(resolver, isRunning: true);
-        var client = new UnityClient(manager, resolver, NullLogger<UnityClient>.Instance,
-            socketTransport: new StatusSnapshotTransport(true, losePoll: true));
-        Assert.Equal("Running Unreachable", await client.GetStatusAsync());
-    }
-
-    private sealed class StatusSnapshotTransport(bool connected, bool losePoll = false, string pollResponse = "READY") : IUnitySocketTransport
-    {
-        public Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(connected ? (command == "PING" ? "PONG" : losePoll ? null : pollResponse) : null);
-        public Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds = 2,
-            CancellationToken cancellationToken = default) => Task.FromResult(connected);
-    }
-
-    [Fact]
-    public async Task UnityClient_GetStatusAsync_WhenPollReturnsCompilationError_ReturnsCompilationError()
-    {
-        var resolver = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
-        var manager = new StubProcessManager(resolver, isRunning: true);
-        var client = new UnityClient(manager, resolver, NullLogger<UnityClient>.Instance,
-            socketTransport: new StatusSnapshotTransport(true, pollResponse: "COMPILATION_ERROR"));
-        Assert.Equal("Compilation Error", await client.GetStatusAsync());
-    }
-
-    [Fact]
-    public async Task UnityClient_GetStatusAsync_WhenPollReturnsPlayMode_ReturnsPlayMode()
-    {
-        var resolver = new UnityPathResolver(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
-        var manager = new StubProcessManager(resolver, isRunning: true);
-        var client = new UnityClient(manager, resolver, NullLogger<UnityClient>.Instance,
-            socketTransport: new StatusSnapshotTransport(true, pollResponse: "PLAYMODE"));
-        Assert.Equal("PlayMode", await client.GetStatusAsync());
-    }
-
-    [Fact]
-    public async Task UnityClient_GetStatusAsync_WhenProjectSocketRespondsPong_ReturnsReadyWithoutProcessEvidence()
-    {
-        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_client_status_socket_" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var resolver = new UnityPathResolver(projectRoot);
-            var processManager = new StubProcessManager(resolver, isRunning: false);
-            var client = new UnityClient(
-                processManager,
-                resolver,
-                NullLogger<UnityClient>.Instance,
-                socketTransport: new StatusSnapshotTransport(true));
-
-            string status = await client.GetStatusAsync();
-
-            Assert.Equal("Ready", status);
-        }
-        finally
-        {
-            try { Directory.Delete(projectRoot, true); } catch { }
-        }
-    }
-
-    [Fact]
     public void UnityLogScanner_HasCompilationErrors_IdentifiesErrorsAccurately()
     {
         var scanner = new UnityLogScanner();
@@ -341,6 +278,44 @@ public class DecomposedComponentsTests
         Assert.Equal("Completed successfully", result.Message);
 
         try { Directory.Delete(tempDir, true); } catch { }
+    }
+
+    [Fact]
+    public async Task OperationPoller_PollOperationUntilTerminalAsync_WhenOnResultFoundThrows_PreservesResultFile()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_poller_preserve_" + Guid.NewGuid().ToString("N"));
+        var pathResolver = new UnityPathResolver(tempDir);
+        string opId = "op_throw_" + Guid.NewGuid().ToString("N");
+        string resultFile = pathResolver.GetResultFilePath(UnityOperationKind.Eval, opId);
+        Directory.CreateDirectory(Path.GetDirectoryName(resultFile)!);
+        File.WriteAllText(resultFile, $"{{\"operationId\":\"{opId}\",\"success\":true,\"message\":\"Completed\"}}");
+
+        try
+        {
+            var pm = new StubProcessManager(pathResolver);
+            var transport = new StubSocketTransport("READY");
+            var poller = new OperationPoller(pm, pathResolver, transport, NullLogger.Instance);
+
+            var spec = new OperationPollingSpec<UnityOperationResult>
+            {
+                OperationId = opId,
+                Kind = "eval",
+                ResultFilePath = resultFile,
+                IsMatch = r => r.OperationId == opId,
+                PollCommand = $"POLL_EVAL {opId}",
+                PollIntervalMs = 50,
+                OnResultFound = _ => throw new InvalidOperationException("Simulated callback failure")
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None));
+
+            Assert.True(File.Exists(resultFile), "Result file must be preserved when OnResultFound throws.");
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
     }
 
     [Fact]

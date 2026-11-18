@@ -59,6 +59,10 @@ public class TestRunProgressTests
 
                 if (pollCount == 1)
                 {
+                    return null;
+                }
+                if (pollCount == 2)
+                {
                     var state2 = new UnityTestRunState
                     {
                         RunId = opId,
@@ -70,7 +74,7 @@ public class TestRunProgressTests
                         CurrentTestName = "Suite.TestBeta"
                     };
                     srv.WriteTestRunning(state2);
-                    return "RUNNING";
+                    return null;
                 }
                 else
                 {

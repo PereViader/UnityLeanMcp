@@ -27,10 +27,10 @@ public class LifecycleAndCompilationTests
         var refresh = await _fixture.SharedClient.CallToolAsync("unity_refresh");
         Assert.False(refresh.IsError, refresh.Text);
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-        var result = await client.GetStatusAsync();
+        var transport = new UnitySocketTransport();
+        var result = await transport.SendCommandAsync(pm.ReadPortFile(), _fixture.UnityRoot, "POLL_REFRESH");
 
-        Assert.Equal("Ready", result);
+        Assert.Equal("READY", result);
     }
 
     [Fact]
@@ -81,7 +81,6 @@ public class LifecycleAndCompilationTests
         var refresh = await _fixture.SharedClient.CallToolAsync("unity_refresh");
         Assert.False(refresh.IsError, refresh.Text);
         var pm = new UnityProcessManager(_fixture.UnityRoot, NullLogger<UnityProcessManager>.Instance);
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
         var transport = new UnitySocketTransport();
         string opId = Guid.NewGuid().ToString("N");
         string resultFile = Path.Combine(_fixture.UnityRoot, "Temp", $"unity_eval_{opId}.json");
@@ -92,7 +91,7 @@ public class LifecycleAndCompilationTests
                 $"EVAL {opId} await System.Threading.Tasks.Task.Delay(System.Threading.Timeout.Infinite, cancellationToken); return 1;");
             accepted = acknowledgement == "RUNNING";
             Assert.Equal("RUNNING", acknowledgement);
-            Assert.Equal("Busy (eval)", await client.GetStatusAsync());
+            Assert.Equal("BUSY eval", await transport.SendCommandAsync(pm.ReadPortFile(), _fixture.UnityRoot, "POLL_REFRESH"));
         }
         finally
         {
@@ -103,13 +102,8 @@ public class LifecycleAndCompilationTests
                 DeleteFileWithRetry(resultFile);
             }
         }
-        string status;
-        do
-        {
-            status = await client.GetStatusAsync();
-            if (status == "Busy (eval)") await Task.Delay(100);
-        } while (status == "Busy (eval)");
-        Assert.Equal("Ready", status);
+        string? status = await WaitForEditorReadyAsync(pm, transport, TimeSpan.FromSeconds(5));
+        Assert.Equal("READY", status);
     }
 
     [Fact]
@@ -237,17 +231,7 @@ public class LifecycleAndCompilationTests
             Assert.True(response == "NOT_CANCELABLE" || response == "NO_OPERATION");
         }
 
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline)
-        {
-            string status = await client.GetStatusAsync();
-            if (status == "Ready")
-            {
-                break;
-            }
-            await Task.Delay(100);
-        }
+        await WaitForEditorReadyAsync(pm, new UnitySocketTransport(), TimeSpan.FromSeconds(10));
     }
 
     [Fact]
@@ -285,19 +269,8 @@ public class LifecycleAndCompilationTests
             Assert.True(cancelResp is "CANCELLED" or "CANCELLING", $"Expected CANCELLED or CANCELLING, got {cancelResp}");
         }
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        var client = new UnityClient(pm, NullLogger<UnityClient>.Instance);
-        string status = "";
-        while (DateTime.UtcNow < deadline)
-        {
-            status = await client.GetStatusAsync();
-            if (status == "Ready")
-            {
-                break;
-            }
-            await Task.Delay(50);
-        }
-        Assert.Equal("Ready", status);
+        string? status = await WaitForEditorReadyAsync(pm, new UnitySocketTransport(), TimeSpan.FromSeconds(5));
+        Assert.Equal("READY", status);
     }
 
     [Fact]
@@ -314,18 +287,24 @@ public class LifecycleAndCompilationTests
             await client.EvalAsync("await System.Threading.Tasks.Task.Delay(10000, cancellationToken); return 42;", cts.Token);
         });
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        string status = "";
+        string? status = await WaitForEditorReadyAsync(pm, new UnitySocketTransport(), TimeSpan.FromSeconds(5));
+        Assert.Equal("READY", status);
+    }
+
+    private async Task<string?> WaitForEditorReadyAsync(UnityProcessManager pm, UnitySocketTransport transport, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        string? status = null;
         while (DateTime.UtcNow < deadline)
         {
-            status = await client.GetStatusAsync();
-            if (status == "Ready")
+            status = await transport.SendCommandAsync(pm.ReadPortFile(), _fixture.UnityRoot, "POLL_REFRESH");
+            if (status == "READY")
             {
-                break;
+                return status;
             }
             await Task.Delay(50);
         }
-        Assert.Equal("Ready", status);
+        return status;
     }
 
     private static void WriteAtomic(string path, string content)

@@ -441,9 +441,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             if (string.IsNullOrEmpty(trimmed))
                 continue;
 
-            var entries = trimmed.Contains(" | ")
-                ? trimmed.Split(new[] { " | " }, StringSplitOptions.RemoveEmptyEntries)
-                : new[] { trimmed };
+            var entries = SplitPipeSeparatedDiagnostics(trimmed);
 
             foreach (var entry in entries)
             {
@@ -496,6 +494,30 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         }
 
         return diagnostics;
+    }
+
+    private static List<string> SplitPipeSeparatedDiagnostics(string line)
+    {
+        if (!line.Contains(" | ", StringComparison.Ordinal))
+        {
+            return new List<string> { line };
+        }
+
+        string[] segments = line.Split(new[] { " | " }, StringSplitOptions.None);
+        var entries = new List<string>(segments.Length) { segments[0] };
+        for (int i = 1; i < segments.Length; i++)
+        {
+            if (s_CompilerDiagnosticRegex.IsMatch(segments[i].Trim()))
+            {
+                entries.Add(segments[i]);
+            }
+            else
+            {
+                entries[^1] = entries[^1] + " | " + segments[i];
+            }
+        }
+
+        return entries;
     }
 
     public string FormatDiagnostic(StructuredCompilerDiagnostic diagnostic, string? projectRoot, bool isEval = false)

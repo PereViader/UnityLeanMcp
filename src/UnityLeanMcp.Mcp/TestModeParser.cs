@@ -8,33 +8,23 @@ internal static class TestModeParser
     internal const string RemovedAllModeMessage =
         "The 'all' test mode has been removed. Tests must explicitly specify 'editmode' (for unit tests and editor utilities) or 'playmode' (for integration tests and tests requiring scene loading or MonoBehaviour lifecycle).";
 
-    internal static bool TryNormalize(string? mode, out string normalizedMode)
+    internal static string GetInvalidModeMessage(string? mode)
     {
-        return TryNormalize(mode, out normalizedMode, out _);
+        string normalized = mode?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized == "all" ? RemovedAllModeMessage : InvalidModeMessage;
     }
 
     internal static bool TryNormalize(string? mode, out string normalizedMode, out string? errorMessage)
     {
         normalizedMode = mode?.Trim().ToLowerInvariant() ?? string.Empty;
-        if (normalizedMode == "all")
-        {
-            errorMessage = RemovedAllModeMessage;
-            return false;
-        }
-
         if (normalizedMode is "editmode" or "playmode")
         {
             errorMessage = null;
             return true;
         }
 
-        errorMessage = InvalidModeMessage;
+        errorMessage = GetInvalidModeMessage(mode);
         return false;
-    }
-
-    internal static bool TryNormalize(UnityTestMode mode, out string normalizedMode)
-    {
-        return TryNormalize(mode, out normalizedMode, out _);
     }
 
     internal static bool TryNormalize(UnityTestMode mode, out string normalizedMode, out string? errorMessage)
