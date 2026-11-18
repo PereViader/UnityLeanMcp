@@ -22,7 +22,6 @@ namespace UnityLeanMcp
 
         public static List<DiscoveredItem> DiscoverAllTests()
         {
-            var discovered = new List<DiscoveredItem>();
             Assembly[] assemblies;
             try
             {
@@ -30,27 +29,43 @@ namespace UnityLeanMcp
             }
             catch
             {
-                return discovered;
+                return new List<DiscoveredItem>();
             }
 
+            return DiscoverAllTests(assemblies);
+        }
+
+        internal static List<DiscoveredItem> DiscoverAllTests(IEnumerable<Assembly> assemblies)
+        {
+            var discovered = new List<DiscoveredItem>();
             if (assemblies == null) return discovered;
 
             foreach (var asm in assemblies)
             {
                 if (asm == null || asm.IsDynamic) continue;
 
-                string asmName = asm.GetName().Name ?? string.Empty;
-                if (asmName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
-                    asmName.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase) ||
-                    asmName.StartsWith("mscorlib", StringComparison.OrdinalIgnoreCase) ||
-                    asmName.StartsWith("Mono.", StringComparison.OrdinalIgnoreCase) ||
-                    asmName.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase))
+                string asmName;
+                bool isEditor;
+                try
+                {
+                    asmName = asm.GetName().Name ?? string.Empty;
+                    if (asmName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+                        asmName.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase) ||
+                        asmName.StartsWith("mscorlib", StringComparison.OrdinalIgnoreCase) ||
+                        asmName.StartsWith("Mono.", StringComparison.OrdinalIgnoreCase) ||
+                        asmName.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    isEditor = asmName.Contains("Editor") ||
+                        asm.GetReferencedAssemblies().Any(r => string.Equals(r.Name, "UnityEditor", StringComparison.OrdinalIgnoreCase));
+                }
+                catch
                 {
                     continue;
                 }
 
-                bool isEditor = asmName.Contains("Editor") ||
-                    asm.GetReferencedAssemblies().Any(r => string.Equals(r.Name, "UnityEditor", StringComparison.OrdinalIgnoreCase));
                 string defaultAsmMode = isEditor ? "editmode" : "playmode";
 
                 Type[] types;

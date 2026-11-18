@@ -1602,6 +1602,39 @@ public sealed class CommandGatePublicationTests : IDisposable
         public bool HasChildren { get; set; } = true;
     }
 
+    [Theory]
+    [InlineData(typeof(FileNotFoundException))]
+    [InlineData(typeof(BadImageFormatException))]
+    public void TestDiscoveryHelper_BrokenAssemblyMetadataDoesNotAbortDiscovery(Type exceptionType)
+    {
+        var broken = new BrokenMetadataAssembly("BrokenPlugin", exceptionType);
+        var valid = typeof(CommandGatePublicationTests).Assembly;
+
+        var discovered = TestDiscoveryHelper.DiscoverAllTests(new Assembly[] { broken, valid });
+
+        Assert.NotNull(discovered);
+        Assert.Contains(discovered, item =>
+            item.FullName.Contains(nameof(TestDiscoveryHelper_BrokenAssemblyMetadataDoesNotAbortDiscovery), StringComparison.Ordinal));
+    }
+
+    private sealed class BrokenMetadataAssembly : Assembly
+    {
+        private readonly AssemblyName _name;
+        private readonly Type _exceptionType;
+
+        public BrokenMetadataAssembly(string name, Type exceptionType)
+        {
+            _name = new AssemblyName(name);
+            _exceptionType = exceptionType;
+        }
+
+        public override bool IsDynamic => false;
+        public override AssemblyName GetName() => _name;
+        public override AssemblyName[] GetReferencedAssemblies() =>
+            throw (Exception)Activator.CreateInstance(_exceptionType, "Simulated broken assembly metadata")!;
+        public override Type[] GetTypes() => Array.Empty<Type>();
+    }
+
     private static void PrepareCoverageForRun(string runId)
     {
         UnityEditor.EditorApplication.isCompiling = false;
