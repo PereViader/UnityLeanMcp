@@ -7,6 +7,7 @@ using Xunit;
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("CommandGate")]
 public sealed class WorkerDiagnosticsLoggerTests
 {
     [Fact]

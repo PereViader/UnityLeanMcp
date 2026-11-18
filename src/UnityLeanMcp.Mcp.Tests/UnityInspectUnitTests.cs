@@ -11,6 +11,7 @@ using Xunit;
 namespace UnityLeanMcp.Mcp.Tests
 {
     [Trait("Category", "Unit")]
+    [Collection("CommandGate")]
     public class UnityInspectUnitTests : IDisposable
     {
         private readonly List<string> _createdFiles = new();

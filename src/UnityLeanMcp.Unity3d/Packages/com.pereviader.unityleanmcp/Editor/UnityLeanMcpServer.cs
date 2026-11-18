@@ -528,9 +528,24 @@ namespace UnityLeanMcp
             return null;
         }
 
+        internal static bool ShouldExecuteDispatchedCommand(bool shutdownRequested, bool isReloading)
+        {
+            return !shutdownRequested && !isReloading;
+        }
+
         private static void ExecuteMainThreadCommand(ICommandHandler handler, string payload, StreamWriter writer)
         {
-            if (_shutdownRequested || _isReloading)
+            ExecuteDispatchedCommand(handler, payload, writer, _shutdownRequested, _isReloading);
+        }
+
+        internal static void ExecuteDispatchedCommand(
+            ICommandHandler handler,
+            string payload,
+            StreamWriter writer,
+            bool shutdownRequested,
+            bool isReloading)
+        {
+            if (!ShouldExecuteDispatchedCommand(shutdownRequested, isReloading))
             {
                 return;
             }

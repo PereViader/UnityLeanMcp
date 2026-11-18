@@ -13,6 +13,7 @@ using Xunit;
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("ProcessEnvironment")]
 public class UnityProcessManagerTests
 {
     private static string GetDummyExecutablePath()
@@ -561,7 +562,7 @@ public class UnityProcessManagerTests
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var serverStartedTime = DateTime.UtcNow;
+        int attempts = 0;
 
         var serverTask = Task.Run(async () =>
         {
@@ -588,8 +589,8 @@ public class UnityProcessManagerTests
                     using (var reader = new StreamReader(stream, Encoding.UTF8))
                     using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
                     {
-                        // Simulate delay (e.g. domain reload) before socket responds
-                        if (DateTime.UtcNow - serverStartedTime < TimeSpan.FromSeconds(2))
+                        // Simulate unavailable socket during the initial probe attempts
+                        if (Interlocked.Increment(ref attempts) <= 2)
                         {
                             // Close connection to simulate unavailable socket during initial probe
                             return;
@@ -1466,6 +1467,36 @@ public class UnityProcessManagerTests
         finally
         {
             try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task TestStopUnity_PurgesOperationAndMarkerFiles()
+    {
+        string tempProject = Path.Combine(Path.GetTempPath(), "UnityLeanMcpTestPurge_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempProject, "Temp"));
+
+        try
+        {
+            var pm = new UnityProcessManager(tempProject, NullLogger<UnityProcessManager>.Instance);
+
+            await File.WriteAllTextAsync(pm.PathResolver.TestRunningFile, "{\"operationId\":\"test\"}");
+            await File.WriteAllTextAsync(pm.PathResolver.PidFile, "12345");
+            await File.WriteAllTextAsync(pm.PathResolver.PortFile, "50000");
+
+            Assert.True(File.Exists(pm.PathResolver.TestRunningFile));
+            Assert.True(File.Exists(pm.PathResolver.PidFile));
+            Assert.True(File.Exists(pm.PathResolver.PortFile));
+
+            pm.PurgeOperationState();
+
+            Assert.False(File.Exists(pm.PathResolver.TestRunningFile), "TestRunningFile was not purged");
+            Assert.False(File.Exists(pm.PathResolver.PidFile), "PidFile was not purged");
+            Assert.False(File.Exists(pm.PathResolver.PortFile), "PortFile was not purged");
+        }
+        finally
+        {
+            try { Directory.Delete(tempProject, true); } catch { }
         }
     }
 

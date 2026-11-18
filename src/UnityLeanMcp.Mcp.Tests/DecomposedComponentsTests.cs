@@ -11,6 +11,7 @@ using Xunit;
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("CommandGate")]
 public class DecomposedComponentsTests
 {
     [Fact]
@@ -230,7 +231,7 @@ public class DecomposedComponentsTests
         {
             var transport = new UnitySocketTransport(NullLogger.Instance);
 
-            string? response = await transport.SendCommandAsync(port, Path.GetTempPath(), "WAIT", timeoutSeconds: 1);
+            string? response = await transport.SendCommandWithTimeoutAsync(port, Path.GetTempPath(), "WAIT", TimeSpan.FromMilliseconds(100));
 
             Assert.Null(response);
         }

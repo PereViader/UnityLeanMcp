@@ -4,6 +4,8 @@ using System.IO;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
+[Trait("Category", "Unit")]
+[Collection("ProcessEnvironment")]
 public sealed class UnityProcessIdentityStoreTests
 {
     [Fact]

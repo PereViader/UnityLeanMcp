@@ -25,8 +25,11 @@ namespace Tests
             }
 
             string bgResponse = null;
+            using var threadStarted = new ManualResetEventSlim(false);
+            using var bgDone = new ManualResetEventSlim(false);
             var thread = new Thread(() =>
             {
+                threadStarted.Set();
                 try
                 {
                     using var client = new TcpClient("127.0.0.1", port);
@@ -42,10 +45,15 @@ namespace Tests
                 {
                     bgResponse = "TIMEOUT_OR_ERROR: " + ex.Message;
                 }
+                finally
+                {
+                    bgDone.Set();
+                }
             });
 
             thread.Start();
-            Thread.Sleep(1000);
+            threadStarted.Wait(2000);
+            bgDone.Wait(2000);
             thread.Join(2000);
 
             return bgResponse == null || bgResponse.StartsWith("TIMEOUT_OR_ERROR")

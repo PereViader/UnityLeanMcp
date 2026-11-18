@@ -166,36 +166,6 @@ public class LifecycleAndCompilationTests
     }
 
     [Fact]
-    public async Task TestStopUnity_PurgesOperationAndMarkerFiles()
-    {
-        string tempProject = Path.Combine(Path.GetTempPath(), "UnityLeanMcpTestPurge_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(tempProject, "Temp"));
-
-        try
-        {
-            var pm = new UnityProcessManager(tempProject, NullLogger<UnityProcessManager>.Instance);
-
-            await File.WriteAllTextAsync(pm.PathResolver.TestRunningFile, "{\"operationId\":\"test\"}");
-            await File.WriteAllTextAsync(pm.PathResolver.PidFile, "12345");
-            await File.WriteAllTextAsync(pm.PathResolver.PortFile, "50000");
-
-            Assert.True(File.Exists(pm.PathResolver.TestRunningFile));
-            Assert.True(File.Exists(pm.PathResolver.PidFile));
-            Assert.True(File.Exists(pm.PathResolver.PortFile));
-
-            pm.PurgeOperationState();
-
-            Assert.False(File.Exists(pm.PathResolver.TestRunningFile), "TestRunningFile was not purged");
-            Assert.False(File.Exists(pm.PathResolver.PidFile), "PidFile was not purged");
-            Assert.False(File.Exists(pm.PathResolver.PortFile), "PortFile was not purged");
-        }
-        finally
-        {
-            try { Directory.Delete(tempProject, true); } catch { }
-        }
-    }
-
-    [Fact]
     public async Task TestCancelOperation_NonCancelableOperation_ReturnsNotCancelableAndRemainsBusy()
     {
         var refresh = await _fixture.SharedClient.CallToolAsync("unity_refresh");

@@ -2,6 +2,7 @@ using System.Threading;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
+[Trait("Category", "Unit")]
 public sealed class ServerShutdownTests
 {
     [Fact]

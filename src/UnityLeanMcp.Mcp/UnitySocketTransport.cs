@@ -24,7 +24,13 @@ public class UnitySocketTransport : IUnitySocketTransport
         _logger = logger;
     }
 
-    public virtual async Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
+    public virtual Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds = 10, CancellationToken cancellationToken = default)
+    {
+        TimeSpan timeout = timeoutSeconds > 0 ? TimeSpan.FromSeconds(timeoutSeconds) : TimeSpan.Zero;
+        return SendCommandWithTimeoutAsync(port, projectRoot, command, timeout, cancellationToken);
+    }
+
+    internal async Task<string?> SendCommandWithTimeoutAsync(int port, string projectRoot, string command, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         if (port <= 0 || port > 65535)
         {
@@ -32,17 +38,19 @@ public class UnitySocketTransport : IUnitySocketTransport
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (timeoutSeconds > 0)
+        if (timeout > TimeSpan.Zero)
         {
-            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            cts.CancelAfter(timeout);
         }
+
+        int timeoutMs = timeout > TimeSpan.Zero ? Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds)) : 0;
 
         try
         {
             using var client = new TcpClient();
             await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
-            client.ReceiveTimeout = timeoutSeconds > 0 ? timeoutSeconds * 1000 : 0;
-            client.SendTimeout = timeoutSeconds > 0 ? timeoutSeconds * 1000 : 0;
+            client.ReceiveTimeout = timeoutMs;
+            client.SendTimeout = timeoutMs;
 
             using var stream = client.GetStream();
             using var reader = new StreamReader(stream, Encoding.UTF8);

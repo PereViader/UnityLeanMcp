@@ -200,26 +200,15 @@ namespace UnityLeanMcpTests
         [TestCase(false, true)]
         public void ExecuteMainThreadCommandSkipsExecutionWhenShuttingDownOrReloading(bool shuttingDown, bool reloading)
         {
-            var shutdownField = typeof(UnityLeanMcpServer).GetField("_shutdownRequested", BindingFlags.NonPublic | BindingFlags.Static);
-            var reloadingField = typeof(UnityLeanMcpServer).GetField("_isReloading", BindingFlags.NonPublic | BindingFlags.Static);
-            var execute = typeof(UnityLeanMcpServer).GetMethod("ExecuteMainThreadCommand", BindingFlags.NonPublic | BindingFlags.Static);
-            bool originalShutdown = (bool)shutdownField.GetValue(null);
-            bool originalReloading = (bool)reloadingField.GetValue(null);
             var handler = new EditModeProbeHandler();
             using var stream = new System.IO.MemoryStream();
             using var writer = new System.IO.StreamWriter(stream) { AutoFlush = true };
-            try
-            {
-                shutdownField.SetValue(null, shuttingDown);
-                reloadingField.SetValue(null, reloading);
-                execute.Invoke(null, new object[] { handler, "owner", writer });
-                Assert.That(handler.CallCount, Is.EqualTo(0));
-            }
-            finally
-            {
-                shutdownField.SetValue(null, originalShutdown);
-                reloadingField.SetValue(null, originalReloading);
-            }
+
+            Assert.That(UnityLeanMcpServer.ShouldExecuteDispatchedCommand(false, false), Is.True);
+            Assert.That(UnityLeanMcpServer.ShouldExecuteDispatchedCommand(shuttingDown, reloading), Is.False);
+
+            UnityLeanMcpServer.ExecuteDispatchedCommand(handler, "owner", writer, shuttingDown, reloading);
+            Assert.That(handler.CallCount, Is.EqualTo(0));
         }
 
         [Test]

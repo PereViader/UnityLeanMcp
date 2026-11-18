@@ -8,7 +8,7 @@ using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
-[Trait("Category", "Subsystem")]
+[Trait("Category", "Unit")]
 public sealed class AutoRefreshEfficiencyTests
 {
     [Fact]

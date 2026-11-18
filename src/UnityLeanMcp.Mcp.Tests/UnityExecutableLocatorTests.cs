@@ -11,6 +11,7 @@ using Xunit;
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("ProcessEnvironment")]
 public class UnityExecutableLocatorTests
 {
     [Fact]
