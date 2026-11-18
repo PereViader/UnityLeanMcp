@@ -57,6 +57,21 @@
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.cs" Link="UnityInspect.cs">
       <Nullable>disable</Nullable>
     </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.SceneAndHierarchy.cs" Link="UnityInspect.SceneAndHierarchy.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.UIToolkit.cs" Link="UnityInspect.UIToolkit.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.ObjectAndComponent.cs" Link="UnityInspect.ObjectAndComponent.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.AssetsAndPrefabs.cs" Link="UnityInspect.AssetsAndPrefabs.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.CameraAndCapture.cs" Link="UnityInspect.CameraAndCapture.cs">
+      <Nullable>disable</Nullable>
+    </Compile>
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpDispatcher.cs" Link="UnityLeanMcpDispatcher.cs">
       <Nullable>disable</Nullable>
     </Compile>
