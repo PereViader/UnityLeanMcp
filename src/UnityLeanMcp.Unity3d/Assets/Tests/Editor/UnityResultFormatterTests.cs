@@ -162,6 +162,30 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
+        public void LimitOutput_65KMultiByteCharactersAndSurrogatePairs_TruncatesLinearlyAndPreservesValidUtf16()
+        {
+            string multiByteBmp = new string('€', 65536);
+            var emojiBuilder = new StringBuilder(65536);
+            for (int i = 0; i < 32768; i++)
+            {
+                emojiBuilder.Append("\uD83D\uDE00");
+            }
+            string emojiText = emojiBuilder.ToString();
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            string limitedBmp = UnityResultFormatter.LimitOutput(multiByteBmp, 65536, 65536);
+            string limitedEmoji = UnityResultFormatter.LimitOutput(emojiText, 65536, 65536);
+            sw.Stop();
+
+            Assert.That(sw.ElapsedMilliseconds, Is.LessThan(2000));
+            Assert.That(Encoding.UTF8.GetByteCount(limitedBmp), Is.LessThanOrEqualTo(65536));
+            Assert.That(Encoding.UTF8.GetByteCount(limitedEmoji), Is.LessThanOrEqualTo(65536));
+            int markerIndex = limitedEmoji.IndexOf(UnityResultFormatter.OutputTruncationMarker, System.StringComparison.Ordinal);
+            Assert.That(markerIndex, Is.GreaterThan(0));
+            Assert.That(char.IsHighSurrogate(limitedEmoji[markerIndex - 1]), Is.False);
+        }
+
+        [Test]
         public void FormatResult_OversizedJson_RespectsOutputLimits()
         {
             UnityResultFormatter.MaxOutputCharacters = 80;

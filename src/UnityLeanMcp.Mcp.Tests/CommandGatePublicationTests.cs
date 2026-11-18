@@ -783,22 +783,98 @@ public sealed class CommandGatePublicationTests : IDisposable
     [Fact]
     public void CaptureOperationError_BoundsScopedDiagnosticsAtMaxCount()
     {
-        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Refresh, "op-flood", OperationStatus.Refreshing, out _));
-        UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
-
-        int setStringsBefore = SessionState.SetStringCount;
-        int totalToEmit = UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount + 50;
-        for (int i = 0; i < totalToEmit; i++)
+        RefreshErrorLogCapture.InitializeMainThread();
+        try
         {
-            UnityLeanMcpCompilationTracker.CaptureOperationError($"Unique postprocessor error {i}", "", UnityEngine.LogType.Error);
+            Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Refresh, "op-flood", OperationStatus.Refreshing, out _));
+            UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
+
+            int setStringsBefore = SessionState.SetStringCount;
+            int totalToEmit = UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount + 50;
+            for (int i = 0; i < totalToEmit; i++)
+            {
+                UnityLeanMcpCompilationTracker.CaptureOperationError($"Unique postprocessor error {i}", "", UnityEngine.LogType.Error);
+            }
+
+            int setStringsAfter = SessionState.SetStringCount;
+            Assert.Equal(UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount, setStringsAfter - setStringsBefore);
+
+            var readMethod = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var captured = (List<string>)readMethod.Invoke(null, null)!;
+            Assert.Equal(UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount, captured.Count);
         }
+        finally
+        {
+            RefreshErrorLogCapture.ResetForTesting();
+        }
+    }
 
-        int setStringsAfter = SessionState.SetStringCount;
-        Assert.Equal(UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount, setStringsAfter - setStringsBefore);
+    [Fact]
+    public void RunTestsHandler_CopyOnWriteStateUpdates_DoNotMutatePreviouslyReadSnapshots()
+    {
+        const string runId = "op-cow-state";
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, runId, OperationStatus.Queued, out _));
+        var initial = new UnityLeanMcp.UnityTestRunState
+        {
+            runId = runId,
+            mode = "EditMode",
+            testNames = new[] { "Suite.TestOne", "Suite.TestTwo" },
+            status = OperationStatus.Queued,
+            totalTests = 2,
+            completedTests = 0,
+            passCount = 0,
+            failCount = 0,
+            skipCount = 0,
+            currentTestName = ""
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(UnityLeanMcpPaths.TestRunningFile)!);
+        File.WriteAllText(UnityLeanMcpPaths.TestRunningFile, UnityEngine.JsonUtility.ToJson(initial));
+        RunTestsHandler.ClearCachedRunState();
 
-        var readMethod = typeof(UnityLeanMcpCompilationTracker).GetMethod("GetCapturedDiagnosticsSnapshot", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var captured = (List<string>)readMethod.Invoke(null, null)!;
-        Assert.Equal(UnityLeanMcpCompilationTracker.MaxScopedDiagnosticsCount, captured.Count);
+        var snapshot1 = RunTestsHandler.ReadRunningState();
+        Assert.NotNull(snapshot1);
+        Assert.Equal(OperationStatus.Queued, snapshot1!.status);
+        Assert.Equal(0, snapshot1.completedTests);
+
+        RunTestsHandler.UpdateTestRunProgress(runId, 2, 1, 1, 0, 0, "Suite.TestOne", OperationStatus.Running);
+        var snapshot2 = RunTestsHandler.ReadRunningState();
+        Assert.NotNull(snapshot2);
+        Assert.False(ReferenceEquals(snapshot1, snapshot2));
+        Assert.Equal(OperationStatus.Queued, snapshot1.status);
+        Assert.Equal(0, snapshot1.completedTests);
+        Assert.Equal(0, snapshot1.passCount);
+        Assert.Equal("", snapshot1.currentTestName);
+        Assert.Equal(OperationStatus.Running, snapshot2!.status);
+        Assert.Equal(1, snapshot2.completedTests);
+        Assert.Equal(1, snapshot2.passCount);
+        Assert.Equal("Suite.TestOne", snapshot2.currentTestName);
+
+        RunTestsHandler.UpdateTestRunStatus(runId, OperationStatus.Cancelling);
+        var snapshot3 = RunTestsHandler.ReadRunningState();
+        Assert.NotNull(snapshot3);
+        Assert.False(ReferenceEquals(snapshot2, snapshot3));
+        Assert.False(ReferenceEquals(snapshot2.testNames, snapshot3!.testNames));
+        Assert.Equal(OperationStatus.Running, snapshot2.status);
+        Assert.Equal(OperationStatus.Cancelling, snapshot3.status);
+        Assert.Equal(new[] { "Suite.TestOne", "Suite.TestTwo" }, snapshot3.testNames);
+
+        var pollHandler = new PollTestsHandler();
+        using var pollStream = new MemoryStream();
+        using var pollWriter = new StreamWriter(pollStream) { AutoFlush = true };
+        pollHandler.Handle(runId, pollWriter);
+        string pollResponse = System.Text.Encoding.UTF8.GetString(pollStream.ToArray()).Trim();
+        Assert.StartsWith("RUNNING ", pollResponse);
+        Assert.Contains("\"status\":\"Cancelling\"", pollResponse);
+        Assert.Contains("\"currentTestName\":\"Suite.TestOne\"", pollResponse);
+
+        // Cache-miss path on worker thread reads TestRunningFile via managed JSON without JsonUtility.
+        RunTestsHandler.ClearCachedRunState();
+        using var missStream = new MemoryStream();
+        using var missWriter = new StreamWriter(missStream) { AutoFlush = true };
+        pollHandler.Handle(runId, missWriter);
+        string missResponse = System.Text.Encoding.UTF8.GetString(missStream.ToArray()).Trim();
+        Assert.StartsWith("RUNNING ", missResponse);
+        Assert.Contains("\"status\":\"Cancelling\"", missResponse);
     }
 
     [Theory]

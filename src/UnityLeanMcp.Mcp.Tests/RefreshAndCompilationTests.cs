@@ -251,6 +251,75 @@ namespace UnityLeanMcp.Mcp.Tests
         }
 
         [Fact]
+        public void RefreshErrorLogCapture_DefersPersistenceOffMainThread_AndFlushesOnTrackerTick()
+        {
+            const string sessionKey = "UnityLeanMcp_RefreshDiagnostics";
+            string previousSession = UnityEditor.SessionState.GetString(sessionKey, "")!;
+            UnityCommandGate.ForceReset();
+            RefreshErrorLogCapture.ResetForTesting();
+            UnityEditor.SessionState.EraseString(sessionKey);
+
+            try
+            {
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Refresh, "op-deferred-persist", OperationStatus.Refreshing, out _));
+
+                // Before InitializeMainThread (s_MainThreadId == 0), RecordError must capture in memory without touching SessionState.
+                int setBeforeInit = UnityEditor.SessionState.SetStringCount;
+                RefreshErrorLogCapture.RecordError("Shader error in 'Custom/A': syntax error at Assets/Shaders/A.shader(1)", "", LogType.Error);
+                Assert.Equal(setBeforeInit, UnityEditor.SessionState.SetStringCount);
+                Assert.Equal("", UnityEditor.SessionState.GetString(sessionKey, ""));
+                Assert.Contains(RefreshErrorLogCapture.GetCapturedErrors("op-deferred-persist"), d => d.Contains("Assets/Shaders/A.shader(1)"));
+
+                // InitializeMainThread establishes main-thread affinity and flushes pending diagnostics to SessionState.
+                RefreshErrorLogCapture.InitializeMainThread();
+                Assert.True(UnityEditor.SessionState.SetStringCount > setBeforeInit);
+                string afterInit = UnityEditor.SessionState.GetString(sessionKey, "")!;
+                Assert.Contains("Assets/Shaders/A.shader(1)", afterInit);
+
+                // Background thread RecordError must not throw or call SessionState.SetString directly.
+                int setBeforeWorker = UnityEditor.SessionState.SetStringCount;
+                Exception? workerFailure = null;
+                var worker = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        RefreshErrorLogCapture.RecordError("Shader error in 'Custom/B': syntax error at Assets/Shaders/B.shader(2)", "", LogType.Error);
+                    }
+                    catch (Exception ex)
+                    {
+                        workerFailure = ex;
+                    }
+                });
+                worker.Start();
+                worker.Join();
+
+                Assert.Null(workerFailure);
+                Assert.Equal(setBeforeWorker, UnityEditor.SessionState.SetStringCount);
+                Assert.DoesNotContain("Assets/Shaders/B.shader(2)", UnityEditor.SessionState.GetString(sessionKey, "")!);
+
+                // Main-thread tracker tick flushes background-captured diagnostics to SessionState.
+                UnityLeanMcpCompilationTracker.ObserveOperationUntilSettled();
+                Assert.True(UnityEditor.SessionState.SetStringCount > setBeforeWorker);
+                string afterFlush = UnityEditor.SessionState.GetString(sessionKey, "")!;
+                Assert.Contains("Assets/Shaders/A.shader(1)", afterFlush);
+                Assert.Contains("Assets/Shaders/B.shader(2)", afterFlush);
+            }
+            finally
+            {
+                RefreshErrorLogCapture.ResetForTesting();
+                UnityCommandGate.ForceReset();
+                if (string.IsNullOrEmpty(previousSession))
+                {
+                    UnityEditor.SessionState.EraseString(sessionKey);
+                }
+                else
+                {
+                    UnityEditor.SessionState.SetString(sessionKey, previousSession);
+                }
+            }
+        }
+
+        [Fact]
         public void RefreshErrorLogCapture_FormatDiagnostic_ExtractsFileAndStackTrace()
         {
             string formattedShader = RefreshErrorLogCapture.FormatDiagnostic(

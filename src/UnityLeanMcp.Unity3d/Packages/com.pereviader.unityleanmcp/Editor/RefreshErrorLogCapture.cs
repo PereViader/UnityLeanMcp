@@ -37,6 +37,7 @@ namespace UnityLeanMcp
         private static int s_MainThreadId;
         private static RefreshErrorLogCapture s_ActiveCapture;
         private static bool s_ListenerRegistered;
+        private static bool s_PendingPersistence;
 
         private readonly string m_OperationId;
         private bool m_Disposed;
@@ -109,6 +110,7 @@ namespace UnityLeanMcp
                 s_ActiveCapture = null;
                 s_ScopedDiagnostics = new ScopedDiagnostics();
                 s_ListenerRegistered = false;
+                s_PendingPersistence = false;
             }
         }
 
@@ -116,6 +118,7 @@ namespace UnityLeanMcp
         {
             s_MainThreadId = Thread.CurrentThread.ManagedThreadId;
             EnsureInitialized();
+            FlushPendingPersistence();
         }
 
         public static void EnsureInitialized()
@@ -123,7 +126,7 @@ namespace UnityLeanMcp
 
             lock (s_Lock)
             {
-                if (s_MainThreadId == 0 || Thread.CurrentThread.ManagedThreadId == s_MainThreadId)
+                if (s_MainThreadId != 0 && Thread.CurrentThread.ManagedThreadId == s_MainThreadId && !s_PendingPersistence)
                 {
                     string scopedJson = SessionState.GetString(ScopedDiagnosticsKey, "");
                     if (!string.IsNullOrEmpty(scopedJson))
@@ -212,17 +215,41 @@ namespace UnityLeanMcp
 
         public static void Persist()
         {
-            if (s_MainThreadId != 0 && Thread.CurrentThread.ManagedThreadId != s_MainThreadId) return;
             lock (s_Lock)
             {
-                try
+                if (s_MainThreadId == 0 || Thread.CurrentThread.ManagedThreadId != s_MainThreadId)
                 {
-                    SessionState.SetString(ScopedDiagnosticsKey, JsonUtility.ToJson(s_ScopedDiagnostics));
+                    s_PendingPersistence = true;
+                    return;
                 }
-                catch (Exception e)
+
+                PersistUnderLock();
+            }
+        }
+
+        public static void FlushPendingPersistence()
+        {
+            lock (s_Lock)
+            {
+                if (!s_PendingPersistence || s_MainThreadId == 0 || Thread.CurrentThread.ManagedThreadId != s_MainThreadId)
                 {
-                    Debug.LogError($"UnityLeanMcp: Failed to persist refresh error log diagnostics: {e}");
+                    return;
                 }
+
+                PersistUnderLock();
+            }
+        }
+
+        private static void PersistUnderLock()
+        {
+            try
+            {
+                SessionState.SetString(ScopedDiagnosticsKey, JsonUtility.ToJson(s_ScopedDiagnostics));
+                s_PendingPersistence = false;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"UnityLeanMcp: Failed to persist refresh error log diagnostics: {e}");
             }
         }
 
@@ -232,11 +259,16 @@ namespace UnityLeanMcp
             {
                 s_ActiveCapture = null;
                 s_ScopedDiagnostics = new ScopedDiagnostics { operationId = operationId };
+                s_PendingPersistence = false;
                 try
                 {
-                    if (s_MainThreadId == 0 || Thread.CurrentThread.ManagedThreadId == s_MainThreadId)
+                    if (s_MainThreadId != 0 && Thread.CurrentThread.ManagedThreadId == s_MainThreadId)
                     {
                         SessionState.EraseString(ScopedDiagnosticsKey);
+                    }
+                    else
+                    {
+                        s_PendingPersistence = true;
                     }
                 }
                 catch { }

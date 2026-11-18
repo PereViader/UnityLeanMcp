@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEditor.TestTools.TestRunner.Api;
@@ -22,8 +23,21 @@ namespace UnityLeanMcp
         private static MyTestCallbacks s_Callbacks;
         private static TestRunnerApi s_RunnerApi;
         private static MethodInfo s_IsRunActiveMethod;
+        private sealed class CachedRunSnapshot
+        {
+            public readonly UnityTestRunState State;
+            public readonly string Json;
+
+            public CachedRunSnapshot(UnityTestRunState state, string json)
+            {
+                State = state;
+                Json = json;
+            }
+        }
+
         internal static string s_CurrentTestJobGuid;
-        private static volatile UnityTestRunState s_CachedRunState;
+        private static UnityTestRunState s_CachedRunState;
+        private static CachedRunSnapshot s_CachedRunSnapshot;
         private static string s_CancellationSignalRunId;
         private static string s_CancellationMonitorRunId;
         private static bool s_CancellationMonitorRegistered;
@@ -64,7 +78,61 @@ namespace UnityLeanMcp
 
         internal static void ClearCachedRunState()
         {
-            s_CachedRunState = null;
+            Volatile.Write(ref s_CachedRunState, null);
+            Volatile.Write(ref s_CachedRunSnapshot, null);
+        }
+
+        private static void PublishCachedRunState(UnityTestRunState state)
+        {
+            if (state == null)
+            {
+                ClearCachedRunState();
+                return;
+            }
+
+            string json = JsonUtility.ToJson(state);
+            Volatile.Write(ref s_CachedRunSnapshot, new CachedRunSnapshot(state, json));
+            Volatile.Write(ref s_CachedRunState, state);
+        }
+
+        private static string[] CloneStringArray(string[] source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            var copy = new string[source.Length];
+            Array.Copy(source, copy, source.Length);
+            return copy;
+        }
+
+        private static UnityTestRunState CloneRunningState(UnityTestRunState source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            return new UnityTestRunState
+            {
+                runId = source.runId,
+                mode = source.mode,
+                testNames = CloneStringArray(source.testNames),
+                groupNames = CloneStringArray(source.groupNames),
+                categoryNames = CloneStringArray(source.categoryNames),
+                assemblyNames = CloneStringArray(source.assemblyNames),
+                coverage = source.coverage,
+                status = source.status,
+                jobGuid = source.jobGuid,
+                startedUtc = source.startedUtc,
+                totalTests = source.totalTests,
+                completedTests = source.completedTests,
+                passCount = source.passCount,
+                failCount = source.failCount,
+                skipCount = source.skipCount,
+                currentTestName = source.currentTestName
+            };
         }
 
         private static bool TryUpdateRunningState(string runId, Action<UnityTestRunState> update, string actionDesc)
@@ -72,16 +140,17 @@ namespace UnityLeanMcp
             if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
                 return false;
 
-            var state = ReadRunningState();
-            if (state == null || state.runId != runId)
+            var current = ReadRunningState();
+            if (current == null || current.runId != runId)
                 return false;
 
-            update(state);
-            s_CachedRunState = state;
+            var next = CloneRunningState(current);
+            update(next);
+            PublishCachedRunState(next);
 
             try
             {
-                UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
+                UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(next, true), runId);
                 return true;
             }
             catch (Exception ex)
@@ -513,10 +582,10 @@ namespace UnityLeanMcp
                 {
                     runId = runId,
                     mode = mode.ToString(),
-                    testNames = args.testNames,
-                    groupNames = args.groupNames,
-                    categoryNames = args.categoryNames,
-                    assemblyNames = args.assemblyNames,
+                    testNames = CloneStringArray(args.testNames),
+                    groupNames = CloneStringArray(args.groupNames),
+                    categoryNames = CloneStringArray(args.categoryNames),
+                    assemblyNames = CloneStringArray(args.assemblyNames),
                     coverage = args.coverage,
                     status = OperationStatus.Queued,
                     startedUtc = DateTime.UtcNow.ToString("o"),
@@ -527,13 +596,14 @@ namespace UnityLeanMcp
                     skipCount = 0,
                     currentTestName = ""
                 };
-                s_CachedRunState = state;
-                UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, JsonUtility.ToJson(state, true), runId);
+                string prettyJson = JsonUtility.ToJson(state, true);
+                PublishCachedRunState(state);
+                UnityCommandGate.WriteAtomic(UnityLeanMcpPaths.TestRunningFile, prettyJson, runId);
                 return runId;
             }
             catch (Exception ex)
             {
-                s_CachedRunState = null;
+                ClearCachedRunState();
                 Debug.LogError($"UnityLeanMcp: Failed to write test running state: {ex}");
                 return null;
             }
@@ -733,10 +803,10 @@ namespace UnityLeanMcp
 
         internal static UnityTestRunState ReadRunningState()
         {
-            var cached = s_CachedRunState;
+            var cached = Volatile.Read(ref s_CachedRunState);
             if (cached != null)
             {
-                return cached; // Thread-safe in-memory fast path for worker threads
+                return cached;
             }
             try
             {
@@ -763,13 +833,87 @@ namespace UnityLeanMcp
                     return null;
                 }
 
-                s_CachedRunState = state;
-                return state;
+                var published = Interlocked.CompareExchange(ref s_CachedRunState, state, null);
+                if (published == null)
+                {
+                    var snapshot = new CachedRunSnapshot(state, JsonUtility.ToJson(state));
+                    Interlocked.CompareExchange(ref s_CachedRunSnapshot, snapshot, null);
+                }
+                return published ?? state;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"UnityLeanMcp: Failed to read test run state: {ex.Message}");
+                WorkerDiagnosticsLogger.Error(UnityLeanMcpPaths.LogFile, $"UnityLeanMcp: Failed to read test run state: {ex.Message}");
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Worker-thread-safe reader for POLL_TESTS. Uses pre-serialized JSON
+        /// published on the main thread, and falls back to managed JSON parsing
+        /// on cache miss without calling JsonUtility or Unity logging.
+        /// </summary>
+        internal static bool TryReadRunningStateJson(string operationId, out string json)
+        {
+            var state = Volatile.Read(ref s_CachedRunState);
+            var snapshot = Volatile.Read(ref s_CachedRunSnapshot);
+            if (state != null)
+            {
+                if (!string.IsNullOrEmpty(operationId) && state.runId != operationId)
+                {
+                    json = null;
+                    return false;
+                }
+
+                if (snapshot != null &&
+                    (ReferenceEquals(snapshot.State, state) || snapshot.State.runId == state.runId) &&
+                    !string.IsNullOrEmpty(snapshot.Json))
+                {
+                    json = snapshot.Json;
+                    return true;
+                }
+            }
+
+            try
+            {
+                var activeOp = UnityCommandGate.ReadSnapshot();
+                if (activeOp == null || !string.Equals(activeOp.Kind, OperationKinds.Test, StringComparison.OrdinalIgnoreCase))
+                {
+                    json = null;
+                    return false;
+                }
+
+                if (!string.IsNullOrEmpty(operationId) && activeOp.OperationId != operationId)
+                {
+                    json = null;
+                    return false;
+                }
+
+                string text = WorkerThreadSnapshots.ReadFileWithRetry(UnityLeanMcpPaths.TestRunningFile, maxRetries: 3, delayMs: 10);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    json = null;
+                    return false;
+                }
+
+                var values = UnityLeanJson.DeserializeObject(text, StringComparer.OrdinalIgnoreCase);
+                if (values == null ||
+                    !values.TryGetValue("runId", out object runIdObj) ||
+                    !(runIdObj is string runId) ||
+                    runId != activeOp.OperationId)
+                {
+                    json = null;
+                    return false;
+                }
+
+                json = text;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WorkerDiagnosticsLogger.Error(UnityLeanMcpPaths.LogFile, $"UnityLeanMcp: Failed to read test run state on worker: {ex.Message}");
+                json = null;
+                return false;
             }
         }
 
@@ -780,7 +924,7 @@ namespace UnityLeanMcp
         /// </summary>
         internal static WorkerTestRunStateSnapshot ReadThreadSafeSnapshot()
         {
-            var cached = s_CachedRunState;
+            var cached = Volatile.Read(ref s_CachedRunState);
             if (cached != null)
             {
                 return new WorkerTestRunStateSnapshot(cached.runId);
@@ -801,24 +945,25 @@ namespace UnityLeanMcp
             if (string.IsNullOrEmpty(runId) || !UnityCommandGate.IsOwnedBy(runId, OperationKinds.Test))
                 return;
 
-            var state = s_CachedRunState ?? ReadRunningState();
-            if (state == null || state.runId != runId)
+            var current = Volatile.Read(ref s_CachedRunState) ?? ReadRunningState();
+            if (current == null || current.runId != runId)
                 return;
 
+            var next = CloneRunningState(current);
             if (!string.IsNullOrEmpty(status))
             {
-                state.status = status;
+                next.status = status;
             }
-            state.totalTests = totalTests;
-            state.completedTests = completedTests;
-            state.passCount = passCount;
-            state.failCount = failCount;
-            state.skipCount = skipCount;
+            next.totalTests = totalTests;
+            next.completedTests = completedTests;
+            next.passCount = passCount;
+            next.failCount = failCount;
+            next.skipCount = skipCount;
             if (currentTestName != null)
             {
-                state.currentTestName = currentTestName;
+                next.currentTestName = currentTestName;
             }
-            s_CachedRunState = state;
+            PublishCachedRunState(next);
         }
 
 
@@ -1206,10 +1351,13 @@ namespace UnityLeanMcp
                 var state = ReadRunningState();
                 if (state != null && state.runId == runId)
                 {
-                    var cached = s_CachedRunState;
+                    var cached = Volatile.Read(ref s_CachedRunState);
                     if (cached != null && cached.runId == runId)
                     {
-                        s_CachedRunState = null;
+                        if (Interlocked.CompareExchange(ref s_CachedRunState, null, cached) == cached)
+                        {
+                            Volatile.Write(ref s_CachedRunSnapshot, null);
+                        }
                     }
 
                     return CommandHelper.DeleteFileWithRetry(UnityLeanMcpPaths.TestRunningFile);

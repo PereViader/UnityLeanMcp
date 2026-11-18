@@ -1395,6 +1395,15 @@ namespace UnityLeanMcp.Mcp.Tests
             int markerIndex = limitedEmoji.IndexOf("... (truncated: maximum output size reached)", StringComparison.Ordinal);
             Assert.True(markerIndex > 0);
             Assert.False(char.IsHighSurrogate(limitedEmoji[markerIndex - 1]));
+
+            sw.Restart();
+            string formatterBmp = UnityResultFormatter.LimitOutput(multiByteBmp, 65536, 65536);
+            string formatterEmoji = UnityResultFormatter.LimitOutput(emojiText, 65536, 65536);
+            sw.Stop();
+
+            Assert.True(sw.ElapsedMilliseconds < 2000, $"Expected fast O(N) truncation in UnityResultFormatter, took {sw.ElapsedMilliseconds}ms");
+            Assert.Equal(limitedInspect, formatterBmp);
+            Assert.Equal(limitedEmoji, formatterEmoji);
         }
 
         private class BaseSerializableNode

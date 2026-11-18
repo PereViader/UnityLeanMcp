@@ -471,6 +471,7 @@ namespace UnityLeanMcp
 
         public static void UpdateCompilationState()
         {
+            RefreshErrorLogCapture.FlushPendingPersistence();
             s_IsCompiling = EditorApplication.isCompiling;
             s_IsUpdating = EditorApplication.isUpdating;
             s_ScriptCompilationFailed = EditorUtility.scriptCompilationFailed;
@@ -496,6 +497,7 @@ namespace UnityLeanMcp
         /// </summary>
         internal static void ObserveOperationUntilSettled()
         {
+            RefreshErrorLogCapture.FlushPendingPersistence();
             var snap = UnityCommandGate.ReadSnapshot();
             if (snap == null || (snap.Kind != OperationKinds.Refresh && snap.Kind != OperationKinds.Recompile))
             {

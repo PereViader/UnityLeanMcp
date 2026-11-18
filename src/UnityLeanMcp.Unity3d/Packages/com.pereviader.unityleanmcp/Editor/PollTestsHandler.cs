@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using UnityEngine;
 
 namespace UnityLeanMcp
 {
@@ -33,10 +32,8 @@ namespace UnityLeanMcp
                 }
             }
 
-            var runningState = RunTestsHandler.ReadRunningState();
-            if (runningState != null && (string.IsNullOrEmpty(operationId) || runningState.runId == operationId))
+            if (RunTestsHandler.TryReadRunningStateJson(operationId, out string json))
             {
-                string json = JsonUtility.ToJson(runningState);
                 string escapedJson = ProtocolCodec.EscapeLine(json);
                 writer.WriteLine($"RUNNING {escapedJson}");
                 return;

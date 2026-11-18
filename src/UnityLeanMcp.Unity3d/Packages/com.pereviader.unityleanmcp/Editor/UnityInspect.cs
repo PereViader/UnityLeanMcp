@@ -3836,70 +3836,7 @@ namespace UnityLeanMcp
                 return value ?? string.Empty;
             }
 
-            if (value.Length <= maxCharacters && Encoding.UTF8.GetByteCount(value) <= maxBytes)
-            {
-                return value;
-            }
-
-            string marker = GetOutputTruncationMarker(maxCharacters, maxBytes);
-            if (marker.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            int markerBytes = Encoding.UTF8.GetByteCount(marker);
-            int maxPrefixBytes = maxBytes - markerBytes;
-            int prefixLength = Math.Min(value.Length, maxCharacters - marker.Length);
-            if (prefixLength > 0 && prefixLength < value.Length && char.IsHighSurrogate(value[prefixLength - 1]))
-            {
-                prefixLength--;
-            }
-
-            int currentBytes = prefixLength > 0 ? Encoding.UTF8.GetByteCount(value, 0, prefixLength) : 0;
-            while (prefixLength > 0 && currentBytes > maxPrefixBytes)
-            {
-                int step = prefixLength >= 2 &&
-                           char.IsHighSurrogate(value[prefixLength - 2]) &&
-                           char.IsLowSurrogate(value[prefixLength - 1])
-                    ? 2
-                    : 1;
-                prefixLength -= step;
-                currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, step);
-                if (prefixLength > 0 && char.IsHighSurrogate(value[prefixLength - 1]))
-                {
-                    prefixLength--;
-                    currentBytes -= Encoding.UTF8.GetByteCount(value, prefixLength, 1);
-                }
-            }
-
-            return value.Substring(0, prefixLength) + marker;
-        }
-
-        private static string GetOutputTruncationMarker(int maxCharacters, int maxBytes)
-        {
-            if (FitsOutputBudget(OutputTruncationMarker, maxCharacters, maxBytes))
-                return OutputTruncationMarker;
-
-            const string shortMarker = "... (truncated)";
-            if (FitsOutputBudget(shortMarker, maxCharacters, maxBytes))
-                return shortMarker;
-
-            const string compactMarker = "[truncated]";
-            if (FitsOutputBudget(compactMarker, maxCharacters, maxBytes))
-                return compactMarker;
-
-            const string ellipsisMarker = "...";
-            if (FitsOutputBudget(ellipsisMarker, maxCharacters, maxBytes))
-                return ellipsisMarker;
-
-            const string singleCharacterMarker = ".";
-            return FitsOutputBudget(singleCharacterMarker, maxCharacters, maxBytes) ? singleCharacterMarker : string.Empty;
-        }
-
-        private static bool FitsOutputBudget(string value, int maxCharacters, int maxBytes)
-        {
-            return value.Length <= maxCharacters &&
-                Encoding.UTF8.GetByteCount(value) <= maxBytes;
+            return UnityResultFormatter.LimitOutput(value, maxCharacters, maxBytes);
         }
 
         #endregion
