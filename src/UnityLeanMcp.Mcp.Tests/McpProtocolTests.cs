@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
@@ -48,8 +51,9 @@ public class McpProtocolTests
         Assert.True(initDoc.RootElement.TryGetProperty("result", out var initResult));
         Assert.True(initResult.TryGetProperty("serverInfo", out var serverInfo));
         Assert.Equal("UnityLeanMcp.Mcp", serverInfo.GetProperty("name").GetString());
-        Assert.True(initResult.TryGetProperty("instructions", out var instructions));
-        Assert.Equal("unity_refresh verifies compilation diagnostics after editing scripts. unity_test and unity_eval automatically compile and refresh pending changes before executing, so do not call unity_refresh immediately before evaluating code or running tests.", instructions.GetString());
+        Assert.True(initResult.TryGetProperty("capabilities", out var capabilities));
+        Assert.True(capabilities.TryGetProperty("resources", out _));
+        Assert.False(initResult.TryGetProperty("instructions", out _));
 
         // 2. Initialized notification
         await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
@@ -171,6 +175,104 @@ public class McpProtocolTests
         if (!proc.WaitForExit(3000))
         {
             proc.Kill(true);
+        }
+    }
+
+    [Fact]
+    public async Task StdioResources_ListAndRead_ReturnsInspectHelpResource()
+    {
+        string dllPath = McpTestClient.GetSubsystemServerDllPath();
+        string tempDir = Path.Combine(Path.GetTempPath(), $"unity-lean-mcp-res-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"\"{dllPath}\" --project \"{tempDir}\"",
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardInputEncoding = Encoding.UTF8,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var proc = Process.Start(psi);
+            Assert.NotNull(proc);
+
+            proc.ErrorDataReceived += (_, _) => { };
+            proc.BeginErrorReadLine();
+
+            var writer = proc.StandardInput;
+            var reader = proc.StandardOutput;
+
+            await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"xunit-test\",\"version\":\"1.0\"}}}");
+            await writer.FlushAsync();
+            string? initResponse = await reader.ReadLineAsync();
+            Assert.NotNull(initResponse);
+
+            await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+            await writer.FlushAsync();
+
+            await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"resources/list\",\"params\":{}}");
+            await writer.FlushAsync();
+
+            string? listResponse = await reader.ReadLineAsync();
+            Assert.NotNull(listResponse);
+            using var listDoc = JsonDocument.Parse(listResponse);
+            Assert.True(listDoc.RootElement.TryGetProperty("result", out var listResult));
+            Assert.True(listResult.TryGetProperty("resources", out var resourcesElem));
+
+            var resources = resourcesElem.EnumerateArray().ToArray();
+            Assert.Single(resources);
+            var helpResource = resources[0];
+            Assert.Equal(InspectHelpCatalog.ResourceUri, helpResource.GetProperty("uri").GetString());
+            Assert.Equal(InspectHelpCatalog.ResourceName, helpResource.GetProperty("name").GetString());
+            Assert.Equal(InspectHelpCatalog.ResourceTitle, helpResource.GetProperty("title").GetString());
+            Assert.Equal(InspectHelpCatalog.ResourceMimeType, helpResource.GetProperty("mimeType").GetString());
+            Assert.Equal(InspectHelpCatalog.ResourceDescription, helpResource.GetProperty("description").GetString());
+
+            await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"resources/read\",\"params\":{\"uri\":\"unity://inspect/help\"}}");
+            await writer.FlushAsync();
+
+            string? readResponse = await reader.ReadLineAsync();
+            Assert.NotNull(readResponse);
+            using var readDoc = JsonDocument.Parse(readResponse);
+            Assert.True(readDoc.RootElement.TryGetProperty("result", out var readResult));
+            Assert.True(readResult.TryGetProperty("contents", out var contentsElem));
+
+            var contents = contentsElem.EnumerateArray().ToArray();
+            Assert.Single(contents);
+            Assert.Equal(InspectHelpCatalog.ResourceUri, contents[0].GetProperty("uri").GetString());
+            Assert.Equal(InspectHelpCatalog.ResourceMimeType, contents[0].GetProperty("mimeType").GetString());
+            Assert.Equal(InspectHelpCatalog.FullHelpText, contents[0].GetProperty("text").GetString());
+
+            Assert.Empty(Directory.GetFileSystemEntries(tempDir));
+
+            await writer.WriteLineAsync("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"resources/read\",\"params\":{\"uri\":\"unity://unknown/resource\"}}");
+            await writer.FlushAsync();
+
+            string? unknownResponse = await reader.ReadLineAsync();
+            Assert.NotNull(unknownResponse);
+            using var unknownDoc = JsonDocument.Parse(unknownResponse);
+            Assert.True(unknownDoc.RootElement.TryGetProperty("error", out _));
+
+            writer.Close();
+            if (!proc.WaitForExit(3000))
+            {
+                proc.Kill(true);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
         }
     }
 }

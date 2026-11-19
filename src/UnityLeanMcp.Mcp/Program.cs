@@ -73,12 +73,10 @@ builder.Services.AddSingleton(new UnityClientOptions(PollIntervalMs: defaultPoll
 builder.Services.AddSingleton<IUnityClient, UnityClient>();
 builder.Services.AddSingleton<IDiagnosticFormatter, DiagnosticFormatter>();
 builder.Services.AddSingleton<UnityTools>();
+builder.Services.AddSingleton<UnityResources>();
 
 builder.Services
-    .AddMcpServer(options =>
-    {
-        options.ServerInstructions = "unity_refresh verifies compilation diagnostics after editing scripts. unity_test and unity_eval automatically compile and refresh pending changes before executing, so do not call unity_refresh immediately before evaluating code or running tests.";
-    })
+    .AddMcpServer()
     .WithRequestFilters(filters =>
     {
         filters.AddCallToolFilter(next => async (request, cancellationToken) =>
@@ -92,7 +90,8 @@ builder.Services
     })
 
     .WithStdioServerTransport()
-    .WithTools<UnityTools>();
+    .WithTools<UnityTools>()
+    .WithResources<UnityResources>();
 
 
 

@@ -15,11 +15,17 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 | Tool | Description |
 | :--- | :--- |
 | **`unity_refresh`** | Refreshes AssetDatabase and returns compiler and asset import diagnostics (including shader errors, import failures, and missing scripts). C# compiler errors persist across no-op refreshes. Normal refreshes are fast when unchanged; set `clean: true` only when a more expensive full script recompilation is needed to recover from a stale or corrupted compiler cache. |
-| **`unity_eval`** | Evaluates C# top-level statements in-memory against the active Unity Editor with top-level `await` and `return <value>;`. Pre-imports `Inspect.*` for token-bounded scene/object introspection (call `return Inspect.Help();` for cheatsheet). Include `using UnityEngine;` for Unity types. |
+| **`unity_eval`** | Evaluates C# top-level statements in-memory against the active Unity Editor with top-level `await` and `return <value>;`. Pre-imports `Inspect.*` for token-bounded scene/object introspection (read the `unity://inspect/help` MCP resource for the cheatsheet). Include `using UnityEngine;` for Unity types. |
 | **`unity_test`** | Runs EditMode/PlayMode tests with failure diagnostics. Automatically suggests near-matches and cross-mode hints if filters match 0 tests. Supports `coverage: true` to record in-memory code coverage without disk snapshots. |
 | **`unity_coverage`** | Queries in-memory code coverage for specified files or directories (recursively evaluating all contained C# scripts) from the latest test run without re-running tests. Reports line coverage percentages and lists uncovered line spans for each file. |
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts the Unity Editor in normal interactive mode first and keeps it running for subsequent commands.
+
+### MCP Resources
+
+| URI | Description |
+| :--- | :--- |
+| **`unity://inspect/help`** | Read-only cheatsheet of all built-in `Inspect.*` helper signatures, served directly by the MCP host without launching Unity or triggering compilation. |
 
 ### `Inspect` Helpers (`unity_eval`)
 
@@ -45,7 +51,6 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | **Editor & Tests** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
 | | `Inspect.MainCamera()` | Properties of `Camera.main` (transform, clear flags, culling mask, FOV, clipping planes). |
 | | `Inspect.Tests([filter], [maxItems])` | Enumerates available EditMode and PlayMode tests with an optional name filter. |
-| **Utilities** | `Inspect.Help()` | Returns the complete runtime cheatsheet of all available `Inspect.*` signatures. |
 
 Call these directly inside `unity_eval`:
 
@@ -58,9 +63,6 @@ return Inspect.PrefabStage();
 
 // Find GameObjects by wildcard pattern
 return Inspect.Find("*Player*");
-
-// Print the full runtime cheatsheet
-return Inspect.Help();
 ```
 
 ---

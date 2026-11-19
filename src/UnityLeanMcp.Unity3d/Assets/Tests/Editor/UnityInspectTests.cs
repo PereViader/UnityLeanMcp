@@ -366,16 +366,6 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
-        public void Inspect_Help_IncludesVisualCaptureCategoryAndMethods()
-        {
-            string help = Inspect.Help();
-
-            StringAssert.Contains("Visual Capture:", help);
-            StringAssert.Contains("CaptureCamera", help);
-            StringAssert.Contains("CaptureSceneView", help);
-        }
-
-        [Test]
         public void Dependencies_PathNormalization_AndTypeAnnotations()
         {
             string matPath = "Assets/TestInspectDepsMat.mat";
@@ -497,16 +487,6 @@ namespace UnityLeanMcpTests
         }
 
         [Test]
-        public void Inspect_Help_IncludesDependenciesAndReferencersUnderAssetsAndPrefabs()
-        {
-            string help = Inspect.Help();
-
-            StringAssert.Contains("Assets & Prefabs:", help);
-            StringAssert.Contains("Dependencies", help);
-            StringAssert.Contains("Referencers", help);
-        }
-
-        [Test]
         public void GameObject_WithRectTransform_FormatsLayout()
         {
             var go = CreateTestGameObject("TestUIElement");
@@ -576,14 +556,6 @@ namespace UnityLeanMcpTests
             StringAssert.Contains("text: \"Health: 99\"", result);
             StringAssert.Contains("Button", result);
             StringAssert.Contains("text: \"Pause\"", result);
-        }
-
-        [Test]
-        public void Inspect_Help_IncludesUIDocument()
-        {
-            string help = Inspect.Help();
-            StringAssert.Contains("Scene & Hierarchy:", help);
-            StringAssert.Contains("UIDocument", help);
         }
     }
 }

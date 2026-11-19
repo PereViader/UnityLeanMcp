@@ -655,46 +655,4 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         string none = Inspect.Tests("NonExistentPattern_ZXY_987");
         Assert.Contains("(No tests found matching filter 'NonExistentPattern_ZXY_987')", none);
     }
-
-    [Fact]
-    public void Help_ReturnsAllDocumentedInspectMethods()
-    {
-        string inspectHelp = Inspect.Help();
-
-        Assert.StartsWith("UnityLeanMcp Inspection Helpers (UnityLeanMcp.Inspect):", inspectHelp);
-        Assert.Contains("Hierarchy", inspectHelp);
-        Assert.Contains("GameObject", inspectHelp);
-        Assert.Contains("Component", inspectHelp);
-        Assert.Contains("Object", inspectHelp);
-        Assert.Contains("FindAssets", inspectHelp);
-        Assert.Contains("FindPrefabs", inspectHelp);
-        Assert.Contains("FindAsset", inspectHelp);
-        Assert.Contains("Selection", inspectHelp);
-        Assert.Contains("MainCamera", inspectHelp);
-        Assert.Contains("PrefabOverrides", inspectHelp);
-        Assert.Contains("• string PrefabOverrides(GameObject instance, int maxItems = 50)", inspectHelp);
-    }
-
-    [Fact]
-    public void Help_ContainsCategorizedSections()
-    {
-        string help = Inspect.Help();
-
-        Assert.Contains("Scene & Hierarchy:", help);
-        Assert.Contains("Objects & Components:", help);
-        Assert.Contains("Assets & Prefabs:", help);
-        Assert.Contains("Visual Capture:", help);
-        Assert.Contains("Editor & Tests:", help);
-        Assert.Contains("Utilities:", help);
-
-        Assert.Contains("• string Find(string namePattern", help);
-        Assert.Contains("• string MissingScripts(", help);
-        Assert.Contains("• string SceneState()", help);
-        Assert.Contains("• string Dependencies(string assetPath, bool recursive = false, int maxItems = 100)", help);
-        Assert.Contains("• string Referencers(string targetAssetPath, string searchFolder = \"Assets\", int maxItems = 100)", help);
-        Assert.Contains("• string CaptureCamera(string outputPath = \"Temp/unity_capture.png\", int width = 1024, int height = 768, Camera camera = null)", help);
-        Assert.Contains("• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)", help);
-        Assert.Contains("• string Tests(string filter = null", help);
-        Assert.Contains("UIDocument", help);
-    }
 }

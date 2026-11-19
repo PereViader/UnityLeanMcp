@@ -393,16 +393,6 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
     }
 
     [Fact]
-    public void InspectHelp_IncludesPrefabStageUnderSceneAndHierarchy()
-    {
-        string help = Inspect.Help();
-
-        Assert.Contains("Scene & Hierarchy:", help);
-        Assert.Contains("• string PrefabStage()", help);
-        Assert.Contains("• string PrefabStage(int maxDepth, int maxItems = 100)", help);
-    }
-
-    [Fact]
     public void Hierarchy_TransformRoot_InspectsSubtreeDirectly()
     {
         var root = new GameObject("Root");

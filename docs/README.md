@@ -1,6 +1,6 @@
 # Architecture and contributor guides
 
-UnityLeanMcp connects a .NET MCP host to an Editor-only Unity package over project-bound loopback TCP. The public tools are `unity_refresh`, `unity_eval`, `unity_test`, and `unity_coverage`. Execution tools start Unity as needed and wait for busy work; coverage inspects existing measurements without refreshing. Static invocation, inspection, and occasional visual capture use eval; automated runtime verification uses PlayMode tests. Separate status, stop, logs, capture, and interactive PlayMode tools are intentionally absent from the public catalog.
+UnityLeanMcp connects a .NET MCP host to an Editor-only Unity package over project-bound loopback TCP. The public tools are `unity_refresh`, `unity_eval`, `unity_test`, and `unity_coverage`. The host also exposes the read-only `unity://inspect/help` MCP resource for the `Inspect.*` cheatsheet without launching Unity or triggering compilation. Execution tools start Unity as needed and wait for busy work; coverage inspects existing measurements without refreshing. Static invocation, inspection, and occasional visual capture use eval; automated runtime verification uses PlayMode tests. Separate status, stop, logs, capture, and interactive PlayMode tools are intentionally absent from the public catalog.
 
 ## System invariants
 
