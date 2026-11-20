@@ -144,10 +144,13 @@ public class UnityTools
     }
 
     [McpServerTool(Name = "unity_coverage")]
-    [Description("Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages and lists uncovered line spans for each file.")]
+    [Description("Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages sorted from lowest to highest coverage and lists uncovered line spans for each file. Set uncoveredOnly to true to omit 100%-covered files and files with 0 executable points.")]
     public async Task<CallToolResult> UnityCoverageAsync(
         [Description("File or directory paths to inspect coverage for (e.g. ['Assets/Scripts/PlayerController.cs'] or ['Assets/Scripts/Combat/']). Directory paths recursively match all contained C# files. Accepts a single string or an array of strings. Required.")]
         string[] paths,
+
+        [Description("If true, omits 100%-covered files and files with 0 executable sequence points while keeping aggregate coverage over the queried scope. Defaults to false.")]
+        bool uncoveredOnly = false,
 
         IProgress<ProgressNotificationValue>? progress = null,
         CancellationToken cancellationToken = default)
@@ -168,7 +171,7 @@ public class UnityTools
             }
 
             var result = await _client.GetCoverageAsync(paths, progress, cancellationToken);
-            var (text, isError) = _formatter.FormatCoverageResult(result);
+            var (text, isError) = _formatter.FormatCoverageResult(result, uncoveredOnly);
             return Result(text, isError: isError);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -103,6 +103,15 @@ public class McpProtocolTests
         var covSchema = coverageTool.GetProperty("inputSchema");
         var covProps = covSchema.GetProperty("properties");
         Assert.True(covProps.TryGetProperty("paths", out _));
+        Assert.True(covProps.TryGetProperty("uncoveredOnly", out var uncoveredOnlyProp));
+        var uncoveredOnlyTypes = uncoveredOnlyProp.GetProperty("type").ValueKind == JsonValueKind.Array
+            ? uncoveredOnlyProp.GetProperty("type").EnumerateArray().Select(value => value.GetString()).ToArray()
+            : [uncoveredOnlyProp.GetProperty("type").GetString()];
+        Assert.Contains("boolean", uncoveredOnlyTypes);
+        Assert.False(covProps.TryGetProperty("sortBy", out _));
+        var covRequired = covSchema.GetProperty("required").EnumerateArray().Select(value => value.GetString()).ToArray();
+        Assert.Contains("paths", covRequired);
+        Assert.DoesNotContain("uncoveredOnly", covRequired);
 
         Assert.False(properties.TryGetProperty("testName", out _));
         Assert.False(properties.TryGetProperty("group", out _));

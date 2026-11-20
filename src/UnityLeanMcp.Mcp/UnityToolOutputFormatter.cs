@@ -20,6 +20,9 @@ internal sealed partial class UnityToolOutputFormatter
         @")\b",
         RegexOptions.Compiled);
 
+    private static readonly StringComparer s_CoveragePathComparer =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private readonly IDiagnosticFormatter _diagnosticFormatter;
 
     public UnityToolOutputFormatter(IDiagnosticFormatter? diagnosticFormatter = null)
@@ -115,58 +118,106 @@ internal sealed partial class UnityToolOutputFormatter
         return output.ToString().TrimEnd();
     }
 
-    public (string Text, bool IsError) FormatCoverageResult(CoverageResult result)
+    public (string Text, bool IsError) FormatCoverageResult(CoverageResult result, bool uncoveredOnly = false)
     {
         if (!result.Success)
         {
             return (result.Message, true);
         }
 
-        var files = result.Files ?? new List<CoverageFileResult>();
-        if (files.Count == 0)
+        var allFiles = new List<CoverageFileResult>();
+        if (result.Files != null)
+        {
+            foreach (var file in result.Files)
+            {
+                if (file != null)
+                {
+                    allFiles.Add(file);
+                }
+            }
+        }
+
+        if (allFiles.Count == 0)
         {
             return ("No compiled C# scripts found in the specified path(s).", false);
         }
+
+        long aggregateTotalPoints = 0;
+        long aggregateCoveredPoints = 0;
+        var visibleFiles = new List<CoverageFileResult>(allFiles.Count);
+        int omittedFullyCoveredCount = 0;
+        int omittedZeroPointCount = 0;
+
+        foreach (var file in allFiles)
+        {
+            aggregateTotalPoints += file.TotalPoints;
+            aggregateCoveredPoints += file.CoveredPoints;
+
+            if (!uncoveredOnly)
+            {
+                visibleFiles.Add(file);
+            }
+            else if (file.TotalPoints <= 0)
+            {
+                omittedZeroPointCount++;
+            }
+            else if (file.CoveredPoints >= file.TotalPoints)
+            {
+                omittedFullyCoveredCount++;
+            }
+            else
+            {
+                visibleFiles.Add(file);
+            }
+        }
+
+        visibleFiles.Sort(CompareCoverageFiles);
 
         var output = new BoundedTextBuilder(
             McpOutputLimits.MaxFormattedOutputCharacters,
             McpOutputLimits.AggregateOutputTruncationMarker);
 
-        if (files.Count > 1)
-        {
-            int aggregateTotalPoints = 0;
-            int aggregateCoveredPoints = 0;
-            foreach (var file in files)
-            {
-                if (file == null) continue;
-                aggregateTotalPoints += file.TotalPoints;
-                aggregateCoveredPoints += file.CoveredPoints;
-            }
+        int omittedCount = omittedFullyCoveredCount + omittedZeroPointCount;
+        bool showAggregateHeader = aggregateTotalPoints > 0 &&
+            (allFiles.Count > 1 || (uncoveredOnly && visibleFiles.Count == 0));
 
-            if (aggregateTotalPoints > 0)
+        if (showAggregateHeader)
+        {
+            double aggPct = (aggregateCoveredPoints / (double)aggregateTotalPoints) * 100.0;
+            output.Append("Total Coverage: ");
+            output.Append(aggPct.ToString("F1", CultureInfo.InvariantCulture));
+            output.Append("% (");
+            output.Append(aggregateCoveredPoints.ToString(CultureInfo.InvariantCulture));
+            output.Append("/");
+            output.Append(aggregateTotalPoints.ToString(CultureInfo.InvariantCulture));
+            output.Append(" points across ");
+            output.Append(allFiles.Count.ToString(CultureInfo.InvariantCulture));
+            output.Append(allFiles.Count == 1 ? " file" : " files");
+            if (uncoveredOnly && visibleFiles.Count > 0 && omittedCount > 0)
             {
-                double aggPct = (aggregateCoveredPoints / (double)aggregateTotalPoints) * 100.0;
-                output.Append("Total Coverage: ");
-                output.Append(aggPct.ToString("F1", CultureInfo.InvariantCulture));
-                output.Append("% (");
-                output.Append(aggregateCoveredPoints.ToString());
-                output.Append("/");
-                output.Append(aggregateTotalPoints.ToString());
-                output.Append(" points across ");
-                output.Append(files.Count.ToString());
-                output.AppendLine(" files)");
-                output.AppendLine();
+                output.Append("; showing ");
+                output.Append(visibleFiles.Count.ToString(CultureInfo.InvariantCulture));
+                output.Append(" uncovered, ");
+                output.Append(omittedCount.ToString(CultureInfo.InvariantCulture));
+                output.Append(" omitted");
             }
+            output.AppendLine(")");
+            output.AppendLine();
         }
 
-        foreach (var file in files)
+        if (uncoveredOnly && visibleFiles.Count == 0)
         {
-            if (file == null) continue;
+            output.Append(FormatCoverageOmissionSummary(omittedFullyCoveredCount, omittedZeroPointCount));
+            return (output.ToString().TrimEnd(), false);
+        }
+
+        foreach (var file in visibleFiles)
+        {
             output.Append("• ");
             output.Append(file.Path);
             output.Append(": ");
 
-            if (file.TotalPoints == 0)
+            if (file.TotalPoints <= 0)
             {
                 output.AppendLine("No executable sequence points found (interfaces, enums, or declarations without executable code).");
                 continue;
@@ -175,9 +226,9 @@ internal sealed partial class UnityToolOutputFormatter
             double pct = (file.CoveredPoints / (double)file.TotalPoints) * 100.0;
             output.Append(pct.ToString("F1", CultureInfo.InvariantCulture));
             output.Append("% (");
-            output.Append(file.CoveredPoints.ToString());
+            output.Append(file.CoveredPoints.ToString(CultureInfo.InvariantCulture));
             output.Append("/");
-            output.Append(file.TotalPoints.ToString());
+            output.Append(file.TotalPoints.ToString(CultureInfo.InvariantCulture));
             output.Append(" points)");
 
             if (file.UncoveredSpans is { Count: > 0 })
@@ -196,11 +247,11 @@ internal sealed partial class UnityToolOutputFormatter
                     if (!firstSpan) output.Append(", ");
                     firstSpan = false;
 
-                    output.Append(span.StartLine.ToString());
+                    output.Append(span.StartLine.ToString(CultureInfo.InvariantCulture));
                     if (span.EndLine > span.StartLine)
                     {
                         output.Append("-");
-                        output.Append(span.EndLine.ToString());
+                        output.Append(span.EndLine.ToString(CultureInfo.InvariantCulture));
                     }
                 }
             }
@@ -208,6 +259,59 @@ internal sealed partial class UnityToolOutputFormatter
         }
 
         return (output.ToString().TrimEnd(), false);
+    }
+
+    private static int CompareCoverageFiles(CoverageFileResult left, CoverageFileResult right)
+    {
+        bool leftHasPoints = left.TotalPoints > 0;
+        bool rightHasPoints = right.TotalPoints > 0;
+        if (leftHasPoints != rightHasPoints)
+        {
+            return leftHasPoints ? -1 : 1;
+        }
+
+        if (leftHasPoints)
+        {
+            int ratioComparison = ((long)left.CoveredPoints * right.TotalPoints)
+                .CompareTo((long)right.CoveredPoints * left.TotalPoints);
+            if (ratioComparison != 0)
+            {
+                return ratioComparison;
+            }
+
+            long leftUncovered = (long)left.TotalPoints - left.CoveredPoints;
+            long rightUncovered = (long)right.TotalPoints - right.CoveredPoints;
+            int uncoveredComparison = rightUncovered.CompareTo(leftUncovered);
+            if (uncoveredComparison != 0)
+            {
+                return uncoveredComparison;
+            }
+        }
+
+        return s_CoveragePathComparer.Compare(left.Path ?? string.Empty, right.Path ?? string.Empty);
+    }
+
+    private static string FormatCoverageOmissionSummary(int omittedFullyCoveredCount, int omittedZeroPointCount)
+    {
+        if (omittedFullyCoveredCount > 0 && omittedZeroPointCount > 0)
+        {
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"No uncovered files to show ({omittedFullyCoveredCount} fully covered, {omittedZeroPointCount} with 0 executable points omitted).");
+        }
+
+        if (omittedFullyCoveredCount > 0)
+        {
+            string fileNoun = omittedFullyCoveredCount == 1 ? "fully covered file" : "fully covered files";
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"No uncovered files to show ({omittedFullyCoveredCount} {fileNoun} omitted).");
+        }
+
+        string zeroPointNoun = omittedZeroPointCount == 1 ? "file" : "files";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"No uncovered files to show ({omittedZeroPointCount} {zeroPointNoun} with 0 executable points omitted).");
     }
 
     private string FormatEvalErrorMessage(UnityEvalResult result, string projectRoot)

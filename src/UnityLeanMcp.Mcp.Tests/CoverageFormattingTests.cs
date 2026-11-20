@@ -275,7 +275,8 @@ public class CoverageFormattingTests
             Assert.Contains("• Assets/Scripts/FileA.cs: 100.0% (10/10 points)", text);
             Assert.Contains("• Assets/Scripts/FileB.cs: 50.0% (5/10 points)", text);
             Assert.Contains("Uncovered lines: 1-2", text);
-            Assert.Contains("(10/10 points)" + Environment.NewLine + "• Assets/Scripts/FileB.cs", text);
+            Assert.Contains("Uncovered lines: 1-2" + Environment.NewLine + "• Assets/Scripts/FileA.cs", text);
+            Assert.True(text.IndexOf("FileB.cs", StringComparison.Ordinal) < text.IndexOf("FileA.cs", StringComparison.Ordinal));
             Assert.Equal(2, text.Split(Environment.NewLine).Count(line => line.StartsWith("• ")));
         }
         finally
@@ -681,6 +682,263 @@ public class CoverageFormattingTests
             Assert.False(result.IsError);
             string text = GetResultText(result);
             Assert.Contains("No compiled C# scripts found", text);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task UnityCoverage_DefaultSorting_OrdersLowestToHighestWithZeroPointFilesLastAndPreservesNewlines()
+    {
+        var coverageResult = new CoverageResult
+        {
+            Success = true,
+            Files =
+            [
+                new CoverageFileResult { Path = "Assets/Scripts/IZeroB.cs", TotalPoints = 0, CoveredPoints = 0 },
+                new CoverageFileResult { Path = "Assets/Scripts/FullB.cs", TotalPoints = 10, CoveredPoints = 10 },
+                new CoverageFileResult { Path = "Assets/Scripts/Half.cs", TotalPoints = 10, CoveredPoints = 5, UncoveredLines = [1] },
+                new CoverageFileResult { Path = "Assets/Scripts/ZeroCovered.cs", TotalPoints = 10, CoveredPoints = 0, UncoveredLines = [1, 2] },
+                new CoverageFileResult { Path = "Assets/Scripts/FullA.cs", TotalPoints = 5, CoveredPoints = 5 },
+                new CoverageFileResult { Path = "Assets/Scripts/IZeroA.cs", TotalPoints = 0, CoveredPoints = 0 },
+                new CoverageFileResult { Path = "Assets/Scripts/Quarter.cs", TotalPoints = 8, CoveredPoints = 2, UncoveredLines = [3] }
+            ]
+        };
+
+        var result = await InvokeUnityCoverageAsync(coverageResult);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        Assert.StartsWith("Total Coverage: 51.2% (22/43 points across 7 files)", text);
+
+        var bulletLines = text.Split(Environment.NewLine).Where(line => line.StartsWith("• ")).ToArray();
+        Assert.Equal(7, bulletLines.Length);
+        Assert.StartsWith("• Assets/Scripts/ZeroCovered.cs: 0.0%", bulletLines[0]);
+        Assert.StartsWith("• Assets/Scripts/Quarter.cs: 25.0%", bulletLines[1]);
+        Assert.StartsWith("• Assets/Scripts/Half.cs: 50.0%", bulletLines[2]);
+        Assert.StartsWith("• Assets/Scripts/FullA.cs: 100.0%", bulletLines[3]);
+        Assert.StartsWith("• Assets/Scripts/FullB.cs: 100.0%", bulletLines[4]);
+        Assert.StartsWith("• Assets/Scripts/IZeroA.cs: No executable sequence points found", bulletLines[5]);
+        Assert.StartsWith("• Assets/Scripts/IZeroB.cs: No executable sequence points found", bulletLines[6]);
+    }
+
+    [Fact]
+    public async Task UnityCoverage_TieBreakingAndExactRatios_AreDeterministicAndDoNotMutateInput()
+    {
+        var fileZeroSmall = new CoverageFileResult { Path = "Assets/Scripts/Alpha.cs", TotalPoints = 5, CoveredPoints = 0, UncoveredLines = [1] };
+        var fileZeroLarge = new CoverageFileResult { Path = "Assets/Scripts/Zulu.cs", TotalPoints = 50, CoveredPoints = 0, UncoveredLines = [1] };
+        var fileHalfSmall = new CoverageFileResult { Path = "Assets/Scripts/Beta.cs", TotalPoints = 10, CoveredPoints = 5, UncoveredLines = [1] };
+        var fileHalfLarge = new CoverageFileResult { Path = "Assets/Scripts/Yankee.cs", TotalPoints = 50, CoveredPoints = 25, UncoveredLines = [1] };
+        var fileHalfTieB = new CoverageFileResult { Path = "Assets/Scripts/CharlieB.cs", TotalPoints = 10, CoveredPoints = 5, UncoveredLines = [1] };
+        var fileNearFull = new CoverageFileResult { Path = "Assets/Scripts/NearFull.cs", TotalPoints = 10000, CoveredPoints = 9999, UncoveredLines = [100] };
+        var fileExactFull = new CoverageFileResult { Path = "Assets/Scripts/ExactFull.cs", TotalPoints = 10, CoveredPoints = 10 };
+
+        var originalOrder = new List<CoverageFileResult>
+        {
+            fileExactFull,
+            fileHalfTieB,
+            fileZeroSmall,
+            fileNearFull,
+            fileHalfSmall,
+            fileZeroLarge,
+            fileHalfLarge
+        };
+
+        var coverageResult = new CoverageResult
+        {
+            Success = true,
+            Files = [.. originalOrder]
+        };
+
+        var result = await InvokeUnityCoverageAsync(coverageResult);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        var bulletLines = text.Split(Environment.NewLine).Where(line => line.StartsWith("• ")).ToArray();
+        Assert.Equal(7, bulletLines.Length);
+        Assert.StartsWith("• Assets/Scripts/Zulu.cs: 0.0% (0/50 points)", bulletLines[0]);
+        Assert.StartsWith("• Assets/Scripts/Alpha.cs: 0.0% (0/5 points)", bulletLines[1]);
+        Assert.StartsWith("• Assets/Scripts/Yankee.cs: 50.0% (25/50 points)", bulletLines[2]);
+        Assert.StartsWith("• Assets/Scripts/Beta.cs: 50.0% (5/10 points)", bulletLines[3]);
+        Assert.StartsWith("• Assets/Scripts/CharlieB.cs: 50.0% (5/10 points)", bulletLines[4]);
+        Assert.StartsWith("• Assets/Scripts/NearFull.cs: 100.0% (9999/10000 points)", bulletLines[5]);
+        Assert.StartsWith("• Assets/Scripts/ExactFull.cs: 100.0% (10/10 points)", bulletLines[6]);
+
+        // Input list must remain untouched
+        Assert.Equal(originalOrder, coverageResult.Files);
+    }
+
+    [Fact]
+    public async Task UnityCoverage_UncoveredOnly_OmitsFullAndZeroPointFilesWhilePreservingScopeAggregate()
+    {
+        var coverageResult = new CoverageResult
+        {
+            Success = true,
+            Files =
+            [
+                new CoverageFileResult { Path = "Assets/Scripts/Full.cs", TotalPoints = 10, CoveredPoints = 10 },
+                new CoverageFileResult { Path = "Assets/Scripts/Interface.cs", TotalPoints = 0, CoveredPoints = 0 },
+                new CoverageFileResult { Path = "Assets/Scripts/NearFull.cs", TotalPoints = 10000, CoveredPoints = 9999, UncoveredLines = [99] },
+                new CoverageFileResult { Path = "Assets/Scripts/Partial.cs", TotalPoints = 20, CoveredPoints = 10, UncoveredLines = [4, 5] }
+            ]
+        };
+
+        var result = await InvokeUnityCoverageAsync(coverageResult, uncoveredOnly: true);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        Assert.StartsWith("Total Coverage: 99.9% (10019/10030 points across 4 files; showing 2 uncovered, 2 omitted)", text);
+        var bulletLines = text.Split(Environment.NewLine).Where(line => line.StartsWith("• ")).ToArray();
+        Assert.Equal(2, bulletLines.Length);
+        Assert.StartsWith("• Assets/Scripts/Partial.cs: 50.0% (10/20 points)", bulletLines[0]);
+        Assert.StartsWith("• Assets/Scripts/NearFull.cs: 100.0% (9999/10000 points)", bulletLines[1]);
+        Assert.DoesNotContain("Assets/Scripts/Full.cs", text);
+        Assert.DoesNotContain("Assets/Scripts/Interface.cs", text);
+    }
+
+    [Fact]
+    public async Task UnityCoverage_UncoveredOnly_SingleUncoveredFile_OmitsAggregateHeader()
+    {
+        var coverageResult = new CoverageResult
+        {
+            Success = true,
+            Files =
+            [
+                new CoverageFileResult { Path = "Assets/Scripts/Partial.cs", TotalPoints = 10, CoveredPoints = 4, UncoveredLines = [2, 3] }
+            ]
+        };
+
+        var result = await InvokeUnityCoverageAsync(coverageResult, uncoveredOnly: true);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        Assert.DoesNotContain("Total Coverage:", text);
+        Assert.Contains("• Assets/Scripts/Partial.cs: 40.0% (4/10 points)", text);
+    }
+
+    [Fact]
+    public async Task UnityCoverage_UncoveredOnly_AllFilesUncovered_OmitsOmittedCountSuffix()
+    {
+        var coverageResult = new CoverageResult
+        {
+            Success = true,
+            Files =
+            [
+                new CoverageFileResult { Path = "Assets/Scripts/A.cs", TotalPoints = 10, CoveredPoints = 8, UncoveredLines = [1] },
+                new CoverageFileResult { Path = "Assets/Scripts/B.cs", TotalPoints = 10, CoveredPoints = 2, UncoveredLines = [5] }
+            ]
+        };
+
+        var result = await InvokeUnityCoverageAsync(coverageResult, uncoveredOnly: true);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        Assert.StartsWith("Total Coverage: 50.0% (10/20 points across 2 files)" + Environment.NewLine, text);
+        Assert.DoesNotContain("omitted", text);
+        var bulletLines = text.Split(Environment.NewLine).Where(line => line.StartsWith("• ")).ToArray();
+        Assert.Equal(2, bulletLines.Length);
+        Assert.StartsWith("• Assets/Scripts/B.cs: 20.0%", bulletLines[0]);
+        Assert.StartsWith("• Assets/Scripts/A.cs: 80.0%", bulletLines[1]);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UnityCoverage_UncoveredOnly_AllFullyCovered_ShowsAggregateAndOmissionSummary(bool singleFile)
+    {
+        var files = new List<CoverageFileResult>
+        {
+            new() { Path = "Assets/Scripts/A.cs", TotalPoints = 10, CoveredPoints = 10 }
+        };
+        if (!singleFile)
+        {
+            files.Add(new CoverageFileResult { Path = "Assets/Scripts/B.cs", TotalPoints = 10, CoveredPoints = 10 });
+        }
+
+        var result = await InvokeUnityCoverageAsync(new CoverageResult { Success = true, Files = files }, uncoveredOnly: true);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        if (singleFile)
+        {
+            Assert.Equal(
+                $"Total Coverage: 100.0% (10/10 points across 1 file){Environment.NewLine}{Environment.NewLine}No uncovered files to show (1 fully covered file omitted).",
+                text);
+        }
+        else
+        {
+            Assert.Equal(
+                $"Total Coverage: 100.0% (20/20 points across 2 files){Environment.NewLine}{Environment.NewLine}No uncovered files to show (2 fully covered files omitted).",
+                text);
+        }
+    }
+
+    [Fact]
+    public async Task UnityCoverage_UncoveredOnly_MixedFullAndZeroPointFiles_ShowsAggregateAndCombinedOmissionSummary()
+    {
+        var coverageResult = new CoverageResult
+        {
+            Success = true,
+            Files =
+            [
+                new CoverageFileResult { Path = "Assets/Scripts/A.cs", TotalPoints = 10, CoveredPoints = 10 },
+                new CoverageFileResult { Path = "Assets/Scripts/B.cs", TotalPoints = 10, CoveredPoints = 10 },
+                new CoverageFileResult { Path = "Assets/Scripts/IThing.cs", TotalPoints = 0, CoveredPoints = 0 }
+            ]
+        };
+
+        var result = await InvokeUnityCoverageAsync(coverageResult, uncoveredOnly: true);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        Assert.Equal(
+            $"Total Coverage: 100.0% (20/20 points across 3 files){Environment.NewLine}{Environment.NewLine}No uncovered files to show (2 fully covered, 1 with 0 executable points omitted).",
+            text);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task UnityCoverage_UncoveredOnly_OnlyZeroPointFiles_OmitsAggregateHeaderAndReportsZeroPointOmission(int count)
+    {
+        var files = new List<CoverageFileResult>();
+        for (int i = 0; i < count; i++)
+        {
+            files.Add(new CoverageFileResult { Path = $"Assets/Scripts/IEmpty{i}.cs", TotalPoints = 0, CoveredPoints = 0 });
+        }
+
+        var result = await InvokeUnityCoverageAsync(new CoverageResult { Success = true, Files = files }, uncoveredOnly: true);
+        Assert.False(result.IsError);
+        string text = GetResultText(result);
+
+        Assert.DoesNotContain("Total Coverage:", text);
+        string expectedNoun = count == 1 ? "file" : "files";
+        Assert.Equal($"No uncovered files to show ({count} {expectedNoun} with 0 executable points omitted).", text);
+    }
+
+    [Fact]
+    public async Task UnityCoverage_UncoveredOnly_EmptyOrFailureResults_BehaveIdentically()
+    {
+        var emptyResult = await InvokeUnityCoverageAsync(new CoverageResult { Success = true, Files = [] }, uncoveredOnly: true);
+        Assert.False(emptyResult.IsError);
+        Assert.Equal("No compiled C# scripts found in the specified path(s).", GetResultText(emptyResult));
+
+        var errorResult = await InvokeUnityCoverageAsync(
+            new CoverageResult { Success = false, Message = "No coverage data recorded." },
+            uncoveredOnly: true);
+        Assert.True(errorResult.IsError);
+        Assert.Equal("No coverage data recorded.", GetResultText(errorResult));
+    }
+
+    private static async Task<CallToolResult> InvokeUnityCoverageAsync(CoverageResult coverageResult, bool uncoveredOnly = false)
+    {
+        var (tempDir, _, client, tools) = CreateTestContext();
+        try
+        {
+            client.CoverageResultToReturn = coverageResult;
+            return await tools.UnityCoverageAsync(["Assets/Scripts/"], uncoveredOnly: uncoveredOnly);
         }
         finally
         {

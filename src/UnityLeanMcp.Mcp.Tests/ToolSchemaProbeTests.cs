@@ -44,7 +44,7 @@ public sealed class ToolSchemaTests
     }
 
     [Fact]
-    public void UnityCoverage_ExposesRequiredPathsArray()
+    public void UnityCoverage_ExposesRequiredPathsArrayAndOptionalUncoveredOnly()
     {
         var tools = new UnityTools(null!, new UnityPathResolver("/tmp"));
         MethodInfo method = typeof(UnityTools).GetMethod(nameof(UnityTools.UnityCoverageAsync))!;
@@ -57,8 +57,13 @@ public sealed class ToolSchemaTests
         Assert.Contains("array", GetSchemaTypes(paths));
         Assert.Contains("string", GetSchemaTypes(paths.GetProperty("items")));
 
+        Assert.True(properties.TryGetProperty("uncoveredOnly", out JsonElement uncoveredOnly));
+        Assert.Contains("boolean", GetSchemaTypes(uncoveredOnly));
+        Assert.False(properties.TryGetProperty("sortBy", out _));
+
         var required = schema.RootElement.GetProperty("required").EnumerateArray().Select(value => value.GetString()).ToArray();
         Assert.Contains("paths", required);
+        Assert.DoesNotContain("uncoveredOnly", required);
     }
 
     private static IEnumerable<string> GetSchemaTypes(JsonElement schema)
