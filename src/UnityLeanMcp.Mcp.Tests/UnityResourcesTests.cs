@@ -94,7 +94,8 @@ public class UnityResourcesTests
 
         nameof(Inspect.CaptureCamera) or
         nameof(Inspect.CaptureGameView) or
-        nameof(Inspect.CaptureSceneView) => "Visual Capture",
+        nameof(Inspect.CaptureSceneView) or
+        nameof(Inspect.CaptureTarget) => "Visual Capture",
 
         nameof(Inspect.Selection) or
         nameof(Inspect.MainCamera) or

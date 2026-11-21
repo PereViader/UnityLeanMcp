@@ -45,6 +45,7 @@ internal static class InspectHelpCatalog
         "• string CaptureCamera(string outputPath = \"Temp/unity_capture.png\", int width = 1024, int height = 768, Camera camera = null)\n" +
         "• Task<string> CaptureGameView(string outputPath = \"Temp/unity_gameview.png\", int superSize = 1, CancellationToken cancellationToken = default)\n" +
         "• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)\n" +
+        "• string CaptureTarget(GameObject target, string outputPath = \"Temp/unity_target.png\", int width = 1024, int height = 768, Vector3? viewDirection = null)\n" +
         "\n" +
         "Editor & Tests:\n" +
         "• string MainCamera()\n" +
@@ -55,6 +56,7 @@ internal static class InspectHelpCatalog
         "Usage in unity_eval:\n" +
         "• `using UnityLeanMcp;` is auto-imported; add `using UnityEngine;` or `using UnityEditor;` when referencing Unity types directly.\n" +
         "• Return values with `return Inspect.<Method>(...);` (e.g., `return Inspect.Hierarchy(maxDepth: 3);`).\n" +
+        "• Visual capture guide: `await Inspect.CaptureGameView()` = player view (cameras + ScreenSpaceOverlay Canvas + UIDocument); `Inspect.CaptureCamera()` = single Camera; `Inspect.CaptureSceneView()` = Editor SceneView; `Inspect.CaptureTarget(go)` = auto-framed GameObject/prefab from its front (or pass `viewDirection`, e.g. `Vector3.up`, for custom world angles).\n" +
         "• Defaults: DefaultMaxDepth = 32, DefaultMaxItems = 100, DefaultMaxOutputCharacters = 65536 (64 KiB).";
 
     internal const string FullHelpText = SignatureReference + "\n\n" + UsageFooter;

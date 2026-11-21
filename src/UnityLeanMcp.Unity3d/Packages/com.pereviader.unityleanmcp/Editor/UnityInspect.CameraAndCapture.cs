@@ -607,6 +607,176 @@ namespace UnityLeanMcp
             return CaptureCameraToPng(cam, outputPath, width, height, "SceneView");
         }
 
+        /// <summary>
+        /// Captures an auto-framed off-screen view of a GameObject and its active children without modifying scene cameras or dirty state.
+        /// By default, frames from a 3/4 angle in front of the target (+forward, +right, +up); pass viewDirection to specify a world-space direction from target to camera.
+        /// </summary>
+        public static string CaptureTarget(
+            GameObject target,
+            string outputPath = "Temp/unity_target.png",
+            int width = 1024,
+            int height = 768,
+            Vector3? viewDirection = null)
+        {
+            if (ReferenceEquals(target, null))
+            {
+                return "(GameObject is null)";
+            }
+
+            if (target == null)
+            {
+                return "(GameObject is destroyed)";
+            }
+
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                outputPath = "Temp/unity_target.png";
+            }
+
+            string targetName = "GameObject";
+            try
+            {
+                if (!string.IsNullOrEmpty(target.name))
+                {
+                    targetName = target.name;
+                }
+            }
+            catch { }
+
+            Bounds bounds = ComputeTargetBounds(target);
+
+            Vector3 localDefaultDirection = new Vector3(0.6f, 0.45f, 1f);
+            Vector3 direction;
+            if (viewDirection.HasValue && viewDirection.Value.sqrMagnitude > 1e-6f)
+            {
+                direction = viewDirection.Value.normalized;
+            }
+            else
+            {
+                direction = target.transform != null
+                    ? target.transform.TransformDirection(localDefaultDirection)
+                    : localDefaultDirection;
+                if (direction.sqrMagnitude <= 1e-6f)
+                {
+                    direction = localDefaultDirection;
+                }
+                direction = direction.normalized;
+            }
+
+            int clampedWidth = Mathf.Clamp(width, 16, 4096);
+            int clampedHeight = Mathf.Clamp(height, 16, 4096);
+            const float fieldOfView = 60f;
+
+            float radius = Mathf.Max(bounds.extents.magnitude, 0.1f);
+            float aspect = (float)clampedWidth / clampedHeight;
+            float vHalfFov = fieldOfView * Mathf.Deg2Rad * 0.5f;
+            float hHalfFov = Mathf.Atan(Mathf.Tan(vHalfFov) * aspect);
+            float minHalfFov = Mathf.Min(vHalfFov, hHalfFov);
+            float distance = (radius / Mathf.Sin(minHalfFov)) * 1.15f;
+
+            GameObject tempGo = null;
+            try
+            {
+                tempGo = EditorUtility.CreateGameObjectWithHideFlags(
+                    "__UnityLeanMcp_CaptureTargetCam",
+                    HideFlags.HideAndDontSave,
+                    typeof(Camera));
+
+                var tempCam = tempGo != null ? tempGo.GetComponent<Camera>() : null;
+                if (tempCam == null)
+                {
+                    return $"(Failed to capture target \"{targetName}\": could not create temporary Camera)";
+                }
+
+                if (target.scene.IsValid())
+                {
+                    tempCam.scene = target.scene;
+                }
+
+                tempCam.fieldOfView = fieldOfView;
+                tempCam.nearClipPlane = Mathf.Max(0.01f, (distance - radius) * 0.1f);
+                tempCam.farClipPlane = Mathf.Max(1000f, distance + radius * 4f);
+                tempCam.clearFlags = CameraClearFlags.SolidColor;
+                tempCam.backgroundColor = new Color(0.19f, 0.30f, 0.47f, 1f);
+
+                Vector3 up = Mathf.Abs(Vector3.Dot(direction, Vector3.up)) > 0.99f ? Vector3.forward : Vector3.up;
+                tempCam.transform.position = bounds.center + direction * distance;
+                tempCam.transform.LookAt(bounds.center, up);
+
+                return CaptureCameraToPng(tempCam, outputPath, width, height, $"target \"{targetName}\"");
+            }
+            catch (Exception ex)
+            {
+                return $"(Failed to capture target \"{targetName}\": {ex.Message})";
+            }
+            finally
+            {
+                if (tempGo != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(tempGo);
+                }
+            }
+        }
+
+        private static Bounds ComputeTargetBounds(GameObject target)
+        {
+            bool hasBounds = false;
+            Bounds bounds = default;
+
+            var renderers = target.GetComponentsInChildren<Renderer>(false);
+            if (renderers != null)
+            {
+                for (int i = 0; i < renderers.Length; i++)
+                {
+                    var r = renderers[i];
+                    if (r != null && r.enabled)
+                    {
+                        if (!hasBounds)
+                        {
+                            bounds = r.bounds;
+                            hasBounds = true;
+                        }
+                        else
+                        {
+                            bounds.Encapsulate(r.bounds);
+                        }
+                    }
+                }
+            }
+
+            if (!hasBounds)
+            {
+                var colliders = target.GetComponentsInChildren<Collider>(false);
+                if (colliders != null)
+                {
+                    for (int i = 0; i < colliders.Length; i++)
+                    {
+                        var c = colliders[i];
+                        if (c != null && c.enabled)
+                        {
+                            if (!hasBounds)
+                            {
+                                bounds = c.bounds;
+                                hasBounds = true;
+                            }
+                            else
+                            {
+                                bounds.Encapsulate(c.bounds);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!hasBounds)
+            {
+                Vector3 center = target.transform != null ? target.transform.position : Vector3.zero;
+                bounds = new Bounds(center, Vector3.one);
+            }
+
+            return bounds;
+        }
+
         private static string CaptureCameraToPng(
             Camera camera,
             string outputPath,

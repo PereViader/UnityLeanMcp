@@ -835,6 +835,131 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public void CaptureTarget_NullOrDestroyed_ReturnsCleanNotification()
+    {
+        Assert.Equal("(GameObject is null)", Inspect.CaptureTarget(null!));
+
+        var dead = new GameObject("DeadTarget");
+        UnityEngine.Object.DestroyImmediate(dead);
+        Assert.Equal("(GameObject is destroyed)", Inspect.CaptureTarget(dead));
+    }
+
+    [Fact]
+    public void CaptureTarget_FramesCombinedChildRendererBounds_FrontRelativeDefaultAndDestroysTempCam()
+    {
+        var mainCamGo = new GameObject("MainCam");
+        var mainCam = mainCamGo.AddComponent<Camera>();
+        mainCamGo.transform.position = new Vector3(100, 100, 100);
+        Camera.main = mainCam;
+
+        var target = new GameObject("HeroVehicle")
+        {
+            scene = new Scene { name = "PrefabStage", isLoaded = true }
+        };
+        // Rotated 90 degrees around Y so local +Z (front) points along world +X
+        target.transform.eulerAngles = new Vector3(0f, 90f, 0f);
+        var rootRenderer = target.AddComponent<Renderer>();
+        rootRenderer.bounds = new Bounds(new Vector3(0f, 0f, 0f), new Vector3(2f, 2f, 2f));
+
+        var child = new GameObject("FrontBumper");
+        target.transform.AddChild(child.transform);
+        var childRenderer = child.AddComponent<Renderer>();
+        childRenderer.bounds = new Bounds(new Vector3(4f, 0f, 0f), new Vector3(2f, 2f, 2f));
+
+        // Combined bounds span X: [-1, 5] -> center (2, 0, 0), size (6, 2, 2)
+        Camera? renderedCam = null;
+        Vector3 capturedPos = Vector3.zero;
+        Vector3? capturedLookAt = null;
+        HideFlags capturedHideFlags = HideFlags.None;
+        Scene capturedScene = default;
+        Camera.OnBeforeRenderAction = cam =>
+        {
+            renderedCam = cam;
+            capturedPos = cam.transform.position;
+            capturedLookAt = cam.transform.LastLookAtPosition;
+            capturedHideFlags = cam.gameObject.hideFlags;
+            capturedScene = cam.scene;
+        };
+
+        string outputPath = "Temp/test_capture_target_front.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(target, outputPath, width: 800, height: 600);
+
+        Assert.Contains("Captured target \"HeroVehicle\" (800x600,", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.NotNull(renderedCam);
+        Assert.Equal(HideFlags.HideAndDontSave, capturedHideFlags);
+        Assert.Equal("PrefabStage", capturedScene.name);
+        Assert.True(renderedCam!.gameObject._isDestroyed);
+        Assert.True(capturedLookAt.HasValue);
+        Assert.InRange(capturedLookAt!.Value.x, 1.99f, 2.01f);
+        Assert.InRange(capturedLookAt!.Value.y, -0.01f, 0.01f);
+        Assert.InRange(capturedLookAt!.Value.z, -0.01f, 0.01f);
+        // Rotated 90 deg around Y: local +Z maps to world +X, local +X maps to world -Z
+        Assert.True(capturedPos.x > capturedLookAt.Value.x, $"Expected camera in front (+X) of target, got pos {capturedPos}");
+        Assert.True(capturedPos.y > capturedLookAt.Value.y, $"Expected camera elevated (+Y) above target, got pos {capturedPos}");
+        Assert.True(capturedPos.z < capturedLookAt.Value.z, $"Expected camera to target's right (-Z in world), got pos {capturedPos}");
+        // Verify Camera.main was untouched
+        Assert.Equal(100f, mainCamGo.transform.position.x);
+    }
+
+    [Fact]
+    public void CaptureTarget_WithColliderFallbackAndUpViewDirection_UsesSafeUpVector()
+    {
+        var target = new GameObject("TriggerVolume");
+        target.transform.position = new Vector3(10f, 5f, -3f);
+        var collider = target.AddComponent<Collider>();
+        collider.bounds = new Bounds(new Vector3(10f, 5f, -3f), new Vector3(4f, 2f, 4f));
+
+        Vector3? capturedUp = null;
+        Vector3 capturedPos = Vector3.zero;
+        Camera.OnBeforeRenderAction = cam =>
+        {
+            capturedPos = cam.transform.position;
+            capturedUp = cam.transform.LastLookAtUp;
+        };
+
+        string outputPath = "Temp/test_capture_target_top.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(target, outputPath, width: 512, height: 512, viewDirection: Vector3.up);
+
+        Assert.Contains("Captured target \"TriggerVolume\" (512x512,", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.True(capturedPos.y > 5f);
+        Assert.InRange(capturedPos.x, 9.99f, 10.01f);
+        Assert.InRange(capturedPos.z, -3.01f, -2.99f);
+        Assert.True(capturedUp.HasValue);
+        Assert.InRange(capturedUp!.Value.z, 0.99f, 1.01f);
+    }
+
+    [Fact]
+    public void CaptureTarget_WhenNoRendererOrCollider_FallsBackToTransformPosition()
+    {
+        var target = new GameObject("EmptyMarker");
+        target.transform.position = new Vector3(3f, 4f, 5f);
+
+        Vector3? capturedLookAt = null;
+        Camera.OnBeforeRenderAction = cam =>
+        {
+            capturedLookAt = cam.transform.LastLookAtPosition;
+        };
+
+        string outputPath = "Temp/test_capture_target_empty.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(target, outputPath);
+
+        Assert.Contains("Captured target \"EmptyMarker\"", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.True(capturedLookAt.HasValue);
+        Assert.InRange(capturedLookAt!.Value.x, 2.99f, 3.01f);
+        Assert.InRange(capturedLookAt!.Value.y, 3.99f, 4.01f);
+        Assert.InRange(capturedLookAt!.Value.z, 4.99f, 5.01f);
+    }
+
+    [Fact]
     public void Find_MatchesSubstringsAndWildcards_RespectsInactiveFlag()
     {
         var rootGo = new GameObject("PlayerCharacter");

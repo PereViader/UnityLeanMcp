@@ -125,6 +125,26 @@ namespace UnityEngine
     {
         public float x, y, z;
         public Vector3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
+        public static Vector3 zero => new Vector3(0f, 0f, 0f);
+        public static Vector3 one => new Vector3(1f, 1f, 1f);
+        public static Vector3 up => new Vector3(0f, 1f, 0f);
+        public static Vector3 forward => new Vector3(0f, 0f, 1f);
+        public float sqrMagnitude => x * x + y * y + z * z;
+        public float magnitude => (float)Math.Sqrt(sqrMagnitude);
+        public Vector3 normalized
+        {
+            get
+            {
+                float m = magnitude;
+                return m > 1e-6f ? new Vector3(x / m, y / m, z / m) : zero;
+            }
+        }
+        public static float Dot(Vector3 a, Vector3 b) => a.x * b.x + a.y * b.y + a.z * b.z;
+        public static Vector3 operator +(Vector3 a, Vector3 b) => new Vector3(a.x + b.x, a.y + b.y, a.z + b.z);
+        public static Vector3 operator -(Vector3 a, Vector3 b) => new Vector3(a.x - b.x, a.y - b.y, a.z - b.z);
+        public static Vector3 operator -(Vector3 a) => new Vector3(-a.x, -a.y, -a.z);
+        public static Vector3 operator *(Vector3 a, float d) => new Vector3(a.x * d, a.y * d, a.z * d);
+        public static Vector3 operator *(float d, Vector3 a) => new Vector3(a.x * d, a.y * d, a.z * d);
         public override string ToString() => $"({x.ToString("F2", CultureInfo.InvariantCulture)}, {y.ToString("F2", CultureInfo.InvariantCulture)}, {z.ToString("F2", CultureInfo.InvariantCulture)})";
         public string ToString(string format, IFormatProvider provider) => $"({x.ToString(format, provider)}, {y.ToString(format, provider)}, {z.ToString(format, provider)})";
     }
@@ -196,6 +216,27 @@ namespace UnityEngine
             this.center = center;
             this.extents = new Vector3(size.x * 0.5f, size.y * 0.5f, size.z * 0.5f);
         }
+        public Vector3 size
+        {
+            get => new Vector3(extents.x * 2f, extents.y * 2f, extents.z * 2f);
+            set => extents = new Vector3(value.x * 0.5f, value.y * 0.5f, value.z * 0.5f);
+        }
+        public Vector3 min => center - extents;
+        public Vector3 max => center + extents;
+        public void Encapsulate(Vector3 point)
+        {
+            var curMin = min;
+            var curMax = max;
+            var newMin = new Vector3(Math.Min(curMin.x, point.x), Math.Min(curMin.y, point.y), Math.Min(curMin.z, point.z));
+            var newMax = new Vector3(Math.Max(curMax.x, point.x), Math.Max(curMax.y, point.y), Math.Max(curMax.z, point.z));
+            center = (newMin + newMax) * 0.5f;
+            extents = (newMax - newMin) * 0.5f;
+        }
+        public void Encapsulate(Bounds bounds)
+        {
+            Encapsulate(bounds.min);
+            Encapsulate(bounds.max);
+        }
     }
 
     public struct BoundsInt
@@ -250,6 +291,45 @@ namespace UnityEngine
         public Vector3 eulerAngles { get; set; }
         public Vector3 localEulerAngles { get; set; }
         public Vector3 localScale { get; set; } = new Vector3(1, 1, 1);
+        public Vector3 forward { get; set; } = Vector3.forward;
+        public Vector3? LastLookAtPosition { get; private set; }
+        public Vector3? LastLookAtUp { get; private set; }
+
+        public Vector3 TransformDirection(Vector3 direction)
+        {
+            float rx = eulerAngles.x * Mathf.Deg2Rad;
+            float ry = eulerAngles.y * Mathf.Deg2Rad;
+            float rz = eulerAngles.z * Mathf.Deg2Rad;
+
+            float cz = (float)Math.Cos(rz), sz = (float)Math.Sin(rz);
+            float x1 = direction.x * cz - direction.y * sz;
+            float y1 = direction.x * sz + direction.y * cz;
+            float z1 = direction.z;
+
+            float cx = (float)Math.Cos(rx), sx = (float)Math.Sin(rx);
+            float x2 = x1;
+            float y2 = y1 * cx - z1 * sx;
+            float z2 = y1 * sx + z1 * cx;
+
+            float cy = (float)Math.Cos(ry), sy = (float)Math.Sin(ry);
+            return new Vector3(
+                x2 * cy + z2 * sy,
+                y2,
+                -x2 * sy + z2 * cy);
+        }
+
+        public void LookAt(Vector3 worldPosition) => LookAt(worldPosition, Vector3.up);
+
+        public void LookAt(Vector3 worldPosition, Vector3 worldUp)
+        {
+            LastLookAtPosition = worldPosition;
+            LastLookAtUp = worldUp;
+            var diff = worldPosition - position;
+            if (diff.sqrMagnitude > 1e-6f)
+            {
+                forward = diff.normalized;
+            }
+        }
 
         public Transform GetChild(int index) => _children[index];
         public void AddChild(Transform child)
@@ -285,8 +365,8 @@ namespace UnityEngine
     }
 
     public class MonoBehaviour : Behaviour { }
-    public class Collider : Component { public bool enabled { get; set; } = true; }
-    public class Renderer : Component { public bool enabled { get; set; } = true; }
+    public class Collider : Component { public bool enabled { get; set; } = true; public Bounds bounds { get; set; } }
+    public class Renderer : Component { public bool enabled { get; set; } = true; public Bounds bounds { get; set; } }
     public class AudioSource : Behaviour { }
     public class Rigidbody : Component { }
     public class Material : Object { }
@@ -311,8 +391,15 @@ namespace UnityEngine
 
     public static class Mathf
     {
+        public const float Deg2Rad = (float)(Math.PI / 180.0);
         public static int Clamp(int value, int min, int max) => Math.Max(min, Math.Min(max, value));
         public static float Clamp(float value, float min, float max) => Math.Max(min, Math.Min(max, value));
+        public static float Max(float a, float b) => Math.Max(a, b);
+        public static float Min(float a, float b) => Math.Min(a, b);
+        public static float Tan(float f) => (float)Math.Tan(f);
+        public static float Atan(float f) => (float)Math.Atan(f);
+        public static float Sin(float f) => (float)Math.Sin(f);
+        public static float Abs(float f) => Math.Abs(f);
     }
 
     public class Texture : Object { }
@@ -345,13 +432,24 @@ namespace UnityEngine
         public static void ReleaseTemporary(RenderTexture temp) { }
     }
 
+    public enum CameraClearFlags
+    {
+        Skybox = 1,
+        Color = 2,
+        SolidColor = 2,
+        Depth = 3,
+        Nothing = 4
+    }
+
     public class Camera : Behaviour
     {
         public static Camera? main;
+        public static Action<Camera>? OnBeforeRenderAction;
         public static readonly List<Camera> AllCamerasList = new();
         public static Camera[] allCameras => AllCamerasList.ToArray();
         public static int allCamerasCount => AllCamerasList.Count;
 
+        public UnityEngine.SceneManagement.Scene scene { get; set; }
         public bool orthographic { get; set; }
         public float orthographicSize { get; set; } = 5f;
         public float fieldOfView { get; set; } = 60f;
@@ -360,13 +458,13 @@ namespace UnityEngine
         public Rect rect { get; set; } = new Rect(0, 0, 1, 1);
         public int pixelWidth { get; set; } = 1920;
         public int pixelHeight { get; set; } = 1080;
-        public string clearFlags { get; set; } = "Skybox";
+        public CameraClearFlags clearFlags { get; set; } = CameraClearFlags.Skybox;
         public Color backgroundColor { get; set; } = new Color(0.19f, 0.30f, 0.47f);
         public int cullingMask { get; set; } = -1;
         public float depth { get; set; } = 0f;
         public string renderingPath { get; set; } = "UsePlayerSettings";
         public RenderTexture? targetTexture { get; set; }
-        public void Render() { }
+        public void Render() => OnBeforeRenderAction?.Invoke(this);
     }
 
     public class GameObject : Object
@@ -390,6 +488,7 @@ namespace UnityEngine
         }
         public string tag { get; set; } = "Untagged";
         public int layer { get; set; } = 0;
+        public UnityEngine.SceneManagement.Scene scene { get; set; }
         public Transform transform { get; internal set; }
 
         public GameObject(string name = "")
@@ -476,6 +575,32 @@ namespace UnityEngine
                 }
             }
             return result.ToArray();
+        }
+
+        public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : class
+        {
+            var result = new List<T>();
+            CollectComponentsInChildren(transform, includeInactive, result);
+            return result.ToArray();
+        }
+
+        private static void CollectComponentsInChildren<T>(Transform tr, bool includeInactive, List<T> result) where T : class
+        {
+            if (tr?.gameObject == null) return;
+            if (!includeInactive && !tr.gameObject.activeSelf) return;
+
+            foreach (var c in tr.gameObject._components)
+            {
+                if (c is T t)
+                {
+                    result.Add(t);
+                }
+            }
+
+            foreach (Transform child in tr)
+            {
+                CollectComponentsInChildren(child, includeInactive, result);
+            }
         }
     }
 
@@ -622,6 +747,12 @@ namespace UnityEditor
     public static class EditorUtility
     {
         public static bool scriptCompilationFailed;
+        public static UnityEngine.GameObject CreateGameObjectWithHideFlags(string name, UnityEngine.HideFlags flags, params Type[] components)
+        {
+            var go = new UnityEngine.GameObject(name, components);
+            go.hideFlags = flags;
+            return go;
+        }
     }
     public static class EditorSettings
     {

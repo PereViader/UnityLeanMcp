@@ -623,5 +623,45 @@ namespace UnityLeanMcpTests
                 Assert.Greater(new System.IO.FileInfo(outputPath).Length, 20);
             }
         }
+
+        [Test]
+        public void CaptureTarget_FramesHierarchyBounds_WithoutMutatingSceneOrMainCamera()
+        {
+            var root = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            root.name = "TargetVehicle";
+            root.transform.position = new Vector3(12f, 2f, -4f);
+            root.transform.eulerAngles = new Vector3(0f, 45f, 0f);
+            m_CreatedObjects.Add(root);
+
+            var child = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            child.name = "FrontNose";
+            child.transform.SetParent(root.transform, false);
+            child.transform.localPosition = new Vector3(0f, 0.5f, 2f);
+
+            var mainCam = Camera.main;
+            Vector3? initialCamPos = mainCam != null ? mainCam.transform.position : (Vector3?)null;
+            bool dirtyBeforeCapture = EditorSceneManager.GetActiveScene().isDirty;
+
+            string frontPath = "Temp/test_inspect_target_front.png";
+            string topPath = "Temp/test_inspect_target_top.png";
+            m_CreatedFiles.Add(frontPath);
+            m_CreatedFiles.Add(topPath);
+
+            string frontResult = Inspect.CaptureTarget(root, frontPath, width: 256, height: 192);
+            string topResult = Inspect.CaptureTarget(root, topPath, width: 256, height: 192, viewDirection: Vector3.up);
+
+            StringAssert.Contains("Captured target \"TargetVehicle\" (256x192,", frontResult);
+            StringAssert.Contains("Captured target \"TargetVehicle\" (256x192,", topResult);
+            Assert.IsTrue(System.IO.File.Exists(frontPath));
+            Assert.IsTrue(System.IO.File.Exists(topPath));
+            Assert.Greater(new System.IO.FileInfo(frontPath).Length, 0);
+            Assert.Greater(new System.IO.FileInfo(topPath).Length, 0);
+            Assert.AreEqual(dirtyBeforeCapture, EditorSceneManager.GetActiveScene().isDirty);
+            Assert.IsNull(GameObject.Find("__UnityLeanMcp_CaptureTargetCam"));
+            if (mainCam != null && initialCamPos.HasValue)
+            {
+                Assert.AreEqual(initialCamPos.Value, mainCam.transform.position);
+            }
+        }
     }
 }

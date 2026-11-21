@@ -30,6 +30,7 @@ internal sealed class UnityInspectTestScope : IDisposable
         Selection.objects = Array.Empty<UnityEngine.Object>();
         Selection.gameObjects = Array.Empty<GameObject>();
         Camera.main = null;
+        Camera.OnBeforeRenderAction = null;
         Camera.AllCamerasList.Clear();
         SceneView.lastActiveSceneView = null;
         SceneView.SceneViewsList.Clear();
