@@ -6,7 +6,7 @@ internal static class InspectHelpCatalog
     internal const string ResourceName = "inspect_help";
     internal const string ResourceTitle = "Unity Inspect Helpers Cheatsheet";
     internal const string ResourceMimeType = "text/plain";
-    internal const string ResourceDescription = "Read-only cheatsheet of all built-in UnityLeanMcp.Inspect static helper signatures for unity_eval (scene hierarchy, GameObjects/components, assets/prefabs, UI Toolkit, visual capture, test discovery). Read this before writing reflection or inspecting Unity state via unity_eval.";
+    internal const string ResourceDescription = "Read-only cheatsheet of all built-in UnityLeanMcp.Inspect static helper signatures for unity_eval (scene hierarchy, GameObjects/components, assets/prefabs, UI Toolkit, visual capture, editor state). Read this before writing reflection or inspecting Unity state via unity_eval.";
 
     internal const string SignatureReference =
         "UnityLeanMcp Inspection Helpers (UnityLeanMcp.Inspect):\n" +
@@ -48,11 +48,9 @@ internal static class InspectHelpCatalog
         "• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)\n" +
         "• string CaptureTarget(GameObject target, string outputPath = \"Temp/unity_target.png\", int width = 1024, int height = 768, Vector3? viewDirection = null)\n" +
         "\n" +
-        "Editor & Tests:\n" +
+        "Editor:\n" +
         "• string MainCamera()\n" +
-        "• string Selection(int maxItems = 50)\n" +
-        "• string Tests(string filter, int maxItems)\n" +
-        "• string Tests(string filter = null, string mode = null, string category = null, int maxItems = 100)";
+        "• string Selection(int maxItems = 50)";
 
     internal const string UsageFooter =
         "Usage in unity_eval:\n" +

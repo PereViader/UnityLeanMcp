@@ -17,7 +17,7 @@ public class UnityResourcesTests
         "Objects & Components",
         "Assets & Prefabs",
         "Visual Capture",
-        "Editor & Tests"
+        "Editor"
     ];
 
     [Fact]
@@ -99,8 +99,7 @@ public class UnityResourcesTests
         nameof(Inspect.CaptureTarget) => "Visual Capture",
 
         nameof(Inspect.Selection) or
-        nameof(Inspect.MainCamera) or
-        nameof(Inspect.Tests) => "Editor & Tests",
+        nameof(Inspect.MainCamera) => "Editor",
 
         _ => throw new InvalidOperationException($"Uncategorized public static Inspect method: {methodName}")
     };

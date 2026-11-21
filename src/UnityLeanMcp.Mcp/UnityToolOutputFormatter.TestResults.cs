@@ -103,7 +103,7 @@ internal sealed partial class UnityToolOutputFormatter
         }
         else if (hasAnyFilter && totalTests == 0)
         {
-            AppendEmptyFilterHints(headerOutput, result, normalizedMode, testNames, groupNames, categoryNames, assemblyNames);
+            AppendEmptyFilterHints(headerOutput, normalizedMode, testNames, groupNames, categoryNames, assemblyNames);
         }
         else if (result.Success)
         {
@@ -169,7 +169,6 @@ internal sealed partial class UnityToolOutputFormatter
 
     private static void AppendEmptyFilterHints(
         BoundedTextBuilder headerOutput,
-        UnityTestRunResult result,
         string normalizedMode,
         string[]? testNames,
         string[]? groupNames,
@@ -204,50 +203,10 @@ internal sealed partial class UnityToolOutputFormatter
             headerOutput.AppendLine($"No tests found matching the specified test filter(s) (mode: {normalizedMode}).");
         }
 
-        bool hasCustomHints = false;
-
-        if (result.OtherModeMatches is { Count: > 0 })
-        {
-            hasCustomHints = true;
-            string otherMode = normalizedMode == "editmode" ? "playmode" : "editmode";
-            string countStr = result.OtherModeMatches.Count > 1
-                ? $"{result.OtherModeMatches.Count} matching tests exist"
-                : "1 matching test exists";
-            headerOutput.AppendLine($"Matching tests were found in mode '{otherMode}' ({countStr}, e.g. '{result.OtherModeMatches[0]}'). Did you mean to run with mode '{otherMode}'?");
-        }
-
-        if (result.NearMatches is { Count: > 0 })
-        {
-            hasCustomHints = true;
-            headerOutput.AppendLine("Did you mean one of these tests?");
-            foreach (var match in result.NearMatches.Take(5))
-            {
-                headerOutput.AppendLine($"  • {match}");
-            }
-        }
-
-        if (!hasCustomHints)
-        {
-            string modeHint = normalizedMode == "editmode"
-                ? "Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'."
-                : "Hint: If the target tests are unit tests or editor utilities without runtime/player lifecycle, try running with mode 'editmode'.";
-            headerOutput.AppendLine(modeHint);
-        }
-
-        string inspectFilter = testNames is { Length: > 0 } ? testNames[0]
-            : groupNames is { Length: > 0 } ? groupNames[0].Trim('^', '$', '.', '*')
-            : categoryNames is { Length: > 0 } ? categoryNames[0]
-            : assemblyNames is { Length: > 0 } ? assemblyNames[0]
-            : "";
-
-        if (!string.IsNullOrEmpty(inspectFilter))
-        {
-            headerOutput.AppendLine($"Hint: Use unity_eval with 'return Inspect.Tests(\"{inspectFilter}\");' to discover available tests in loaded assemblies.");
-        }
-        else
-        {
-            headerOutput.AppendLine("Hint: Use unity_eval with 'return Inspect.Tests();' to discover available tests in loaded assemblies.");
-        }
+        string modeHint = normalizedMode == "editmode"
+            ? "Hint: If the target tests require scene loading, MonoBehaviour lifecycle, or runtime execution (such as PlayMode integration tests), try running with mode 'playmode'."
+            : "Hint: If the target tests are unit tests or editor utilities without runtime/player lifecycle, try running with mode 'editmode'.";
+        headerOutput.AppendLine(modeHint);
     }
 
     private void FormatTestFailures(

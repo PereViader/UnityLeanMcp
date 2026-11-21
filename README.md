@@ -49,9 +49,8 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | | `Inspect.FindPrefabs([filter], [maxItems])` | Finds prefabs in the project matching an optional filter. |
 | | `Inspect.Dependencies(assetPath, [recursive], [maxItems])` | Enumerates asset dependencies with normalized paths, type annotations, and truncation limits. |
 | | `Inspect.Referencers(targetAssetPath, [searchFolder], [maxItems])` | Queries project assets in a folder that reference or depend on the target asset. |
-| **Editor & Tests** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
+| **Editor** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
 | | `Inspect.MainCamera()` | Properties of `Camera.main` (transform, clear flags, culling mask, FOV, clipping planes). |
-| | `Inspect.Tests([filter], [mode], [category], [maxItems])` | Enumerates available EditMode and PlayMode tests with ground-truth modes, categories, assembly metadata, and parameterized names (`CompilationPipeline` + NUnit test tree with reflection fallback). |
 
 Call these directly inside `unity_eval`:
 

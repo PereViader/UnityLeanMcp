@@ -1207,20 +1207,4 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         Assert.Contains("component index [2]", result);
         Assert.Contains("BrokenScene", result);
     }
-
-    [Fact]
-    public void Tests_DiscoversTestsInLoadedAppDomain_AndFilters()
-    {
-        string allTests = Inspect.Tests();
-        Assert.Contains("Available Tests", allTests);
-        Assert.Contains("• UnityLeanMcp.", allTests);
-
-        string filtered = Inspect.Tests("UnityInspectSelectionAndCaptureTests", maxItems: 200);
-        Assert.Contains("Available Tests", filtered);
-        Assert.Contains("UnityInspectSelectionAndCaptureTests", filtered);
-        Assert.Contains("Tests_DiscoversTestsInLoadedAppDomain", filtered);
-
-        string none = Inspect.Tests("NonExistentPattern_ZXY_987");
-        Assert.Contains("(No tests found matching filter 'NonExistentPattern_ZXY_987')", none);
-    }
 }
