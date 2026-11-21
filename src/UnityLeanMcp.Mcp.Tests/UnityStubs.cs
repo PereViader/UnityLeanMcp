@@ -975,7 +975,12 @@ namespace UnityEditor
         public UnityEngine.Rect rectValue { get; set; }
         public UnityEngine.Object? objectReferenceValue { get; set; }
         public int objectReferenceInstanceIDValue { get; set; }
-        public bool isArray { get; set; }
+        private bool _isArray;
+        public bool isArray
+        {
+            get => _isArray || propertyType == SerializedPropertyType.String;
+            set => _isArray = value;
+        }
         public int arraySize { get; set; }
 
         private readonly List<SerializedProperty> _visibleProperties = new();

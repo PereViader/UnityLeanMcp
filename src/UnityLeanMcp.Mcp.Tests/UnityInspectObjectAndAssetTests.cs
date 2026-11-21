@@ -300,6 +300,134 @@ public sealed class UnityInspectObjectAndAssetTests : IDisposable
     }
 
     [Fact]
+    public void Inspect_StringSerializedProperty_WithIsArrayTrue_FormatsActualStringValue()
+    {
+        var go = new GameObject("GoWithString");
+        var comp = go.AddComponent<Collider>();
+        var scriptableObj = ScriptableObject.CreateInstance<ScriptableObject>();
+        scriptableObj.name = "DialogueAsset";
+
+        var compTitleProp = new SerializedProperty
+        {
+            name = "m_Title",
+            displayName = "Title",
+            propertyType = SerializedPropertyType.String,
+            stringValue = "Hero Banner",
+            arraySize = 11
+        };
+        Assert.True(compTitleProp.isArray);
+
+        SerializedObject.CustomProperties[comp] = new List<SerializedProperty>
+        {
+            compTitleProp,
+            new SerializedProperty
+            {
+                name = "m_Empty",
+                displayName = "Empty",
+                propertyType = SerializedPropertyType.String,
+                stringValue = "",
+                arraySize = 0
+            }
+        };
+
+        SerializedObject.CustomProperties[scriptableObj] = new List<SerializedProperty>
+        {
+            new SerializedProperty
+            {
+                name = "m_Subtitle",
+                displayName = "Subtitle",
+                propertyType = SerializedPropertyType.String,
+                stringValue = "Press Start",
+                arraySize = 11
+            }
+        };
+
+        string compResult = Inspect.Component(comp);
+        Assert.Contains("Title (m_Title): \"Hero Banner\"", compResult);
+        Assert.Contains("Empty (m_Empty): \"\"", compResult);
+        Assert.DoesNotContain("[11 items]", compResult);
+
+        string goResult = Inspect.GameObject(go);
+        Assert.Contains("Title (m_Title): \"Hero Banner\"", goResult);
+
+        string assetResult = Inspect.Object(scriptableObj);
+        Assert.Contains("Subtitle (m_Subtitle): \"Press Start\"", assetResult);
+        Assert.DoesNotContain("[11 items]", assetResult);
+    }
+
+    [Fact]
+    public void Inspect_SerializedArray_FormatsSmallLargeEmptyAndNestedPreviews()
+    {
+        var go = new GameObject("GoWithArrays");
+        var comp = go.AddComponent<Collider>();
+
+        var smallTags = new SerializedProperty
+        {
+            name = "m_Tags",
+            displayName = "Tags",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        smallTags.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.String, stringValue = "Player" });
+        smallTags.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.String, stringValue = "Friendly" });
+        smallTags.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.String, stringValue = "Grounded" });
+
+        var largeScores = new SerializedProperty
+        {
+            name = "m_Scores",
+            displayName = "Scores",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        for (int i = 0; i < 12; i++)
+        {
+            largeScores.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.Integer, intValue = i * 10 });
+        }
+
+        var emptyArray = new SerializedProperty
+        {
+            name = "m_EmptyList",
+            displayName = "Empty List",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true,
+            arraySize = 0
+        };
+
+        var nestedInner = new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        nestedInner.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.Integer, intValue = 99 });
+
+        var nestedOuter = new SerializedProperty
+        {
+            name = "m_Matrix",
+            displayName = "Matrix",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        nestedOuter.AddArrayElement(nestedInner);
+
+        SerializedObject.CustomProperties[comp] = new List<SerializedProperty>
+        {
+            smallTags,
+            largeScores,
+            emptyArray,
+            nestedOuter
+        };
+
+        string result = Inspect.Component(comp);
+        Assert.Contains("Tags (m_Tags): [3 items: \"Player\", \"Friendly\", \"Grounded\"]", result);
+        Assert.Contains("Scores (m_Scores): [12 items: 0, 10, 20, 30, 40, 50, 60, 70, ... and 4 more]", result);
+        Assert.Contains("Empty List (m_EmptyList): [0 items]", result);
+        Assert.Contains("Matrix (m_Matrix): [1 items: [1 items]]", result);
+
+        string boundedResult = Inspect.Component(comp, maxItems: 3);
+        Assert.Contains("Scores (m_Scores): [12 items: 0, 10, 20, ... and 9 more]", boundedResult);
+    }
+
+    [Fact]
     public void Inspect_Object_DirectLeafTypes_FormatsDirectlyWithoutReflection()
     {
         var vec = new Vector3(1.5f, 2.5f, 3.5f);

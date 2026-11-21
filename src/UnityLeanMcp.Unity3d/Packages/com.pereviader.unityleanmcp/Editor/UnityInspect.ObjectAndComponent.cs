@@ -419,7 +419,7 @@ namespace UnityLeanMcp
                         TrackSerializedPropertyAliases(seenProperties, sp);
                         count++;
 
-                        string valStr = FormatSerializedPropertyWithAsset(sp);
+                        string valStr = FormatSerializedPropertyWithAsset(sp, maxItems);
                         sb.AppendLine($"{prefix}{sp.displayName} ({sp.name}): {valStr}");
                     }
                 }
@@ -544,7 +544,7 @@ namespace UnityLeanMcp
                         }
 
                         count++;
-                        string valStr = FormatSerializedPropertyWithAsset(sp);
+                        string valStr = FormatSerializedPropertyWithAsset(sp, maxItems);
                         sb.AppendLine($"  {sp.displayName} ({sp.name}): {valStr}");
                     }
                 }
@@ -649,7 +649,12 @@ namespace UnityLeanMcp
             }
         }
 
-        private static string FormatSerializedPropertyWithAsset(SerializedProperty prop)
+        private const int MaxSerializedArrayPreviewItems = 8;
+
+        private static string FormatSerializedPropertyWithAsset(
+            SerializedProperty prop,
+            int maxItems = MaxSerializedArrayPreviewItems,
+            int arrayDepth = 0)
         {
             try
             {
@@ -659,9 +664,10 @@ namespace UnityLeanMcp
                     return obj == null ? "null" : FormatUnityObjectReference(obj);
                 }
 
-                if (prop.isArray)
+                // Unity reports SerializedProperty.isArray == true for String properties.
+                if (prop.isArray && prop.propertyType != SerializedPropertyType.String)
                 {
-                    return $"[{prop.arraySize} items]";
+                    return FormatSerializedArrayPreview(prop, maxItems, arrayDepth);
                 }
 
                 string formattedVal = UnityResultFormatter.FormatSerializedPropertyValue(prop);
@@ -671,6 +677,65 @@ namespace UnityLeanMcp
             {
                 return $"<error: {ex.Message}>";
             }
+        }
+
+        private static string FormatSerializedArrayPreview(SerializedProperty prop, int maxItems, int arrayDepth)
+        {
+            int total = prop.arraySize;
+            if (total <= 0 || arrayDepth > 0)
+            {
+                return $"[{(total < 0 ? 0 : total)} items]";
+            }
+
+            int previewLimit = Math.Min(total, Math.Min(MaxSerializedArrayPreviewItems, Math.Max(1, maxItems)));
+            var previewItems = new List<string>(previewLimit);
+            int approxLength = 0;
+
+            for (int i = 0; i < previewLimit; i++)
+            {
+                SerializedProperty element;
+                try
+                {
+                    element = prop.GetArrayElementAtIndex(i);
+                }
+                catch
+                {
+                    if (i == 0)
+                    {
+                        return $"[{total} items]";
+                    }
+
+                    break;
+                }
+
+                if (element == null)
+                {
+                    if (i == 0)
+                    {
+                        return $"[{total} items]";
+                    }
+
+                    break;
+                }
+
+                string elementStr = FormatSerializedPropertyWithAsset(element, maxItems, arrayDepth + 1);
+                if (previewItems.Count > 0 && approxLength + elementStr.Length > DefaultMaxOutputCharacters)
+                {
+                    break;
+                }
+
+                previewItems.Add(elementStr);
+                approxLength += elementStr.Length + 2;
+            }
+
+            if (previewItems.Count == 0)
+            {
+                return $"[{total} items]";
+            }
+
+            int remaining = total - previewItems.Count;
+            string suffix = remaining > 0 ? $", ... and {remaining} more" : string.Empty;
+            return $"[{total} items: {string.Join(", ", previewItems)}{suffix}]";
         }
 
         private static string FormatUnityObjectReference(UnityEngine.Object obj)
