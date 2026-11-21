@@ -45,49 +45,165 @@ namespace UnityLeanMcp
         #region Tests Discovery
 
         /// <summary>
-        /// Lists available tests in the loaded AppDomain via reflection without running them.
+        /// Lists available tests matching a name filter and maximum item count.
         /// </summary>
-        public static string Tests(string filter = null, int maxItems = DefaultMaxItems)
+        public static string Tests(string filter, int maxItems)
+        {
+            return Tests(filter, mode: null, category: null, maxItems: maxItems);
+        }
+
+        /// <summary>
+        /// Lists available tests with ground-truth modes, categories, and parameterized names via TestRunnerApi (with reflection fallback).
+        /// </summary>
+        public static string Tests(string filter = null, string mode = null, string category = null, int maxItems = DefaultMaxItems)
         {
             maxItems = Math.Max(1, maxItems);
             string cleanFilter = filter?.Trim() ?? string.Empty;
-            bool hasFilter = !string.IsNullOrWhiteSpace(cleanFilter);
+            string cleanMode = mode?.Trim() ?? string.Empty;
+            string cleanCategory = category?.Trim() ?? string.Empty;
+
+            if (!string.IsNullOrEmpty(cleanMode) &&
+                !string.Equals(cleanMode, "editmode", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(cleanMode, "playmode", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"(Invalid mode '{cleanMode}'. Expected 'editmode' or 'playmode')";
+            }
+
+            string normalizedModeFilter = string.IsNullOrEmpty(cleanMode) ? string.Empty : cleanMode.ToLowerInvariant();
             Regex wildcardRegex = BuildWildcardRegex(cleanFilter);
+            Regex categoryRegex = BuildWildcardRegex(cleanCategory);
 
             var allItems = TestDiscoveryHelper.DiscoverAllTests();
-            var discoveredTests = new List<string>();
+            var matchedItems = new List<TestDiscoveryHelper.DiscoveredItem>();
+            var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             for (int i = 0; i < allItems.Count; i++)
             {
-                string fullName = allItems[i].FullName;
-                if (MatchesWildcardOrSubstring(fullName, cleanFilter, wildcardRegex))
+                var item = allItems[i];
+                if (item == null || string.IsNullOrWhiteSpace(item.FullName))
                 {
-                    discoveredTests.Add(fullName);
+                    continue;
+                }
+
+                string itemMode = string.IsNullOrWhiteSpace(item.Mode) ? "editmode" : item.Mode.Trim().ToLowerInvariant();
+                if (!string.IsNullOrEmpty(normalizedModeFilter) &&
+                    !string.Equals(itemMode, normalizedModeFilter, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!MatchesWildcardOrSubstring(item.FullName, cleanFilter, wildcardRegex))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(cleanCategory))
+                {
+                    bool categoryMatch = false;
+                    if (item.Categories != null)
+                    {
+                        for (int c = 0; c < item.Categories.Count; c++)
+                        {
+                            if (MatchesWildcardOrSubstring(item.Categories[c], cleanCategory, categoryRegex))
+                            {
+                                categoryMatch = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!categoryMatch)
+                    {
+                        continue;
+                    }
+                }
+
+                string dedupeKey = itemMode + "\n" + (item.AssemblyName ?? string.Empty) + "\n" + item.FullName;
+                if (seenKeys.Add(dedupeKey))
+                {
+                    matchedItems.Add(item);
                 }
             }
 
-            if (discoveredTests.Count == 0)
+            if (matchedItems.Count == 0)
             {
-                return hasFilter
-                    ? $"(No tests found matching filter '{cleanFilter}')"
+                if (!string.IsNullOrEmpty(cleanFilter) &&
+                    string.IsNullOrEmpty(normalizedModeFilter) &&
+                    string.IsNullOrEmpty(cleanCategory))
+                {
+                    return $"(No tests found matching filter '{cleanFilter}')";
+                }
+
+                var criteria = new List<string>();
+                if (!string.IsNullOrEmpty(cleanFilter)) criteria.Add($"filter '{cleanFilter}'");
+                if (!string.IsNullOrEmpty(normalizedModeFilter)) criteria.Add($"mode '{normalizedModeFilter}'");
+                if (!string.IsNullOrEmpty(cleanCategory)) criteria.Add($"category '{cleanCategory}'");
+
+                return criteria.Count > 0
+                    ? $"(No tests found matching {string.Join(", ", criteria)})"
                     : "(No tests found in loaded assemblies)";
             }
 
-            discoveredTests.Sort(StringComparer.OrdinalIgnoreCase);
+            matchedItems.Sort((a, b) =>
+            {
+                int cmp = StringComparer.OrdinalIgnoreCase.Compare(a.FullName, b.FullName);
+                return cmp != 0 ? cmp : StringComparer.OrdinalIgnoreCase.Compare(a.Mode, b.Mode);
+            });
 
             var sb = new StringBuilder();
-            sb.AppendLine($"Available Tests ({discoveredTests.Count}):");
-            int countToReport = Math.Min(discoveredTests.Count, maxItems);
+            sb.AppendLine($"Available Tests ({matchedItems.Count}):");
+            int countToReport = Math.Min(matchedItems.Count, maxItems);
             for (int i = 0; i < countToReport; i++)
             {
-                sb.AppendLine($"  • {discoveredTests[i]}");
+                sb.AppendLine(FormatDiscoveredTestLine(matchedItems[i]));
             }
 
-            if (discoveredTests.Count > maxItems)
+            if (matchedItems.Count > maxItems)
             {
                 sb.AppendLine(ItemTruncationMarker);
             }
 
             return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        private static string FormatDiscoveredTestLine(TestDiscoveryHelper.DiscoveredItem item)
+        {
+            string modeLabel = string.IsNullOrWhiteSpace(item.Mode) ? "editmode" : item.Mode.Trim().ToLowerInvariant();
+            var line = new StringBuilder();
+            line.Append("  • ");
+            line.Append(item.FullName);
+            line.Append(" [");
+            line.Append(modeLabel);
+            line.Append(']');
+
+            if (item.Categories != null && item.Categories.Count > 0)
+            {
+                var nonEmptyCategories = new List<string>();
+                for (int i = 0; i < item.Categories.Count; i++)
+                {
+                    string cat = item.Categories[i]?.Trim();
+                    if (!string.IsNullOrEmpty(cat))
+                    {
+                        nonEmptyCategories.Add(cat);
+                    }
+                }
+
+                if (nonEmptyCategories.Count > 0)
+                {
+                    line.Append(" [");
+                    line.Append(string.Join(", ", nonEmptyCategories));
+                    line.Append(']');
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.AssemblyName))
+            {
+                line.Append(" (");
+                line.Append(item.AssemblyName.Trim());
+                line.Append(')');
+            }
+
+            return line.ToString();
         }
 
         #endregion

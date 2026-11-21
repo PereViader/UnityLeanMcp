@@ -7,6 +7,7 @@ namespace UnityLeanMcpTests
     public class TestDiscoveryHelperTests
     {
         [Test]
+        [Category("TestDiscoveryUnit")]
         public void DiscoverAllTests_ReturnsTestsInActiveAppDomain()
         {
             var tests = TestDiscoveryHelper.DiscoverAllTests();
@@ -15,6 +16,24 @@ namespace UnityLeanMcpTests
 
             bool foundSelf = tests.Exists(t => t.FullName.Contains("TestDiscoveryHelperTests"));
             Assert.That(foundSelf, Is.True, "Should discover tests in current assembly");
+        }
+
+        [TestCase(1, 2)]
+        [TestCase(3, 4)]
+        [Category("TestDiscoveryParameterized")]
+        public void InspectTests_ReportsModeCategoryAndParameterizedCaseNames(int a, int b)
+        {
+            Assert.That(a + b, Is.GreaterThan(0));
+
+            string result = Inspect.Tests(
+                filter: nameof(InspectTests_ReportsModeCategoryAndParameterizedCaseNames),
+                mode: "editmode",
+                category: "TestDiscoveryParameterized");
+
+            StringAssert.Contains("[editmode]", result);
+            StringAssert.Contains("[TestDiscoveryParameterized]", result);
+            StringAssert.Contains($"{nameof(InspectTests_ReportsModeCategoryAndParameterizedCaseNames)}(1,2)", result);
+            StringAssert.Contains($"{nameof(InspectTests_ReportsModeCategoryAndParameterizedCaseNames)}(3,4)", result);
         }
 
         [Test]

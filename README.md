@@ -51,7 +51,7 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | | `Inspect.Referencers(targetAssetPath, [searchFolder], [maxItems])` | Queries project assets in a folder that reference or depend on the target asset. |
 | **Editor & Tests** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
 | | `Inspect.MainCamera()` | Properties of `Camera.main` (transform, clear flags, culling mask, FOV, clipping planes). |
-| | `Inspect.Tests([filter], [maxItems])` | Enumerates available EditMode and PlayMode tests with an optional name filter. |
+| | `Inspect.Tests([filter], [mode], [category], [maxItems])` | Enumerates available EditMode and PlayMode tests with ground-truth modes, categories, assembly metadata, and parameterized names (`CompilationPipeline` + NUnit test tree with reflection fallback). |
 
 Call these directly inside `unity_eval`:
 

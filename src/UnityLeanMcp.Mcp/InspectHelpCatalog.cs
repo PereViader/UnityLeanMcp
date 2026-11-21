@@ -51,7 +51,8 @@ internal static class InspectHelpCatalog
         "Editor & Tests:\n" +
         "• string MainCamera()\n" +
         "• string Selection(int maxItems = 50)\n" +
-        "• string Tests(string filter = null, int maxItems = 100)";
+        "• string Tests(string filter, int maxItems)\n" +
+        "• string Tests(string filter = null, string mode = null, string category = null, int maxItems = 100)";
 
     internal const string UsageFooter =
         "Usage in unity_eval:\n" +

@@ -6,11 +6,14 @@ using System.Reflection;
 using System.Threading.Tasks;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using AssembliesType = UnityEditor.Compilation.AssembliesType;
+using CompilationPipeline = UnityEditor.Compilation.CompilationPipeline;
 using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
 
 [Trait("Category", "Unit")]
+[Collection("CommandGate")]
 public sealed class TestFilterAndDiscoveryTests
 {
     [Fact]
@@ -646,5 +649,483 @@ public sealed class TestFilterAndDiscoveryTests
         Assert.Equal(2, nearMatches.Count);
         Assert.Contains("MyCompany.Tests.EditModeTests.MovementTest", nearMatches);
         Assert.Contains("MyCompany.Tests.EditModeTests.JumpTest", nearMatches);
+    }
+
+    private sealed class MockTestTreeNode : TestDiscoveryHelper.ITestTreeNode
+    {
+        public string Name { get; set; } = string.Empty;
+        public string FullName { get; set; } = string.Empty;
+        public bool IsSuite { get; set; }
+        public bool HasChildren { get; set; }
+        public bool IsFixtureSuite { get; set; }
+        public Type? FixtureType { get; set; }
+        public MethodInfo? MethodInfo { get; set; }
+        public IReadOnlyList<string> Categories { get; set; } = Array.Empty<string>();
+        public IEnumerable<TestDiscoveryHelper.ITestTreeNode> Children { get; set; } = Array.Empty<TestDiscoveryHelper.ITestTreeNode>();
+    }
+
+    private sealed class NamedStubAssembly : Assembly
+    {
+        private readonly AssemblyName _name;
+
+        public NamedStubAssembly(string name)
+        {
+            _name = new AssemblyName(name);
+        }
+
+        public override AssemblyName GetName() => _name;
+        public override AssemblyName[] GetReferencedAssemblies() => Array.Empty<AssemblyName>();
+        public override Type[] GetTypes() => Array.Empty<Type>();
+    }
+
+    private static void SampleCustomNamedMethod() { }
+
+    private static MockTestTreeNode BuildRichDomainTree()
+    {
+        var customMethodInfo = typeof(TestFilterAndDiscoveryTests).GetMethod(
+            nameof(SampleCustomNamedMethod),
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        return new MockTestTreeNode
+        {
+            Name = "PureCSharp.Domain.Tests",
+            FullName = "PureCSharp.Domain.Tests",
+            IsSuite = true,
+            HasChildren = true,
+            Children = new TestDiscoveryHelper.ITestTreeNode[]
+            {
+                new MockTestTreeNode
+                {
+                    Name = "EmptySuite",
+                    FullName = "MyGame.Domain.EmptySuite",
+                    IsSuite = true,
+                    IsFixtureSuite = true,
+                    HasChildren = false
+                },
+                new MockTestTreeNode
+                {
+                    Name = "MathTests",
+                    FullName = "MyGame.Domain.MathTests",
+                    IsSuite = true,
+                    IsFixtureSuite = true,
+                    HasChildren = true,
+                    Categories = new[] { "Unit" },
+                    Children = new TestDiscoveryHelper.ITestTreeNode[]
+                    {
+                        new MockTestTreeNode
+                        {
+                            Name = "Add",
+                            FullName = "MyGame.Domain.MathTests.Add",
+                            IsSuite = true,
+                            IsFixtureSuite = false,
+                            HasChildren = true,
+                            Categories = new[] { "Fast" },
+                            Children = new[]
+                            {
+                                new MockTestTreeNode
+                                {
+                                    Name = "Add(1,2)",
+                                    FullName = "MyGame.Domain.MathTests.Add(1,2)",
+                                    MethodInfo = customMethodInfo,
+                                    Categories = new[] { "Fast" }
+                                },
+                                new MockTestTreeNode
+                                {
+                                    Name = "CustomAddName",
+                                    FullName = "MyGame.Domain.MathTests.CustomAddName",
+                                    MethodInfo = customMethodInfo,
+                                    Categories = new[] { "Boundary" }
+                                }
+                            }
+                        },
+                        new MockTestTreeNode
+                        {
+                            Name = "Subtract",
+                            FullName = "MyGame.Domain.MathTests.Subtract",
+                            Categories = new[] { "Uncategorized" }
+                        }
+                    }
+                },
+                new MockTestTreeNode
+                {
+                    Name = "ParamFixture(1)",
+                    FullName = "MyGame.Domain.ParamFixture(1)",
+                    IsSuite = true,
+                    IsFixtureSuite = true,
+                    HasChildren = true,
+                    Children = new[]
+                    {
+                        new MockTestTreeNode
+                        {
+                            Name = "Works",
+                            FullName = "MyGame.Domain.ParamFixture(1).Works",
+                            Categories = new[] { "Uncategorized" }
+                        }
+                    }
+                },
+                new MockTestTreeNode
+                {
+                    Name = "GenericFixture`1[System.Int32]",
+                    FullName = "MyGame.Domain.GenericFixture`1[System.Int32]",
+                    IsSuite = true,
+                    IsFixtureSuite = true,
+                    HasChildren = true,
+                    Children = new[]
+                    {
+                        new MockTestTreeNode
+                        {
+                            Name = "GenericCheck",
+                            FullName = "MyGame.Domain.GenericFixture`1[System.Int32].GenericCheck"
+                        }
+                    }
+                },
+                new MockTestTreeNode
+                {
+                    Name = "Outer",
+                    FullName = "MyGame.Domain.Outer",
+                    IsSuite = true,
+                    IsFixtureSuite = true,
+                    HasChildren = true,
+                    Children = new[]
+                    {
+                        new MockTestTreeNode
+                        {
+                            Name = "Outer+Inner",
+                            FullName = "MyGame.Domain.Outer+Inner",
+                            IsSuite = true,
+                            IsFixtureSuite = true,
+                            HasChildren = true,
+                            Children = new[]
+                            {
+                                new MockTestTreeNode
+                                {
+                                    Name = "NestedTest",
+                                    FullName = "MyGame.Domain.Outer+Inner.NestedTest"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    [Fact]
+    public void TestDiscoveryHelper_CompilationPipeline_ClassifiesPureCSharpEditModeAssembly()
+    {
+        var thisAssemblyName = typeof(TestFilterAndDiscoveryTests).Assembly.GetName().Name!;
+        CompilationPipeline.GetAssembliesByTypeFunc = assembliesType => assembliesType switch
+        {
+            AssembliesType.Editor => [new UnityEditor.Compilation.Assembly { name = thisAssemblyName }],
+            AssembliesType.Player => [],
+            _ => []
+        };
+
+        try
+        {
+            var items = TestDiscoveryHelper.DiscoverAllTests();
+            var selfItem = items.First(i => i.FullName.Contains(nameof(TestDiscoveryHelper_CompilationPipeline_ClassifiesPureCSharpEditModeAssembly), StringComparison.Ordinal));
+            Assert.Equal("editmode", selfItem.Mode);
+
+            string output = Inspect.Tests(nameof(TestDiscoveryHelper_CompilationPipeline_ClassifiesPureCSharpEditModeAssembly));
+            Assert.Contains($"• {selfItem.FullName} [editmode]", output);
+        }
+        finally
+        {
+            CompilationPipeline.GetAssembliesByTypeFunc = null;
+        }
+    }
+
+    [Fact]
+    public void TestDiscoveryHelper_NUnitTree_ExtractsParameterizedCustomNameGenericNestedAndStripsUncategorized()
+    {
+        var editAsm = new NamedStubAssembly("PureCSharp.Domain.Tests");
+        var playAsm = new NamedStubAssembly("MyGame.Runtime.Tests");
+        var modeOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PureCSharp.Domain.Tests"] = "editmode",
+            ["MyGame.Runtime.Tests"] = "playmode"
+        };
+
+        TestDiscoveryHelper.NUnitTreeBuilderOverride = asm =>
+        {
+            if (ReferenceEquals(asm, editAsm)) return BuildRichDomainTree();
+            return new MockTestTreeNode
+            {
+                Name = "MyGame.Runtime.Tests",
+                FullName = "MyGame.Runtime.Tests",
+                IsSuite = true,
+                HasChildren = true,
+                Children = new[]
+                {
+                    new MockTestTreeNode
+                    {
+                        Name = "PlayerTests",
+                        FullName = "MyGame.Runtime.PlayerTests",
+                        IsSuite = true,
+                        IsFixtureSuite = true,
+                        HasChildren = true,
+                        Categories = new[] { "Integration" },
+                        Children = new[]
+                        {
+                            new MockTestTreeNode
+                            {
+                                Name = "SpawnsInScene",
+                                FullName = "MyGame.Runtime.PlayerTests.SpawnsInScene"
+                            }
+                        }
+                    }
+                }
+            };
+        };
+
+        try
+        {
+            var discovered = TestDiscoveryHelper.DiscoverAllTests(new Assembly[] { editAsm, playAsm }, modeOverrides);
+
+            Assert.Equal(7, discovered.Count);
+            Assert.DoesNotContain(discovered, d => d.FullName.Contains("EmptySuite", StringComparison.Ordinal));
+
+            var add12 = Assert.Single(discovered, d => d.FullName == "MyGame.Domain.MathTests.Add(1,2)");
+            Assert.Equal("editmode", add12.Mode);
+            Assert.Equal("PureCSharp.Domain.Tests", add12.AssemblyName);
+            Assert.Equal("MyGame.Domain.MathTests", add12.FixtureFullName);
+            Assert.Equal(new[] { "Unit", "Fast" }, add12.Categories);
+
+            var custom = Assert.Single(discovered, d => d.FullName == "MyGame.Domain.MathTests.CustomAddName");
+            Assert.Equal("MyGame.Domain.MathTests", custom.FixtureFullName);
+            Assert.Equal("MyGame.Domain.MathTests." + nameof(SampleCustomNamedMethod), custom.MethodFullName);
+            Assert.Equal(new[] { "Unit", "Fast", "Boundary" }, custom.Categories);
+
+            var subtract = Assert.Single(discovered, d => d.FullName == "MyGame.Domain.MathTests.Subtract");
+            Assert.Equal(new[] { "Unit" }, subtract.Categories);
+
+            var paramFixture = Assert.Single(discovered, d => d.FullName == "MyGame.Domain.ParamFixture(1).Works");
+            Assert.Equal("MyGame.Domain.ParamFixture(1)", paramFixture.FixtureFullName);
+            Assert.Empty(paramFixture.Categories);
+
+            var generic = Assert.Single(discovered, d => d.FullName == "MyGame.Domain.GenericFixture`1[System.Int32].GenericCheck");
+            Assert.Equal("MyGame.Domain.GenericFixture`1[System.Int32]", generic.FixtureFullName);
+
+            var nested = Assert.Single(discovered, d => d.FullName == "MyGame.Domain.Outer+Inner.NestedTest");
+            Assert.Equal("MyGame.Domain.Outer+Inner", nested.FixtureFullName);
+
+            var spawn = Assert.Single(discovered, d => d.FullName == "MyGame.Runtime.PlayerTests.SpawnsInScene");
+            Assert.Equal("playmode", spawn.Mode);
+            Assert.Equal("MyGame.Runtime.Tests", spawn.AssemblyName);
+        }
+        finally
+        {
+            TestDiscoveryHelper.NUnitTreeBuilderOverride = null;
+        }
+    }
+
+    [Fact]
+    public void InspectTests_FormatsModeCategoriesAssembly_PreservesDuplicateNamesAcrossAssemblies_AndSupportsFilters()
+    {
+        var asmA = new NamedStubAssembly("AssemblyA.Tests");
+        var asmB = new NamedStubAssembly("AssemblyB.Tests");
+        var targetAsm = typeof(TestFilterAndDiscoveryTests).Assembly;
+
+        CompilationPipeline.GetAssembliesByTypeFunc = assembliesType => assembliesType switch
+        {
+            AssembliesType.Editor => [new UnityEditor.Compilation.Assembly { name = targetAsm.GetName().Name! }],
+            AssembliesType.Player => [],
+            _ => []
+        };
+
+        TestDiscoveryHelper.NUnitTreeBuilderOverride = asm =>
+        {
+            if (!ReferenceEquals(asm, targetAsm)) return null!;
+            return new MockTestTreeNode
+            {
+                Name = "Root",
+                FullName = "Root",
+                IsSuite = true,
+                HasChildren = true,
+                Children = new[]
+                {
+                    new MockTestTreeNode
+                    {
+                        Name = "MathTests",
+                        FullName = "MyGame.Domain.MathTests",
+                        IsSuite = true,
+                        IsFixtureSuite = true,
+                        HasChildren = true,
+                        Categories = new[] { "Unit" },
+                        Children = new[]
+                        {
+                            new MockTestTreeNode
+                            {
+                                Name = "Add(1,2)",
+                                FullName = "MyGame.Domain.MathTests.Add(1,2)",
+                                Categories = new[] { "Fast" }
+                            },
+                            new MockTestTreeNode
+                            {
+                                Name = "Add(3,4)",
+                                FullName = "MyGame.Domain.MathTests.Add(3,4)",
+                                Categories = new[] { "Boundary" }
+                            },
+                            new MockTestTreeNode
+                            {
+                                Name = "Plain",
+                                FullName = "MyGame.Domain.MathTests.Plain",
+                                Categories = new[] { "Uncategorized" }
+                            }
+                        }
+                    }
+                }
+            };
+        };
+
+        try
+        {
+            string all = Inspect.Tests(filter: "MyGame.Domain.MathTests");
+            Assert.Contains("Available Tests (3):", all);
+            Assert.Contains("  • MyGame.Domain.MathTests.Add(1,2) [editmode] [Unit, Fast] (UnityLeanMcp.Mcp.Tests)", all);
+            Assert.Contains("  • MyGame.Domain.MathTests.Add(3,4) [editmode] [Unit, Boundary] (UnityLeanMcp.Mcp.Tests)", all);
+            Assert.Contains("  • MyGame.Domain.MathTests.Plain [editmode] [Unit] (UnityLeanMcp.Mcp.Tests)", all);
+            Assert.DoesNotContain("Uncategorized", all);
+
+            string editOnly = Inspect.Tests(filter: "MyGame.Domain.MathTests", mode: "editmode");
+            Assert.Contains("Available Tests (3):", editOnly);
+
+            string playOnly = Inspect.Tests(filter: "MyGame.Domain.MathTests", mode: "PlayMode");
+            Assert.Equal("(No tests found matching filter 'MyGame.Domain.MathTests', mode 'playmode')", playOnly);
+
+            string byCategory = Inspect.Tests(category: "Boundary");
+            Assert.Contains("Available Tests (1):", byCategory);
+            Assert.Contains("MyGame.Domain.MathTests.Add(3,4)", byCategory);
+
+            string byWildcardCategory = Inspect.Tests(category: "*Fast*");
+            Assert.Contains("Available Tests (1):", byWildcardCategory);
+            Assert.Contains("MyGame.Domain.MathTests.Add(1,2)", byWildcardCategory);
+
+            string invalidMode = Inspect.Tests(mode: "invalid");
+            Assert.Equal("(Invalid mode 'invalid'. Expected 'editmode' or 'playmode')", invalidMode);
+
+            string twoArgPositional = Inspect.Tests("MyGame.Domain.MathTests.Add", 1);
+            Assert.Contains("Available Tests (2):", twoArgPositional);
+            Assert.Contains("MyGame.Domain.MathTests.Add(1,2)", twoArgPositional);
+            Assert.DoesNotContain("MyGame.Domain.MathTests.Add(3,4)", twoArgPositional);
+            Assert.Contains(Inspect.ItemTruncationMarker, twoArgPositional);
+
+            string twoArgNamed = Inspect.Tests("MyGame.Domain.MathTests.Add", maxItems: 1);
+            Assert.Equal(twoArgPositional, twoArgNamed);
+
+            // Verify two distinct assemblies defining the same test FullName are both kept
+            TestDiscoveryHelper.NUnitTreeBuilderOverride = asm => new MockTestTreeNode
+            {
+                Name = "SharedTests",
+                FullName = "SharedTests",
+                IsSuite = true,
+                IsFixtureSuite = true,
+                HasChildren = true,
+                Children = new[]
+                {
+                    new MockTestTreeNode
+                    {
+                        Name = "SameName",
+                        FullName = "SharedTests.SameName"
+                    }
+                }
+            };
+
+            var twoAssemblyItems = TestDiscoveryHelper.DiscoverAllTests(new Assembly[] { asmA, asmB });
+            Assert.Equal(2, twoAssemblyItems.Count);
+            Assert.NotEqual(twoAssemblyItems[0].AssemblyName, twoAssemblyItems[1].AssemblyName);
+        }
+        finally
+        {
+            TestDiscoveryHelper.NUnitTreeBuilderOverride = null;
+            CompilationPipeline.GetAssembliesByTypeFunc = null;
+        }
+    }
+
+    [Fact]
+    public void TestDiscoveryHelper_DiscoverHints_MatchesAnchoredGroupNamesCategoryOrRegexAndStrictAssemblyName()
+    {
+        var items = new List<TestDiscoveryHelper.DiscoveredItem>
+        {
+            new()
+            {
+                FullName = "MyGame.Domain.MathTests.CustomAddName",
+                FixtureFullName = "MyGame.Domain.MathTests",
+                MethodFullName = "MyGame.Domain.MathTests.Add",
+                Name = "CustomAddName",
+                AssemblyName = "PureCSharp.Domain.Tests",
+                Categories = ["Unit", "Fast"],
+                Mode = "editmode"
+            },
+            new()
+            {
+                FullName = "MyGame.Domain.MathTests.NoCategories",
+                FixtureFullName = "MyGame.Domain.MathTests",
+                MethodFullName = "MyGame.Domain.MathTests.NoCategories",
+                Name = "NoCategories",
+                AssemblyName = "PureCSharp.Domain.Tests",
+                Categories = null!,
+                Mode = "editmode"
+            }
+        };
+
+        // Anchored groupNames matching FixtureFullName and MethodFullName in opposite mode
+        TestDiscoveryHelper.DiscoverHints(
+            currentMode: "playmode",
+            testNames: null,
+            groupNames: ["^MyGame\\.Domain\\.MathTests$"],
+            categoryNames: ["^Fas.*$", "OtherOrCategory", "!Slow"],
+            assemblyNames: ["PureCSharp.Domain.Tests"],
+            out var otherModeMatches,
+            out var nearMatches,
+            preloadedItems: items);
+
+        Assert.Single(otherModeMatches);
+        Assert.Equal("MyGame.Domain.MathTests.CustomAddName", otherModeMatches[0]);
+        Assert.Empty(nearMatches);
+
+        TestDiscoveryHelper.DiscoverHints(
+            currentMode: "playmode",
+            testNames: null,
+            groupNames: ["^MyGame\\.Domain\\.MathTests\\.Add$"],
+            categoryNames: null,
+            assemblyNames: null,
+            out otherModeMatches,
+            out nearMatches,
+            preloadedItems: items);
+
+        Assert.Single(otherModeMatches);
+        Assert.Equal("MyGame.Domain.MathTests.CustomAddName", otherModeMatches[0]);
+
+        // UTF AssemblyNameFilter rejects ".dll" suffix, so DiscoverHints should not suggest switching modes
+        TestDiscoveryHelper.DiscoverHints(
+            currentMode: "playmode",
+            testNames: ["MyGame.Domain.MathTests.CustomAddName"],
+            groupNames: null,
+            categoryNames: null,
+            assemblyNames: ["PureCSharp.Domain.Tests.dll"],
+            out otherModeMatches,
+            out nearMatches,
+            preloadedItems: items);
+
+        Assert.Empty(otherModeMatches);
+    }
+
+    [Fact]
+    public void TestDiscoveryHelper_FallsBackToReflectionWhenTreeBuilderOrCompilationPipelineThrows()
+    {
+        CompilationPipeline.GetAssembliesByTypeFunc = _ => throw new InvalidOperationException("Off main thread");
+        TestDiscoveryHelper.NUnitTreeBuilderOverride = _ => throw new InvalidOperationException("Builder unavailable");
+        try
+        {
+            var items = TestDiscoveryHelper.DiscoverAllTests();
+            Assert.Contains(items, t => t.FullName.Contains(nameof(TestFilterAndDiscoveryTests), StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestDiscoveryHelper.NUnitTreeBuilderOverride = null;
+            CompilationPipeline.GetAssembliesByTypeFunc = null;
+        }
     }
 }

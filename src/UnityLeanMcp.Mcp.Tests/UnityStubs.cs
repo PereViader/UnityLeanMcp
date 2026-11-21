@@ -1116,6 +1116,7 @@ namespace UnityEditor
 
             public static CodeOptimization codeOptimization { get; set; } = CodeOptimization.Debug;
             public static Func<Assembly[]>? GetAssembliesFunc;
+            public static Func<AssembliesType, Assembly[]>? GetAssembliesByTypeFunc;
             public static Func<string[]>? GetPrecompiledAssemblyPathsFunc;
             public static Action? RequestScriptCompilationAction;
 
@@ -1124,7 +1125,8 @@ namespace UnityEditor
             public static event Action<string, CompilerMessage[]>? assemblyCompilationFinished { add { } remove { } }
 
             public static Assembly[] GetAssemblies() => GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
-            public static Assembly[] GetAssemblies(AssembliesType assembliesType) => GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
+            public static Assembly[] GetAssemblies(AssembliesType assembliesType) =>
+                GetAssembliesByTypeFunc?.Invoke(assembliesType) ?? GetAssembliesFunc?.Invoke() ?? System.Array.Empty<Assembly>();
             public static string[] GetPrecompiledAssemblyPaths(PrecompiledAssemblySources sources) => GetPrecompiledAssemblyPathsFunc?.Invoke() ?? System.Array.Empty<string>();
             public static string? GetPrecompiledAssemblyPathFromAssemblyName(string assemblyName) => null;
             public static void RequestScriptCompilation() => RequestScriptCompilationAction?.Invoke();
