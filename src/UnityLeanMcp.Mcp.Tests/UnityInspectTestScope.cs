@@ -34,6 +34,13 @@ internal sealed class UnityInspectTestScope : IDisposable
         SceneView.lastActiveSceneView = null;
         SceneView.SceneViewsList.Clear();
         UnityEngine.Object.FindObjectsOfTypeFunc = null;
+        Resources.FindObjectsOfTypeAllFunc = null;
+        Application.isBatchMode = false;
+        SystemInfo.graphicsDeviceType = UnityEngine.Rendering.GraphicsDeviceType.Direct3D11;
+        ScreenCapture.CaptureScreenshotAction = null;
+        EditorWindow.focusedWindow = null;
+        EditorWindow.GetWindowFunc = null;
+        EditorApplication.QueuePlayerLoopUpdateAction = null;
         AssetDatabase.FindAssetsFunc = null;
         AssetDatabase.FindAssetsInFoldersFunc = null;
         AssetDatabase.GUIDToAssetPathFunc = null;

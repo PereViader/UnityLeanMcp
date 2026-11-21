@@ -43,6 +43,7 @@ internal static class InspectHelpCatalog
         "\n" +
         "Visual Capture:\n" +
         "• string CaptureCamera(string outputPath = \"Temp/unity_capture.png\", int width = 1024, int height = 768, Camera camera = null)\n" +
+        "• Task<string> CaptureGameView(string outputPath = \"Temp/unity_gameview.png\", int superSize = 1, CancellationToken cancellationToken = default)\n" +
         "• string CaptureSceneView(string outputPath = \"Temp/unity_sceneview.png\", int width = 1024, int height = 768)\n" +
         "\n" +
         "Editor & Tests:\n" +

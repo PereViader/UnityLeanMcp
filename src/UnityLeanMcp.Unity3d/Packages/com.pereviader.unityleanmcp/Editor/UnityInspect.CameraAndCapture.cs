@@ -6,8 +6,12 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.UIElements;
 
 namespace UnityLeanMcp
 {
@@ -258,6 +262,9 @@ namespace UnityLeanMcp
 
         #region Visual Capture
 
+        private static readonly byte[] s_PngHeader = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        private static readonly byte[] s_PngIendTrailer = { 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82 };
+
         /// <summary>
         /// Captures a frame from a scene Camera or the Main Camera and writes it to disk as a PNG.
         /// </summary>
@@ -285,7 +292,279 @@ namespace UnityLeanMcp
             }
             catch { }
 
-            return CaptureCameraToPng(camera, outputPath, width, height, $"camera \"{camName}\"");
+            string result = CaptureCameraToPng(camera, outputPath, width, height, $"camera \"{camName}\"");
+            if (result.StartsWith("Captured ", StringComparison.Ordinal))
+            {
+                string warning = FormatOverlayUiWarning();
+                if (!string.IsNullOrEmpty(warning))
+                {
+                    result += "\n" + warning;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Captures what the player sees in the Game View (all composited cameras plus ScreenSpaceOverlay Canvases and UI Toolkit UIDocuments).
+        /// </summary>
+        public static async Task<string> CaptureGameView(
+            string outputPath = "Temp/unity_gameview.png",
+            int superSize = 1,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                outputPath = "Temp/unity_gameview.png";
+            }
+
+            superSize = Mathf.Clamp(superSize, 1, 4);
+
+            if (Application.isBatchMode || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
+                return "(GameView capture requires an interactive graphical Unity Editor and is unavailable in batchmode or with GraphicsDeviceType.Null. Use Inspect.CaptureCamera(...) for offscreen camera rendering, or Inspect.Hierarchy(includeUiDetails: true) / Inspect.UIDocument() to inspect UI layout.)";
+            }
+
+            string normalizedPath = outputPath.Replace('\\', '/');
+            string fullPath = Path.GetFullPath(outputPath);
+            string dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            string tempPath = Path.Combine(
+                string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp.png");
+
+            Type gameViewType = typeof(Editor).Assembly.GetType("UnityEditor.GameView");
+            if (gameViewType == null)
+            {
+                return "(Failed to capture GameView: UnityEditor.GameView type could not be resolved)";
+            }
+
+            EditorWindow prevFocused = null;
+            try { prevFocused = EditorWindow.focusedWindow; } catch { }
+
+            EditorWindow gameView = null;
+            bool createdGameView = false;
+
+            try
+            {
+                UnityEngine.Object[] existingViews = null;
+                try { existingViews = Resources.FindObjectsOfTypeAll(gameViewType); } catch { }
+                if (existingViews != null)
+                {
+                    for (int i = 0; i < existingViews.Length; i++)
+                    {
+                        if (existingViews[i] is EditorWindow ew && ew != null)
+                        {
+                            gameView = ew;
+                            break;
+                        }
+                    }
+                }
+
+                if (gameView == null)
+                {
+                    gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
+                    createdGameView = gameView != null;
+                }
+
+                if (gameView == null)
+                {
+                    return "(Failed to capture GameView: could not locate or open a GameView window)";
+                }
+
+                Canvas.ForceUpdateCanvases();
+                gameView.Focus();
+                ScreenCapture.CaptureScreenshot(tempPath, superSize);
+                EditorApplication.QueuePlayerLoopUpdate();
+                gameView.Repaint();
+
+                while (!IsCompletePngFile(tempPath))
+                {
+                    await Task.Delay(50, cancellationToken);
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    gameView.Repaint();
+                }
+
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                }
+                File.Move(tempPath, fullPath);
+
+                long fileSizeBytes = new FileInfo(fullPath).Length;
+                return $"Captured GameView (superSize: {superSize}, {fileSizeBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes) to {normalizedPath}";
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return $"(Failed to capture GameView: {ex.Message})";
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    if (createdGameView && gameView != null)
+                    {
+                        gameView.Close();
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    if (prevFocused != null)
+                    {
+                        prevFocused.Focus();
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static string FormatOverlayUiWarning()
+        {
+            int overlayCanvasCount = 0;
+            try
+            {
+#if UNITY_2023_1_OR_NEWER
+                var canvases = UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+                var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+#endif
+                if (canvases != null)
+                {
+                    for (int i = 0; i < canvases.Length; i++)
+                    {
+                        var c = canvases[i];
+                        if (c != null && c.isActiveAndEnabled && c.renderMode == RenderMode.ScreenSpaceOverlay)
+                        {
+                            overlayCanvasCount++;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            int uiDocCount = 0;
+            try
+            {
+#if UNITY_2023_1_OR_NEWER
+                var uiDocs = UnityEngine.Object.FindObjectsByType<UnityEngine.UIElements.UIDocument>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+                var uiDocs = UnityEngine.Object.FindObjectsOfType<UnityEngine.UIElements.UIDocument>();
+#endif
+                if (uiDocs != null)
+                {
+                    for (int i = 0; i < uiDocs.Length; i++)
+                    {
+                        var d = uiDocs[i];
+                        if (d != null && d.isActiveAndEnabled)
+                        {
+                            uiDocCount++;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (overlayCanvasCount == 0 && uiDocCount == 0)
+            {
+                return string.Empty;
+            }
+
+            var parts = new List<string>(2);
+            if (overlayCanvasCount > 0)
+            {
+                parts.Add(overlayCanvasCount == 1
+                    ? "1 active ScreenSpaceOverlay Canvas"
+                    : $"{overlayCanvasCount} active ScreenSpaceOverlay Canvases");
+            }
+            if (uiDocCount > 0)
+            {
+                parts.Add(uiDocCount == 1
+                    ? "1 active UIDocument"
+                    : $"{uiDocCount} active UIDocuments");
+            }
+
+            string summary = string.Join(" and ", parts);
+            return $"Warning: {summary} not included in Camera.targetTexture render. Use `await Inspect.CaptureGameView(...)` to capture what the player sees, or `Inspect.Hierarchy(includeUiDetails: true)` / `Inspect.UIDocument()` to inspect UI layout.";
+        }
+
+        private static bool IsCompletePngFile(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    long len = fs.Length;
+                    if (len < s_PngHeader.Length + s_PngIendTrailer.Length)
+                    {
+                        return false;
+                    }
+
+                    byte[] header = new byte[s_PngHeader.Length];
+                    if (fs.Read(header, 0, header.Length) != header.Length)
+                    {
+                        return false;
+                    }
+
+                    for (int i = 0; i < s_PngHeader.Length; i++)
+                    {
+                        if (header[i] != s_PngHeader[i])
+                        {
+                            return false;
+                        }
+                    }
+
+                    byte[] trailer = new byte[s_PngIendTrailer.Length];
+                    fs.Seek(-s_PngIendTrailer.Length, SeekOrigin.End);
+                    if (fs.Read(trailer, 0, trailer.Length) != trailer.Length)
+                    {
+                        return false;
+                    }
+
+                    for (int i = 0; i < s_PngIendTrailer.Length; i++)
+                    {
+                        if (trailer[i] != s_PngIendTrailer[i])
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
 
         /// <summary>

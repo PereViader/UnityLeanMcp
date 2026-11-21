@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
+using UnityEngine.UIElements;
 using UnityLeanMcp;
 using Xunit;
 
@@ -535,6 +540,276 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         Assert.Contains("Captured SceneView (640x480,", result);
         Assert.Contains("Temp/test_inspect_sceneview_unit.png", result);
         Assert.True(System.IO.File.Exists(outputPath));
+    }
+
+    [Fact]
+    public void CaptureCamera_WithScreenSpaceOverlayCanvas_AppendsWarning()
+    {
+        var camGo = new GameObject("CamGo");
+        var cam = camGo.AddComponent<Camera>();
+        cam.name = "Main Camera";
+        Camera.main = cam;
+
+        var canvasGo = new GameObject("OverlayCanvas");
+        var canvas = canvasGo.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+        UnityEngine.Object.FindObjectsOfTypeFunc = type =>
+            type == typeof(Canvas) ? new object[] { canvas } : Array.Empty<object>();
+
+        string outputPath = "Temp/test_inspect_cam_overlay_canvas.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+        Assert.Contains("Captured camera \"Main Camera\"", result);
+        Assert.Contains("Warning: 1 active ScreenSpaceOverlay Canvas not included in Camera.targetTexture render.", result);
+        Assert.Contains("await Inspect.CaptureGameView(...)", result);
+        Assert.Equal(RenderMode.ScreenSpaceOverlay, canvas.renderMode);
+    }
+
+    [Fact]
+    public void CaptureCamera_WithActiveUIDocument_AppendsWarning()
+    {
+        var camGo = new GameObject("CamGo");
+        var cam = camGo.AddComponent<Camera>();
+        cam.name = "Main Camera";
+        Camera.main = cam;
+
+        var uiGo = new GameObject("HudDoc");
+        uiGo.AddComponent<UnityEngine.UIElements.UIDocument>();
+
+        string outputPath = "Temp/test_inspect_cam_uidoc.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+        Assert.Contains("Captured camera \"Main Camera\"", result);
+        Assert.Contains("Warning: 1 active UIDocument not included in Camera.targetTexture render.", result);
+        Assert.Contains("await Inspect.CaptureGameView(...)", result);
+    }
+
+    [Fact]
+    public void CaptureCamera_WithOverlayCanvasAndUIDocument_CombinesWarning()
+    {
+        var camGo = new GameObject("CamGo");
+        var cam = camGo.AddComponent<Camera>();
+        Camera.main = cam;
+
+        var canvasGo1 = new GameObject("OverlayCanvas1");
+        var canvas1 = canvasGo1.AddComponent<Canvas>();
+        canvas1.renderMode = RenderMode.ScreenSpaceOverlay;
+
+        var canvasGo2 = new GameObject("OverlayCanvas2");
+        var canvas2 = canvasGo2.AddComponent<Canvas>();
+        canvas2.renderMode = RenderMode.ScreenSpaceOverlay;
+
+        var docGo = new GameObject("HudDoc");
+        var doc = docGo.AddComponent<UnityEngine.UIElements.UIDocument>();
+
+        UnityEngine.Object.FindObjectsOfTypeFunc = type =>
+        {
+            if (type == typeof(Canvas)) return new object[] { canvas1, canvas2 };
+            if (type == typeof(UnityEngine.UIElements.UIDocument)) return new object[] { doc };
+            return Array.Empty<object>();
+        };
+
+        string outputPath = "Temp/test_inspect_cam_both_ui.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+        Assert.Contains("Warning: 2 active ScreenSpaceOverlay Canvases and 1 active UIDocument not included in Camera.targetTexture render.", result);
+    }
+
+    [Fact]
+    public void CaptureCamera_WithNonOverlayOrInactiveUi_DoesNotWarn()
+    {
+        var camGo = new GameObject("CamGo");
+        var cam = camGo.AddComponent<Camera>();
+        Camera.main = cam;
+
+        var camCanvasGo = new GameObject("CameraCanvas");
+        var camCanvas = camCanvasGo.AddComponent<Canvas>();
+        camCanvas.renderMode = RenderMode.ScreenSpaceCamera;
+
+        var disabledOverlayGo = new GameObject("DisabledOverlay");
+        var disabledOverlay = disabledOverlayGo.AddComponent<Canvas>();
+        disabledOverlay.renderMode = RenderMode.ScreenSpaceOverlay;
+        disabledOverlay.enabled = false;
+
+        var inactiveDocGo = new GameObject("InactiveDoc") { activeSelf = false };
+        var inactiveDoc = inactiveDocGo.AddComponent<UnityEngine.UIElements.UIDocument>();
+
+        UnityEngine.Object.FindObjectsOfTypeFunc = type =>
+        {
+            if (type == typeof(Canvas)) return new object[] { camCanvas, disabledOverlay };
+            if (type == typeof(UnityEngine.UIElements.UIDocument)) return new object[] { inactiveDoc };
+            return Array.Empty<object>();
+        };
+
+        string outputPath = "Temp/test_inspect_cam_no_warn.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+        Assert.DoesNotContain("Warning:", result);
+    }
+
+    [Fact]
+    public void CaptureSceneView_WithOverlayUi_DoesNotWarn()
+    {
+        var camGo = new GameObject("SceneCamObj");
+        var cam = camGo.AddComponent<Camera>();
+        SceneView.lastActiveSceneView = new SceneView { camera = cam };
+
+        var canvasGo = new GameObject("OverlayCanvas");
+        var canvas = canvasGo.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+        UnityEngine.Object.FindObjectsOfTypeFunc = type =>
+            type == typeof(Canvas) ? new object[] { canvas } : Array.Empty<object>();
+
+        string outputPath = "Temp/test_inspect_sceneview_no_warn.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureSceneView(outputPath, width: 320, height: 240);
+
+        Assert.Contains("Captured SceneView", result);
+        Assert.DoesNotContain("Warning:", result);
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenBatchMode_FailsFast()
+    {
+        Application.isBatchMode = true;
+
+        string result = await Inspect.CaptureGameView("Temp/test_gameview_batch.png");
+
+        Assert.Contains("batchmode", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Inspect.CaptureCamera", result);
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenNullGraphicsDevice_FailsFast()
+    {
+        SystemInfo.graphicsDeviceType = GraphicsDeviceType.Null;
+
+        string result = await Inspect.CaptureGameView("Temp/test_gameview_null_gfx.png");
+
+        Assert.Contains("GraphicsDeviceType.Null", result);
+        Assert.Contains("Inspect.CaptureCamera", result);
+    }
+
+    [Fact]
+    public async Task CaptureGameView_HappyPath_WritesPngClampsSuperSizeAndRestoresFocus()
+    {
+        var prevWin = new EditorWindow();
+        EditorWindow.focusedWindow = prevWin;
+
+        var gameView = new GameView();
+        Resources.FindObjectsOfTypeAllFunc = type =>
+            type == typeof(GameView) ? new UnityEngine.Object[] { gameView } : Array.Empty<UnityEngine.Object>();
+
+        int capturedSuperSize = 0;
+        byte[] validPng = CreateValidTestPngBytes();
+        ScreenCapture.CaptureScreenshotAction = (path, superSize) =>
+        {
+            capturedSuperSize = superSize;
+            File.WriteAllBytes(path, validPng);
+        };
+
+        string outputPath = "Temp/SubGameView/test_gameview_unit.png";
+        _scope.TrackFile(outputPath);
+
+        string result = await Inspect.CaptureGameView(outputPath, superSize: 99);
+
+        Assert.Equal(4, capturedSuperSize);
+        Assert.Contains("Captured GameView (superSize: 4,", result);
+        Assert.Contains("Temp/SubGameView/test_gameview_unit.png", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.Equal(validPng, File.ReadAllBytes(outputPath));
+        Assert.Same(prevWin, EditorWindow.focusedWindow);
+        Assert.False(gameView.IsClosed);
+        Assert.True(gameView.FocusCount >= 1);
+        Assert.True(gameView.RepaintCount >= 1);
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenNoExistingGameView_OpensAndClosesTemporaryGameView()
+    {
+        var prevWin = new EditorWindow();
+        EditorWindow.focusedWindow = prevWin;
+
+        GameView? openedView = null;
+        EditorWindow.GetWindowFunc = (type, utility, title, focus) =>
+        {
+            openedView = new GameView();
+            return openedView;
+        };
+
+        byte[] validPng = CreateValidTestPngBytes();
+        ScreenCapture.CaptureScreenshotAction = (path, _) =>
+        {
+            File.WriteAllBytes(path, validPng);
+        };
+
+        string outputPath = "Temp/test_gameview_temp_window.png";
+        _scope.TrackFile(outputPath);
+
+        string result = await Inspect.CaptureGameView(outputPath, superSize: 0);
+
+        Assert.Contains("Captured GameView (superSize: 1,", result);
+        Assert.NotNull(openedView);
+        Assert.True(openedView!.IsClosed);
+        Assert.Same(prevWin, EditorWindow.focusedWindow);
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenCanceled_CleansUpTempFileAndRestoresFocus()
+    {
+        var prevWin = new EditorWindow();
+        EditorWindow.focusedWindow = prevWin;
+
+        GameView? openedView = null;
+        EditorWindow.GetWindowFunc = (type, utility, title, focus) =>
+        {
+            openedView = new GameView();
+            return openedView;
+        };
+
+        string? capturedTempPath = null;
+        using var cts = new CancellationTokenSource();
+        ScreenCapture.CaptureScreenshotAction = (path, _) =>
+        {
+            capturedTempPath = path;
+            // Write incomplete bytes (no IEND trailer) so polling waits until canceled
+            File.WriteAllBytes(path, new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+            cts.Cancel();
+        };
+
+        string outputPath = "Temp/test_gameview_canceled.png";
+        _scope.TrackFile(outputPath);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Inspect.CaptureGameView(outputPath, cancellationToken: cts.Token));
+
+        Assert.NotNull(capturedTempPath);
+        Assert.False(File.Exists(capturedTempPath));
+        Assert.False(File.Exists(outputPath));
+        Assert.NotNull(openedView);
+        Assert.True(openedView!.IsClosed);
+        Assert.Same(prevWin, EditorWindow.focusedWindow);
+    }
+
+    private static byte[] CreateValidTestPngBytes()
+    {
+        // Minimal PNG header + IEND trailer for structural validation
+        return new byte[]
+        {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
+        };
     }
 
     [Fact]

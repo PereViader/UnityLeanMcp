@@ -93,6 +93,7 @@ public class UnityResourcesTests
         nameof(Inspect.Referencers) => "Assets & Prefabs",
 
         nameof(Inspect.CaptureCamera) or
+        nameof(Inspect.CaptureGameView) or
         nameof(Inspect.CaptureSceneView) => "Visual Capture",
 
         nameof(Inspect.Selection) or
@@ -114,6 +115,7 @@ public class UnityResourcesTests
             {
                 string defaultValue = p.DefaultValue switch
                 {
+                    null when p.ParameterType.IsValueType && Nullable.GetUnderlyingType(p.ParameterType) == null => "default",
                     null => "null",
                     bool b => b ? "true" : "false",
                     string s => $"\"{s}\"",
@@ -141,6 +143,18 @@ public class UnityResourcesTests
         if (type == typeof(float)) return "float";
         if (type == typeof(double)) return "double";
         if (type == typeof(object)) return "object";
+        if (type.IsGenericType)
+        {
+            string genericName = type.Name;
+            int tickIndex = genericName.IndexOf('`');
+            if (tickIndex >= 0)
+            {
+                genericName = genericName.Substring(0, tickIndex);
+            }
+
+            string typeArgs = string.Join(", ", type.GetGenericArguments().Select(FormatTypeName));
+            return $"{genericName}<{typeArgs}>";
+        }
         return type.Name;
     }
 

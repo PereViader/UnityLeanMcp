@@ -235,7 +235,9 @@ namespace UnityEngine
 
     public static class Resources
     {
+        public static Func<Type, Object[]>? FindObjectsOfTypeAllFunc;
         public static T[] FindObjectsOfTypeAll<T>() where T : Object => Array.Empty<T>();
+        public static Object[] FindObjectsOfTypeAll(Type type) => FindObjectsOfTypeAllFunc?.Invoke(type) ?? Array.Empty<Object>();
     }
 
     public class Transform : Component, System.Collections.IEnumerable
@@ -279,6 +281,7 @@ namespace UnityEngine
     public class Behaviour : Component
     {
         public bool enabled { get; set; } = true;
+        public bool isActiveAndEnabled => enabled && (gameObject == null || gameObject.activeInHierarchy);
     }
 
     public class MonoBehaviour : Behaviour { }
@@ -303,6 +306,7 @@ namespace UnityEngine
         public bool isRootCanvas { get; set; } = true;
         public float scaleFactor { get; set; } = 1f;
         public Rect pixelRect { get; set; } = new Rect(0, 0, 1920, 1080);
+        public static void ForceUpdateCanvases() { }
     }
 
     public static class Mathf
@@ -489,8 +493,23 @@ namespace UnityEngine
         public static string dataPath { get; set; } = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "Assets");
         public static string unityVersion { get; set; } = "6000.7.0f1";
         public static bool isPlaying { get; set; } = false;
+        public static bool isBatchMode { get; set; } = false;
         public delegate void LogCallback(string condition, string stackTrace, LogType type);
         public static event LogCallback? logMessageReceivedThreaded { add { } remove { } }
+    }
+
+    public static class SystemInfo
+    {
+        public static UnityEngine.Rendering.GraphicsDeviceType graphicsDeviceType { get; set; } = UnityEngine.Rendering.GraphicsDeviceType.Direct3D11;
+    }
+
+    public static class ScreenCapture
+    {
+        public static Action<string, int>? CaptureScreenshotAction;
+        public static void CaptureScreenshot(string filename, int superSize = 1)
+        {
+            CaptureScreenshotAction?.Invoke(filename, superSize);
+        }
     }
 
     public static class Debug
@@ -504,6 +523,15 @@ namespace UnityEngine
 
 namespace UnityEngine.Rendering
 {
+    public enum GraphicsDeviceType
+    {
+        Direct3D11 = 2,
+        Null = 4,
+        Metal = 16,
+        OpenGLCore = 17,
+        Vulkan = 21
+    }
+
     public static class GraphicsSettings
     {
         public static RenderPipelineAsset? currentRenderPipeline { get; set; }
@@ -616,6 +644,52 @@ namespace UnityEditor
         public static void EraseInt(string key) => IntValues.Remove(key);
     }
     public class Editor { }
+    public class EditorWindow : UnityEngine.ScriptableObject
+    {
+        public static EditorWindow? focusedWindow { get; set; }
+        public static Func<Type, bool, string?, bool, EditorWindow?>? GetWindowFunc;
+        public int FocusCount { get; private set; }
+        public int RepaintCount { get; private set; }
+        public bool IsClosed { get; private set; }
+
+        public virtual void Focus()
+        {
+            FocusCount++;
+            focusedWindow = this;
+        }
+
+        public virtual void Repaint()
+        {
+            RepaintCount++;
+        }
+
+        public virtual void Close()
+        {
+            IsClosed = true;
+        }
+
+        public static EditorWindow? GetWindow(Type t, bool utility = false, string? title = null, bool focus = true)
+        {
+            if (GetWindowFunc != null)
+            {
+                return GetWindowFunc(t, utility, title, focus);
+            }
+
+            if (Activator.CreateInstance(t) is EditorWindow ew)
+            {
+                if (focus)
+                {
+                    focusedWindow = ew;
+                }
+                return ew;
+            }
+            return null;
+        }
+    }
+
+    public class GameView : EditorWindow
+    {
+    }
     public class SceneView
     {
         public static SceneView? lastActiveSceneView { get; set; }
@@ -631,7 +705,8 @@ namespace UnityEditor
         public static event Action? projectChanged { add { } remove { } }
         public static event Action? quitting { add { } remove { } }
         public static void Tick() => update?.Invoke();
-        public static void QueuePlayerLoopUpdate() { }
+        public static Action? QueuePlayerLoopUpdateAction;
+        public static void QueuePlayerLoopUpdate() => QueuePlayerLoopUpdateAction?.Invoke();
         public static string applicationContentsPath { get; set; } = string.Empty;
     }
 
@@ -1173,7 +1248,7 @@ namespace UnityEngine.UIElements
         public Button(Action? clickEvent) { }
     }
 
-    public class UIDocument : Component
+    public class UIDocument : Behaviour
     {
         public static readonly List<UIDocument> AllUIDocuments = new();
 

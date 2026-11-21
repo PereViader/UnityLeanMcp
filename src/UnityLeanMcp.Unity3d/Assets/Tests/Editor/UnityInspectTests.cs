@@ -1,9 +1,14 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
+using UnityEngine.TestTools;
 using UnityEngine.UIElements;
 using UnityLeanMcp;
 
@@ -556,6 +561,67 @@ namespace UnityLeanMcpTests
             StringAssert.Contains("text: \"Health: 99\"", result);
             StringAssert.Contains("Button", result);
             StringAssert.Contains("text: \"Pause\"", result);
+        }
+
+        [Test]
+        public void CaptureCamera_WithOverlayCanvasAndUIDocument_WarnsWithoutMutatingScene()
+        {
+            var camGo = CreateTestGameObject("OverlayWarningCam");
+            var cam = camGo.AddComponent<Camera>();
+
+            var canvasGo = CreateTestGameObject("OverlayWarningCanvas");
+            var canvas = canvasGo.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            var docGo = CreateTestGameObject("OverlayWarningUIDoc");
+            docGo.AddComponent<UnityEngine.UIElements.UIDocument>();
+
+            string outputPath = "Temp/test_inspect_cam_overlay_warning.png";
+            m_CreatedFiles.Add(outputPath);
+
+            bool dirtyBeforeCapture = EditorSceneManager.GetActiveScene().isDirty;
+
+            string result = Inspect.CaptureCamera(outputPath, width: 128, height: 128, camera: cam);
+
+            StringAssert.Contains("Captured camera \"OverlayWarningCam\"", result);
+            StringAssert.Contains("ScreenSpaceOverlay Canvas", result);
+            StringAssert.Contains("UIDocument", result);
+            StringAssert.Contains("Inspect.CaptureGameView", result);
+            Assert.AreEqual(RenderMode.ScreenSpaceOverlay, canvas.renderMode);
+            Assert.AreEqual(dirtyBeforeCapture, EditorSceneManager.GetActiveScene().isDirty);
+        }
+
+        [UnityTest]
+        public IEnumerator CaptureGameView_SavesPngOrFailsFastInBatchMode()
+        {
+            string outputPath = "Temp/test_inspect_gameview_editor.png";
+            m_CreatedFiles.Add(outputPath);
+
+            Task<string> captureTask = Inspect.CaptureGameView(outputPath);
+            while (!captureTask.IsCompleted)
+            {
+                yield return null;
+            }
+
+            if (captureTask.IsFaulted && captureTask.Exception != null)
+            {
+                throw captureTask.Exception.GetBaseException();
+            }
+
+            string result = captureTask.Result;
+            Assert.IsNotNull(result);
+
+            if (Application.isBatchMode || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
+                StringAssert.Contains("Inspect.CaptureCamera", result);
+            }
+            else
+            {
+                StringAssert.Contains("Captured GameView", result);
+                StringAssert.Contains("Temp/test_inspect_gameview_editor.png", result);
+                Assert.IsTrue(System.IO.File.Exists(outputPath));
+                Assert.Greater(new System.IO.FileInfo(outputPath).Length, 20);
+            }
         }
     }
 }
