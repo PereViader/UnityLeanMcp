@@ -3,23 +3,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace UnityLeanMcp.Mcp;
 
 internal sealed partial class UnityToolOutputFormatter
 {
-    private static readonly Regex s_CommonUnityTypesRegex = new(
-        @"\b(" +
-        "GameObject|Transform|Vector2|Vector2Int|Vector3|Vector3Int|Vector4|Quaternion|Matrix4x4|" +
-        "Color|Color32|Bounds|BoundsInt|Rect|RectInt|Mathf|Time|Debug|Selection|AssetDatabase|" +
-        "EditorApplication|Component|MonoBehaviour|SceneManager|Object|ScriptableObject|Camera|" +
-        "Material|Mesh|Texture|Texture2D|RenderTexture|Sprite|Shader|Physics|Physics2D|Rigidbody|" +
-        "Rigidbody2D|Collider|Collider2D|Ray|RaycastHit|RaycastHit2D|Input|Screen|Application|" +
-        "EditorUtility|PrefabUtility|Undo|Gizmos|Handles|EditorWindow|AudioSource|AudioClip|Light" +
-        @")\b",
-        RegexOptions.Compiled);
-
     private static readonly StringComparer s_CoveragePathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -335,9 +323,9 @@ internal sealed partial class UnityToolOutputFormatter
                 ? "Evaluation aborted: Dynamic snippet compilation failed."
                 : "Evaluation aborted: Project script compilation failed.";
 
-            if (isSnippetFailure && parsedDiags.Any(IsMissingUnityNamespaceDiagnostic))
+            if (isSnippetFailure && parsedDiags.Any(IsAmbiguousReferenceDiagnostic))
             {
-                failureTrailer += "\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.";
+                failureTrailer += "\nHint: Ambiguous symbol across pre-imported namespaces (System, System.Collections.Generic, System.Linq, UnityEngine, UnityEditor, UnityLeanMcp). Qualify the type (e.g., UnityEngine.Object, UnityEngine.Random, UnityEngine.Debug) or add a 'using' alias.";
             }
 
             return _diagnosticFormatter.FormatCompilerDiagnostics(
@@ -352,21 +340,14 @@ internal sealed partial class UnityToolOutputFormatter
         return string.IsNullOrWhiteSpace(result.Message) ? "Evaluation failed." : result.Message;
     }
 
-    private static bool IsMissingUnityNamespaceDiagnostic(StructuredCompilerDiagnostic diagnostic)
+    private static bool IsAmbiguousReferenceDiagnostic(StructuredCompilerDiagnostic diagnostic)
     {
         if (!FileUriBuilder.IsEvalSynthetic(diagnostic.File) && !string.IsNullOrWhiteSpace(diagnostic.File))
         {
             return false;
         }
 
-        if (!string.Equals(diagnostic.Code, "CS0103", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(diagnostic.Code, "CS0246", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return !string.IsNullOrWhiteSpace(diagnostic.Message) &&
-               s_CommonUnityTypesRegex.IsMatch(diagnostic.Message);
+        return string.Equals(diagnostic.Code, "CS0104", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatLogs(IReadOnlyList<ConsoleLogEntry> logs)

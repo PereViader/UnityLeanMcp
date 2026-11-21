@@ -624,70 +624,52 @@ public sealed class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityEval_WhenSnippetCompilationFailsWithCS0103ForCommonUnityType_AppendsMissingNamespaceHint()
+    public async Task UnityEval_WhenSnippetCompilationFailsWithCS0104_AppendsAmbiguousSymbolHint()
     {
         using var ctx = new ToolFormattingTestContext();
         ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
             Success = false,
-            Message = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context"
+            Message = "eval(1,8): error CS0104: 'Random' is an ambiguous reference between 'UnityEngine.Random' and 'System.Random'"
         };
 
-        var result = await ctx.Tools.UnityEvalAsync("GameObject.Find(\"test\");");
+        var result = await ctx.Tools.UnityEvalAsync("return Random.Range(0, 1);");
 
         Assert.True(result.IsError);
         string text = ToolFormattingTestContext.GetResultText(result);
-        Assert.Contains("• snippet line 1, col 5: error CS0103: The name 'GameObject' does not exist in the current context", text);
-        Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
+        Assert.Contains("• snippet line 1, col 8: error CS0104: 'Random' is an ambiguous reference between 'UnityEngine.Random' and 'System.Random'", text);
+        Assert.Contains("Hint: Ambiguous symbol across pre-imported namespaces", text);
+        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Ambiguous symbol across pre-imported namespaces (System, System.Collections.Generic, System.Linq, UnityEngine, UnityEditor, UnityLeanMcp). Qualify the type (e.g., UnityEngine.Object, UnityEngine.Random, UnityEngine.Debug) or add a 'using' alias.", text);
     }
 
-    [Fact]
-    public async Task UnityEval_WhenSnippetCompilationFailsWithCS0246ForCommonUnityType_AppendsMissingNamespaceHint()
+    [Theory]
+    [InlineData("eval(1,4): error CS1002: ; expected", "int x = 1")]
+    [InlineData("eval(1,8): error CS0103: The name 'Path' does not exist in the current context", "return Path.Combine(\"a\", \"b\");")]
+    public async Task UnityEval_WhenSnippetCompilationFailsWithoutCS0104_DoesNotAppendAmbiguousSymbolHint(string errorMessage, string code)
     {
         using var ctx = new ToolFormattingTestContext();
         ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
             Success = false,
-            Message = "eval(1,1): error CS0246: The type or namespace name 'Selection' could not be found (are you missing a using directive or an assembly reference?)"
+            Message = errorMessage
         };
 
-        var result = await ctx.Tools.UnityEvalAsync("Selection.activeGameObject = null;");
+        var result = await ctx.Tools.UnityEvalAsync(code);
 
         Assert.True(result.IsError);
         string text = ToolFormattingTestContext.GetResultText(result);
-        Assert.Contains("• snippet line 1, col 1: error CS0246: The type or namespace name 'Selection' could not be found", text);
-        Assert.Contains("Hint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-        Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.\nHint: Missing using directive? Include 'using UnityEngine;' or 'using UnityEditor;' at the top of your snippet.", text);
-    }
-
-    [Fact]
-    public async Task UnityEval_WhenSnippetCompilationFailsWithoutCommonUnityType_DoesNotAppendMissingNamespaceHint()
-    {
-        using var ctx = new ToolFormattingTestContext();
-        ctx.Client.EvalResultToReturn = new UnityEvalResult
-        {
-            Success = false,
-            Message = "eval(1,4): error CS1002: ; expected"
-        };
-
-        var result = await ctx.Tools.UnityEvalAsync("int x = 1");
-
-        Assert.True(result.IsError);
-        string text = ToolFormattingTestContext.GetResultText(result);
-        Assert.Contains("• snippet line 1, col 4: error CS1002: ; expected", text);
-        Assert.DoesNotContain("Hint: Missing using directive?", text);
+        Assert.DoesNotContain("Hint: Ambiguous symbol", text);
         Assert.EndsWith("Evaluation aborted: Dynamic snippet compilation failed.", text);
     }
 
     [Fact]
-    public async Task UnityEval_WhenProjectCompilationFailsWithCommonUnityType_DoesNotAppendMissingNamespaceHint()
+    public async Task UnityEval_WhenProjectCompilationFailsWithCS0104_DoesNotAppendAmbiguousSymbolHint()
     {
         using var ctx = new ToolFormattingTestContext();
         ctx.Client.EvalResultToReturn = new UnityEvalResult
         {
             Success = false,
-            Message = "Assets/Scripts/Player.cs(10,5): error CS0103: The name 'GameObject' does not exist in the current context"
+            Message = "Assets/Scripts/Player.cs(10,5): error CS0104: 'Object' is an ambiguous reference between 'UnityEngine.Object' and 'System.Object'"
         };
 
         var result = await ctx.Tools.UnityEvalAsync("return 42;");
@@ -695,7 +677,7 @@ public sealed class ToolFormattingTests
         Assert.True(result.IsError);
         string text = ToolFormattingTestContext.GetResultText(result);
         Assert.Contains("Assets/Scripts/Player.cs", text);
-        Assert.DoesNotContain("Hint: Missing using directive?", text);
+        Assert.DoesNotContain("Hint: Ambiguous symbol", text);
         Assert.EndsWith("Evaluation aborted: Project script compilation failed.", text);
     }
 
@@ -784,7 +766,7 @@ public sealed class ToolFormattingTests
         using var ctx = new ToolFormattingTestContext();
         var spyFormatter = new CountingDiagnosticFormatter();
         var tools = new UnityTools(ctx.Client, ctx.PathResolver, spyFormatter);
-        string hugePrefix = "eval(1,5): error CS0103: The name 'GameObject' does not exist in the current context\n";
+        string hugePrefix = "eval(1,5): error CS0104: 'Object' is an ambiguous reference between 'UnityEngine.Object' and 'System.Object'\n";
         string oversizedError = hugePrefix + new string('X', McpOutputLimits.MaxFormattedOutputCharacters * 2);
 
         ctx.Client.EvalResultToReturn = new UnityEvalResult
@@ -793,13 +775,13 @@ public sealed class ToolFormattingTests
             Message = oversizedError
         };
 
-        var result = await tools.UnityEvalAsync("GameObject.Find(\"x\");");
+        var result = await tools.UnityEvalAsync("return typeof(Object);");
 
         Assert.True(result.IsError);
         Assert.Equal(1, spyFormatter.ParseCallCount);
         Assert.NotNull(spyFormatter.LastParsedInput);
         Assert.True(spyFormatter.LastParsedInput!.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
         string text = ToolFormattingTestContext.GetResultText(result);
-        Assert.Contains("Hint: Missing using directive?", text);
+        Assert.Contains("Hint: Ambiguous symbol", text);
     }
 }

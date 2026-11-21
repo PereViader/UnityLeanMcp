@@ -57,7 +57,7 @@ public class UnityTools
     }
 
     [McpServerTool(Name = "unity_eval")]
-    [Description("Evaluates C# top-level statements in the active Unity Editor with top-level await. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Includes a built-in Inspect utility to speed up scene, object, asset, UI, and capture analysis—read the unity://inspect/help resource for its docs.")]
+    [Description("Evaluates C# top-level statements in the active Unity Editor with top-level await. Pre-imports System, System.Collections.Generic, System.Linq, UnityEngine, UnityEditor, and UnityLeanMcp. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Includes a built-in Inspect utility to speed up scene, object, asset, UI, and capture analysis—read the unity://inspect/help resource for its docs.")]
     public async Task<CallToolResult> UnityEvalAsync(
         [Description("Raw C# source text to evaluate. Send plain text directly—do not wrap in JSON.")] string code,
         IProgress<ProgressNotificationValue>? progress = null,

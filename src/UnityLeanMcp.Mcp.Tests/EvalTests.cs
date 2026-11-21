@@ -39,11 +39,97 @@ public class EvalTests
     public async Task TestEvalWithoutUsings_FailsToResolveUnimportedType()
     {
         var client = _fixture.SharedClient;
-        // Mathf is in UnityEngine; without 'using UnityEngine;', this must fail to compile
-        var result = await client.CallToolAsync("unity_eval", new { code = "return Mathf.Sqrt(16f);" });
+        // Path is in System.IO (not in the baseline default usings); without 'using System.IO;', this must fail to compile
+        var result = await client.CallToolAsync("unity_eval", new { code = "return Path.Combine(\"a\", \"b\");" });
 
         Assert.True(result.IsError);
-        Assert.Contains("CS0103", result.Text); // The name 'Mathf' does not exist in the current context
+        Assert.Contains("CS0103", result.Text); // The name 'Path' does not exist in the current context
+    }
+
+    [Fact]
+    public async Task TestEvalDefaultUsings_CompileCommonUnityAndLinqSnippetsOnFirstCall()
+    {
+        var client = _fixture.SharedClient;
+        string code =
+            "var go = new GameObject(\"DefaultUsingsEvalTest\");\n" +
+            "try\n" +
+            "{\n" +
+            "    var values = new List<int> { 1, 2, 3, 4 };\n" +
+            "    var doubled = values.Where(v => v > 2).Select(v => v * 2).Take(2).ToList();\n" +
+            "    int assetHits = AssetDatabase.FindAssets(\"EvalHandler\").Length;\n" +
+            "    int selectionCount = Selection.objects.Length;\n" +
+            "    float root = Mathf.Sqrt(16f);\n" +
+            "    Debug.Log(\"default-usings-ok\");\n" +
+            "    return $\"{go.name}:{doubled.Count}:{doubled[0]}:{assetHits > 0}:{selectionCount >= 0}:{root}:{Guid.Empty == Guid.Empty}:{!string.IsNullOrEmpty(Inspect.SceneState())}\";\n" +
+            "}\n" +
+            "finally\n" +
+            "{\n" +
+            "    GameObject.DestroyImmediate(go);\n" +
+            "}";
+
+        var result = await client.CallToolAsync("unity_eval", new { code });
+
+        Assert.False(result.IsError, result.Text);
+        Assert.Contains("DefaultUsingsEvalTest:2:6:True:True:4:True:True", result.Text);
+        Assert.Contains("default-usings-ok", result.Text);
+    }
+
+    [Fact]
+    public async Task TestEvalExplicitDefaultUsings_CompileCleanlyAndPreserveDiagnosticCoordinates()
+    {
+        var client = _fixture.SharedClient;
+
+        string validCode =
+            "using System;\n" +
+            "using System.Collections.Generic;\n" +
+            "using System.Linq;\n" +
+            "using UnityEngine;\n" +
+            "using UnityEditor;\n" +
+            "using UnityLeanMcp;\n" +
+            "return new List<int> { 1, 2, 3 }.Where(x => x > 1).Count();";
+
+        var validResult = await client.CallToolAsync("unity_eval", new { code = validCode });
+        Assert.False(validResult.IsError, validResult.Text);
+        Assert.Contains("2", validResult.Text);
+
+        string failingCode =
+            "using System;\n" +
+            "using System.Collections.Generic;\n" +
+            "using System.Linq;\n" +
+            "using UnityEngine;\n" +
+            "using UnityEditor;\n" +
+            "using UnityLeanMcp;\n" +
+            "int ok = 1;\n" +
+            "    unknownSymbol;";
+
+        var failingResult = await client.CallToolAsync("unity_eval", new { code = failingCode });
+        Assert.True(failingResult.IsError);
+        Assert.DoesNotContain("CS0105", failingResult.Text);
+        Assert.Contains("snippet line 8, col 5: error CS0103", failingResult.Text);
+    }
+
+    [Fact]
+    public async Task TestEvalAmbiguousSymbols_ReportCS0104HintAndSupportUserAliases()
+    {
+        var client = _fixture.SharedClient;
+
+        var ambiguousResult = await client.CallToolAsync("unity_eval", new { code = "return Random.Range(0, 1);" });
+        Assert.True(ambiguousResult.IsError);
+        Assert.Contains("CS0104", ambiguousResult.Text);
+        Assert.Contains("Hint: Ambiguous symbol", ambiguousResult.Text);
+
+        string aliasedCode =
+            "using Object = UnityEngine.Object;\n" +
+            "using Random = System.Random;\n" +
+            "using System.Diagnostics;\n" +
+            "using Debug = UnityEngine.Debug;\n" +
+            "Debug.Log(\"alias-ok\");\n" +
+            "return typeof(Object).FullName + \":\" + typeof(Random).FullName;";
+
+        var aliasedResult = await client.CallToolAsync("unity_eval", new { code = aliasedCode });
+        Assert.False(aliasedResult.IsError, aliasedResult.Text);
+        Assert.Contains("UnityEngine.Object:System.Random", aliasedResult.Text);
+        Assert.Contains("alias-ok", aliasedResult.Text);
     }
 
     [Fact]

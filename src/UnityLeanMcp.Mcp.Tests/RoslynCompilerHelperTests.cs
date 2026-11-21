@@ -152,4 +152,97 @@ public sealed class RoslynCompilerHelperTests
         Assert.NotNull(candidates);
         Assert.Empty(candidates);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EvalHandler_BuildSource_InjectsBaselineUsingsAndPreservesLineDirective(bool isVoid)
+    {
+        string body = isVoid ? "Debug.Log(1);" : "return 42;";
+        string source = UnityLeanMcp.EvalHandler.BuildSource(body, isVoid);
+
+        Assert.Contains("using System;", source);
+        Assert.Contains("using System.Collections.Generic;", source);
+        Assert.Contains("using System.Linq;", source);
+        Assert.Contains("using UnityEngine;", source);
+        Assert.Contains("using UnityEditor;", source);
+        Assert.Contains("using UnityLeanMcp;", source);
+        Assert.DoesNotContain("using UnityEngine.UI;", source);
+
+        string expectedReturnType = isVoid
+            ? "public static async System.Threading.Tasks.Task Execute(System.Threading.CancellationToken cancellationToken)"
+            : "public static async System.Threading.Tasks.Task<object> Execute(System.Threading.CancellationToken cancellationToken)";
+        Assert.Contains(expectedReturnType, source);
+
+        string normalizedSource = source.Replace("\r\n", "\n");
+        Assert.Contains("#line 1 \"eval\"\n" + body + "\n", normalizedSource);
+    }
+
+    [Fact]
+    public void EvalHandler_BuildSource_DeduplicatesUserUsingsAndEmitsUserDirectivesFirst()
+    {
+        var userUsings = new System.Collections.Generic.List<string>
+        {
+            "global using System;",
+            "using   System . Linq ;",
+            "using global::UnityEngine;",
+            "using /* inline */ UnityLeanMcp;",
+            "using @System.@Collections.@Generic;",
+            "using System.IO;",
+            "using Object = UnityEngine.Object;",
+            "using static UnityEngine.Mathf;"
+        };
+
+        string source = UnityLeanMcp.EvalHandler.BuildSource("return 1;", isVoid: false, userUsings);
+        string normalizedSource = source.Replace("\r\n", "\n");
+
+        Assert.Equal(1, CountOccurrences(normalizedSource, "System;"));
+        Assert.Equal(1, CountOccurrences(normalizedSource, "Linq"));
+        Assert.Equal(1, CountOccurrences(normalizedSource, "UnityEngine;"));
+        Assert.Equal(1, CountOccurrences(normalizedSource, "UnityLeanMcp;"));
+        Assert.Equal(1, CountOccurrences(normalizedSource, "Generic;"));
+        Assert.Contains("using UnityEditor;\n", normalizedSource);
+        Assert.Contains("using System.IO;\n", normalizedSource);
+        Assert.Contains("using Object = UnityEngine.Object;\n", normalizedSource);
+        Assert.Contains("using static UnityEngine.Mathf;\n", normalizedSource);
+
+        int lastUserIdx = normalizedSource.IndexOf("using static UnityEngine.Mathf;", StringComparison.Ordinal);
+        int defaultEditorIdx = normalizedSource.IndexOf("using UnityEditor;", StringComparison.Ordinal);
+        Assert.True(lastUserIdx >= 0 && defaultEditorIdx > lastUserIdx);
+    }
+
+    [Theory]
+    [InlineData("using System;", true, "System")]
+    [InlineData("using   System . Collections . Generic ;", true, "System.Collections.Generic")]
+    [InlineData("using\n// comment\nSystem.Linq;", true, "System.Linq")]
+    [InlineData("using /* c */ global::UnityEngine;", true, "UnityEngine")]
+    [InlineData("global using UnityEditor;", true, "UnityEditor")]
+    [InlineData("using @System;", true, "System")]
+    [InlineData("using staticNamespace.Foo;", true, "staticNamespace.Foo")]
+    [InlineData("using globalNamespace.Bar;", true, "globalNamespace.Bar")]
+    [InlineData("using static UnityEngine.Mathf;", false, null)]
+    [InlineData("global using static System.Math;", false, null)]
+    [InlineData("using Object = UnityEngine.Object;", false, null)]
+    [InlineData("using U = UnityEngine;", false, null)]
+    [InlineData("using", false, null)]
+    [InlineData("", false, null)]
+    public void EvalHandler_TryExtractImportedNamespace_ParsesDirectivesAccurately(string directive, bool expectedSuccess, string? expectedNamespace)
+    {
+        bool actualSuccess = UnityLeanMcp.EvalHandler.TryExtractImportedNamespace(directive, out string? actualNamespace);
+
+        Assert.Equal(expectedSuccess, actualSuccess);
+        Assert.Equal(expectedNamespace, actualNamespace);
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+        return count;
+    }
 }

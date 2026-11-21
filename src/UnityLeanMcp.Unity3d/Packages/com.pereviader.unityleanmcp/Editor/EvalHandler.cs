@@ -234,19 +234,48 @@ namespace UnityLeanMcp
             return RoslynCompilerHelper.CompileAndEmit(source, out assemblyBytes, out errors);
         }
 
-        private static string BuildSource(string methodBody, bool isVoid, List<string> userUsings = null)
+        internal static readonly string[] DefaultUsingNamespaces =
+        {
+            "System",
+            "System.Collections.Generic",
+            "System.Linq",
+            "UnityEngine",
+            "UnityEditor",
+            "UnityLeanMcp"
+        };
+
+        internal static string BuildSource(string methodBody, bool isVoid, List<string> userUsings = null)
         {
             var sb = new StringBuilder();
+            var importedNamespaces = new HashSet<string>(StringComparer.Ordinal);
 
             if (userUsings != null && userUsings.Count > 0)
             {
                 foreach (var u in userUsings)
                 {
+                    if (string.IsNullOrWhiteSpace(u))
+                    {
+                        continue;
+                    }
+
                     sb.AppendLine(u);
+                    if (TryExtractImportedNamespace(u, out var ns))
+                    {
+                        importedNamespaces.Add(ns);
+                    }
                 }
             }
 
-            sb.AppendLine("using UnityLeanMcp;");
+            foreach (var defaultNs in DefaultUsingNamespaces)
+            {
+                if (!importedNamespaces.Contains(defaultNs))
+                {
+                    sb.Append("using ");
+                    sb.Append(defaultNs);
+                    sb.AppendLine(";");
+                }
+            }
+
             sb.AppendLine();
             sb.AppendLine("public static class __UnityLeanMcpEvalRunner");
             sb.AppendLine("{");
@@ -264,6 +293,142 @@ namespace UnityLeanMcp
             sb.AppendLine("    }");
             sb.AppendLine("}");
             return sb.ToString();
+        }
+
+        internal static bool TryExtractImportedNamespace(string directive, out string normalizedNamespace)
+        {
+            normalizedNamespace = null;
+            if (string.IsNullOrWhiteSpace(directive))
+            {
+                return false;
+            }
+
+            string cleaned = StripDirectiveComments(directive).Trim();
+            if (cleaned.Length == 0 || cleaned[cleaned.Length - 1] != ';')
+            {
+                return false;
+            }
+
+            cleaned = cleaned.Substring(0, cleaned.Length - 1).Trim();
+            if (cleaned.Length == 0 || cleaned.IndexOf('=') >= 0)
+            {
+                return false;
+            }
+
+            TryConsumeLeadingKeyword(cleaned, "global", out cleaned);
+            if (!TryConsumeLeadingKeyword(cleaned, "using", out cleaned))
+            {
+                return false;
+            }
+
+            if (TryConsumeLeadingKeyword(cleaned, "static", out _))
+            {
+                return false;
+            }
+
+            var compactBuilder = new StringBuilder(cleaned.Length);
+            for (int i = 0; i < cleaned.Length; i++)
+            {
+                if (!char.IsWhiteSpace(cleaned[i]))
+                {
+                    compactBuilder.Append(cleaned[i]);
+                }
+            }
+
+            string ns = compactBuilder.ToString();
+            if (ns.StartsWith("global::", StringComparison.Ordinal))
+            {
+                ns = ns.Substring("global::".Length);
+            }
+
+            if (ns.IndexOf('@') >= 0)
+            {
+                string[] segments = ns.Split('.');
+                for (int i = 0; i < segments.Length; i++)
+                {
+                    if (segments[i].Length > 1 && segments[i][0] == '@')
+                    {
+                        segments[i] = segments[i].Substring(1);
+                    }
+                }
+
+                ns = string.Join(".", segments);
+            }
+
+            if (string.IsNullOrEmpty(ns))
+            {
+                return false;
+            }
+
+            normalizedNamespace = ns;
+            return true;
+        }
+
+        private static string StripDirectiveComments(string text)
+        {
+            var sb = new StringBuilder(text.Length);
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '/' && i + 1 < text.Length)
+                {
+                    char next = text[i + 1];
+                    if (next == '/')
+                    {
+                        i += 2;
+                        while (i < text.Length && text[i] != '\r' && text[i] != '\n')
+                        {
+                            i++;
+                        }
+
+                        sb.Append(' ');
+                        if (i < text.Length)
+                        {
+                            sb.Append(text[i]);
+                        }
+
+                        continue;
+                    }
+
+                    if (next == '*')
+                    {
+                        i += 2;
+                        while (i + 1 < text.Length && !(text[i] == '*' && text[i + 1] == '/'))
+                        {
+                            i++;
+                        }
+
+                        if (i + 1 < text.Length)
+                        {
+                            i++;
+                        }
+
+                        sb.Append(' ');
+                        continue;
+                    }
+                }
+
+                sb.Append(c);
+            }
+
+            return sb.ToString();
+        }
+
+        private static bool TryConsumeLeadingKeyword(string text, string keyword, out string remainder)
+        {
+            remainder = text;
+            if (!text.StartsWith(keyword, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (text.Length == keyword.Length || !char.IsWhiteSpace(text[keyword.Length]))
+            {
+                return false;
+            }
+
+            remainder = text.Substring(keyword.Length).TrimStart();
+            return true;
         }
 
 
