@@ -13,6 +13,7 @@ internal static class InspectHelpCatalog
         "\n" +
         "Scene & Hierarchy:\n" +
         "• string Find(string namePattern, bool includeInactive = true, int maxItems = 100)\n" +
+        "• string FindByComponent(string typeName, bool includeInactive = true, int maxItems = 100)\n" +
         "• string Hierarchy()\n" +
         "• string Hierarchy(bool includeUiDetails)\n" +
         "• string Hierarchy(int maxDepth, int maxItems = 100, bool includeUiDetails = false)\n" +

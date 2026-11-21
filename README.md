@@ -36,7 +36,8 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | **Scene & Hierarchy** | `Inspect.Hierarchy([root], [maxDepth], [maxItems], [includeUiDetails])` | Formatted hierarchy tree of active/loaded scenes, open Prefab Stage, a root `GameObject`/`Transform`, or a scene/prefab by name (supports `includeUiDetails: true` for compact uGUI rect, canvas, text, and raycast tokens). |
 | | `Inspect.UIDocument([root], [maxDepth], [maxItems])` | Traverses UI Toolkit `UIDocument` instances or `VisualElement` trees with element types, classes, layout rects, and text content. |
 | | `Inspect.PrefabStage([maxDepth], [maxItems])` | Inspects active Prefab Stage (asset path, mode, root GameObject, dirty state, auto-save status, and contents hierarchy). |
-| | `Inspect.Find(namePattern, [includeInactive], [maxItems])` | Finds GameObjects across loaded scenes by exact name or wildcard glob pattern (e.g. `*Player*`). |
+| | `Inspect.Find(namePattern, [includeInactive], [maxItems])` | Finds GameObjects across an active Prefab Stage and loaded scenes by substring or wildcard glob pattern (e.g. `*Player*`). |
+| | `Inspect.FindByComponent(typeName, [includeInactive], [maxItems])` | Finds GameObjects carrying a component matching a type name, full type name, base type, interface, or wildcard pattern across an active Prefab Stage and loaded scenes. |
 | | `Inspect.MissingScripts([maxItems])` | Detects GameObjects with missing or unassigned MonoBehaviour scripts. |
 | | `Inspect.SceneState()` | Summarizes loaded scenes, active scene, active Prefab Stage (if open), root object count, and dirty state. |
 | **Objects & Components** | `Inspect.GameObject(gameObject, [maxItems])` | Detailed inspection of active state, tag, layer, components, and children (`RectTransform` and `Canvas` aware). |

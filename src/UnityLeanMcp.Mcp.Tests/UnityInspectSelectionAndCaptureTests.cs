@@ -1001,6 +1001,174 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public void Find_SearchesActivePrefabStageAndLoadedScenes()
+    {
+        var prefabRoot = new GameObject("PlayerPrefabRoot");
+        prefabRoot.activeSelf = true;
+        var prefabChild = new GameObject("PlayerWeaponSlot");
+        prefabChild.activeSelf = false;
+        prefabRoot.transform.AddChild(prefabChild.transform);
+
+        var stage = new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/Player.prefab",
+            prefabContentsRoot = prefabRoot
+        };
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+        var sceneGo = new GameObject("PlayerSceneClone");
+        sceneGo.activeSelf = true;
+        SceneManager.Scenes.Add(new Scene
+        {
+            name = "MainScene",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { sceneGo }
+        });
+
+        string allMatches = Inspect.Find("Player", includeInactive: true);
+        Assert.Contains("GameObjects matching 'Player' (3):", allMatches);
+        Assert.Contains("prefabStage: \"Assets/Prefabs/Player.prefab\"", allMatches);
+        Assert.Contains("PlayerWeaponSlot", allMatches);
+        Assert.Contains("scene: \"MainScene\"", allMatches);
+
+        string activeOnly = Inspect.Find("PlayerWeaponSlot", includeInactive: false);
+        Assert.Equal("(No GameObjects found matching 'PlayerWeaponSlot' in Prefab Stage or loaded scenes)", activeOnly);
+    }
+
+    private sealed class TestPlayerController : MonoBehaviour, ITestDamageable
+    {
+    }
+
+    private interface ITestDamageable
+    {
+    }
+
+    [Fact]
+    public void Find_CoversPrefabStageOnlyInactiveParentDestroyedRootAndTruncation()
+    {
+        Assert.Equal("(No scenes currently loaded)", Inspect.Find("Anything"));
+
+        var destroyedRoot = new GameObject("DestroyedPrefabRoot");
+        UnityEngine.Object.DestroyImmediate(destroyedRoot);
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => new PrefabStage
+        {
+            assetPath = null!,
+            prefabContentsRoot = destroyedRoot
+        };
+        Assert.Equal("(No GameObjects found matching 'Anything' in Prefab Stage or loaded scenes)", Inspect.Find("Anything"));
+
+        var prefabRoot = new GameObject("PrefabRoot");
+        prefabRoot.activeSelf = false;
+        var activeChildUnderInactiveParent = new GameObject("ChildUnderInactive");
+        activeChildUnderInactiveParent.activeSelf = true;
+        prefabRoot.transform.AddChild(activeChildUnderInactiveParent.transform);
+
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => new PrefabStage
+        {
+            assetPath = "",
+            prefabContentsRoot = prefabRoot
+        };
+
+        string skippedChild = Inspect.Find("ChildUnderInactive", includeInactive: false);
+        Assert.Equal("(No GameObjects found matching 'ChildUnderInactive' in Prefab Stage or loaded scenes)", skippedChild);
+
+        string includedChild = Inspect.Find("ChildUnderInactive", includeInactive: true);
+        Assert.Contains("prefabStage: \"(Unknown)\"", includedChild);
+        Assert.Contains("inactive", includedChild);
+
+        string exactLimit = Inspect.Find("", includeInactive: true, maxItems: 2);
+        Assert.Contains("GameObjects matching '' (2):", exactLimit);
+        Assert.DoesNotContain("truncated", exactLimit);
+
+        string overLimit = Inspect.Find("", includeInactive: true, maxItems: 0);
+        Assert.Contains("GameObjects matching '' (1):", overLimit);
+        Assert.Contains("... (truncated: maximum item count reached)", overLimit);
+    }
+
+    [Fact]
+    public void FindByComponent_MatchesShortFullBaseInterfaceWildcardAndPrefabStage()
+    {
+        Assert.Equal("(No scenes currently loaded)", Inspect.FindByComponent("Collider"));
+
+        var playerGo = new GameObject("Player");
+        playerGo.activeSelf = true;
+        playerGo.AddComponent<TestPlayerController>();
+        playerGo.AddComponent<Collider>();
+        playerGo.AddRawComponent(null);
+        var destroyedComp = playerGo.AddComponent<Collider>();
+        UnityEngine.Object.DestroyImmediate(destroyedComp);
+
+        var parentDisabled = new GameObject("DisabledParent");
+        parentDisabled.activeSelf = false;
+        var childActiveFlag = new GameObject("ChildWithCollider");
+        childActiveFlag.activeSelf = true;
+        childActiveFlag.AddComponent<Collider>();
+        parentDisabled.transform.AddChild(childActiveFlag.transform);
+
+        SceneManager.Scenes.Add(new Scene
+        {
+            name = "GameplayScene",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { playerGo, parentDisabled }
+        });
+
+        var prefabRoot = new GameObject("PrefabColliderRoot");
+        prefabRoot.activeSelf = true;
+        prefabRoot.AddComponent<Collider>();
+        var stage = new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/Prop.prefab",
+            prefabContentsRoot = prefabRoot
+        };
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+        Assert.Equal("(Component type name is required)", Inspect.FindByComponent("  "));
+
+        string shortMatch = Inspect.FindByComponent("testplayercontroller");
+        Assert.Contains("GameObjects with component 'testplayercontroller' (1):", shortMatch);
+        Assert.Contains("Player [TestPlayerController]", shortMatch);
+        Assert.Contains("scene: \"GameplayScene\"", shortMatch);
+
+        string fullMatch = Inspect.FindByComponent(typeof(TestPlayerController).FullName!);
+        Assert.Contains("Player [TestPlayerController]", fullMatch);
+
+        string monoBehaviourMatch = Inspect.FindByComponent("MonoBehaviour");
+        Assert.Contains("Player [TestPlayerController]", monoBehaviourMatch);
+
+        string behaviourMatch = Inspect.FindByComponent("Behaviour");
+        Assert.Contains("Player [TestPlayerController]", behaviourMatch);
+
+        string interfaceMatch = Inspect.FindByComponent("ITestDamageable");
+        Assert.Contains("Player [TestPlayerController]", interfaceMatch);
+
+        string baseMatch = Inspect.FindByComponent("Component");
+        Assert.Contains("Player [Transform, TestPlayerController, Collider]", baseMatch);
+
+        // Must stop before UnityEngine.Object / System.Object
+        Assert.Contains("(No GameObjects with component 'Object' found", Inspect.FindByComponent("Object"));
+        Assert.Contains("(No GameObjects with component 'UnityEngine.Object' found", Inspect.FindByComponent("UnityEngine.Object"));
+        Assert.Contains("(No GameObjects with component '*Object*' found", Inspect.FindByComponent("*Object*"));
+
+        // Inactive parent must hide child even when child.activeSelf is true
+        string wildcardActiveOnly = Inspect.FindByComponent("*Collider*", includeInactive: false);
+        Assert.Contains("GameObjects with component '*Collider*' (2):", wildcardActiveOnly);
+        Assert.Contains("PrefabColliderRoot [Collider]", wildcardActiveOnly);
+        Assert.Contains("prefabStage: \"Assets/Prefabs/Prop.prefab\"", wildcardActiveOnly);
+        Assert.Contains("Player [Collider]", wildcardActiveOnly);
+        Assert.DoesNotContain("ChildWithCollider", wildcardActiveOnly);
+        Assert.DoesNotContain("truncated", wildcardActiveOnly);
+
+        string includeInactiveAll = Inspect.FindByComponent("*Collider*", includeInactive: true);
+        Assert.Contains("GameObjects with component '*Collider*' (3):", includeInactiveAll);
+        Assert.Contains("ChildWithCollider [Collider]", includeInactiveAll);
+        Assert.Contains("inactive", includeInactiveAll);
+
+        string truncated = Inspect.FindByComponent("*Collider*", includeInactive: true, maxItems: 1);
+        Assert.Contains("GameObjects with component '*Collider*' (1):", truncated);
+        Assert.Contains("... (truncated: maximum item count reached)", truncated);
+    }
+
+    [Fact]
     public void MissingScripts_WhenNoMissingScripts_ReturnsCleanMessage()
     {
         var go = new GameObject("ValidObject");

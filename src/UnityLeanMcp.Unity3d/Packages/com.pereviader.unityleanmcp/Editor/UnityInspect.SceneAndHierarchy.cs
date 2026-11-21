@@ -448,49 +448,82 @@ namespace UnityLeanMcp
                 if (!scene.isLoaded) continue;
 
                 GameObject[] rootObjects = GetRootGameObjectsSafe(scene);
-                if (rootObjects == null || rootObjects.Length == 0) continue;
-
-                var queue = new Queue<Transform>();
-                for (int i = 0; i < rootObjects.Length; i++)
+                if (TraverseRootGameObjectsBfs(rootObjects, (current, go) => visitor(scene, current, go)) == SceneBfsDecision.Stop)
                 {
-                    var rootGo = rootObjects[i];
-                    if (rootGo != null && rootGo.transform != null) queue.Enqueue(rootGo.transform);
-                }
-
-                var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
-                while (queue.Count > 0)
-                {
-                    var current = queue.Dequeue();
-                    if (current == null || !visited.Add(current)) continue;
-
-                    GameObject go = null;
-                    try { go = current.gameObject; } catch { }
-                    if (go == null) continue;
-
-                    SceneBfsDecision decision = visitor(scene, current, go);
-                    if (decision == SceneBfsDecision.Stop) return;
-                    if (decision == SceneBfsDecision.SkipChildren) continue;
-
-                    int childCount = 0;
-                    try { childCount = current.childCount; } catch { }
-                    for (int c = 0; c < childCount; c++)
-                    {
-                        Transform child = null;
-                        try { child = current.GetChild(c); } catch { }
-                        if (child != null) queue.Enqueue(child);
-                    }
+                    return;
                 }
             }
         }
 
+        private static void TraverseActiveHierarchiesBfs(
+            PrefabStage stage,
+            int sceneCount,
+            Func<string, bool, Transform, GameObject, SceneBfsDecision> visitor)
+        {
+            if (stage != null)
+            {
+                GameObject prefabRoot = null;
+                try { prefabRoot = stage.prefabContentsRoot; } catch { }
+                if (prefabRoot != null)
+                {
+                    string assetPath = GetPrefabStageAssetPath(stage);
+                    if (TraverseRootGameObjectsBfs(new[] { prefabRoot }, (current, go) => visitor(assetPath, true, current, go)) == SceneBfsDecision.Stop)
+                    {
+                        return;
+                    }
+                }
+            }
+
+            TraverseLoadedScenesBfs(sceneCount, (scene, current, go) => visitor(scene.name, false, current, go));
+        }
+
+        private static SceneBfsDecision TraverseRootGameObjectsBfs(GameObject[] rootObjects, Func<Transform, GameObject, SceneBfsDecision> visitor)
+        {
+            if (rootObjects == null || rootObjects.Length == 0) return SceneBfsDecision.Continue;
+
+            var queue = new Queue<Transform>();
+            for (int i = 0; i < rootObjects.Length; i++)
+            {
+                var rootGo = rootObjects[i];
+                if (rootGo != null && rootGo.transform != null) queue.Enqueue(rootGo.transform);
+            }
+
+            var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                if (current == null || !visited.Add(current)) continue;
+
+                GameObject go = null;
+                try { go = current.gameObject; } catch { }
+                if (go == null) continue;
+
+                SceneBfsDecision decision = visitor(current, go);
+                if (decision == SceneBfsDecision.Stop) return SceneBfsDecision.Stop;
+                if (decision == SceneBfsDecision.SkipChildren) continue;
+
+                int childCount = 0;
+                try { childCount = current.childCount; } catch { }
+                for (int c = 0; c < childCount; c++)
+                {
+                    Transform child = null;
+                    try { child = current.GetChild(c); } catch { }
+                    if (child != null) queue.Enqueue(child);
+                }
+            }
+
+            return SceneBfsDecision.Continue;
+        }
+
         /// <summary>
-        /// Finds GameObjects matching a wildcard or substring pattern in loaded active scenes.
+        /// Finds GameObjects matching a wildcard or substring pattern in an active Prefab Stage and loaded scenes.
         /// </summary>
         public static string Find(string namePattern, bool includeInactive = true, int maxItems = DefaultMaxItems)
         {
             maxItems = Math.Max(1, maxItems);
+            PrefabStage stage = GetCurrentPrefabStageSafe();
             int sceneCount = GetSceneCountSafe();
-            if (sceneCount == 0) return "(No scenes currently loaded)";
+            if (stage == null && sceneCount == 0) return "(No scenes currently loaded)";
 
             string pattern = namePattern?.Trim() ?? "";
             Regex wildcardRegex = BuildWildcardRegex(pattern);
@@ -498,7 +531,7 @@ namespace UnityLeanMcp
             var matches = new List<string>();
             bool itemLimitReached = false;
 
-            TraverseLoadedScenesBfs(sceneCount, (scene, current, go) =>
+            TraverseActiveHierarchiesBfs(stage, sceneCount, (containerName, isPrefabStage, current, go) =>
             {
                 bool active = false;
                 try { active = go.activeInHierarchy; } catch { }
@@ -517,7 +550,8 @@ namespace UnityLeanMcp
 
                     string path = GetHierarchyPath(current);
                     string status = active ? "active" : "inactive";
-                    matches.Add($"  • {goName} (path: \"{path}\", scene: \"{scene.name}\", {status})");
+                    string containerLabel = isPrefabStage ? $"prefabStage: \"{containerName}\"" : $"scene: \"{containerName}\"";
+                    matches.Add($"  • {goName} (path: \"{path}\", {containerLabel}, {status})");
                 }
 
                 return SceneBfsDecision.Continue;
@@ -525,9 +559,10 @@ namespace UnityLeanMcp
 
             if (matches.Count == 0)
             {
+                string scope = stage != null ? "Prefab Stage or loaded scenes" : "loaded scenes";
                 return string.IsNullOrEmpty(pattern)
-                    ? "(No GameObjects found in loaded scenes)"
-                    : $"(No GameObjects found matching '{pattern}' in loaded scenes)";
+                    ? $"(No GameObjects found in {scope})"
+                    : $"(No GameObjects found matching '{pattern}' in {scope})";
             }
 
             var sb = new StringBuilder();
@@ -536,6 +571,119 @@ namespace UnityLeanMcp
             if (itemLimitReached) sb.AppendLine(ItemTruncationMarker);
 
             return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        /// <summary>
+        /// Finds GameObjects carrying a component matching the given type name, full type name, base type, interface, or wildcard pattern
+        /// in an active Prefab Stage and loaded scenes.
+        /// </summary>
+        public static string FindByComponent(string typeName, bool includeInactive = true, int maxItems = DefaultMaxItems)
+        {
+            maxItems = Math.Max(1, maxItems);
+            string query = typeName?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(query)) return "(Component type name is required)";
+
+            PrefabStage stage = GetCurrentPrefabStageSafe();
+            int sceneCount = GetSceneCountSafe();
+            if (stage == null && sceneCount == 0) return "(No scenes currently loaded)";
+
+            Regex wildcardRegex = BuildWildcardRegex(query);
+            var matches = new List<string>();
+            bool itemLimitReached = false;
+
+            TraverseActiveHierarchiesBfs(stage, sceneCount, (containerName, isPrefabStage, current, go) =>
+            {
+                bool active = false;
+                try { active = go.activeInHierarchy; } catch { }
+                if (!includeInactive && !active) return SceneBfsDecision.SkipChildren;
+
+                Component[] components = null;
+                try { components = go.GetComponents<Component>(); } catch { }
+                if (components == null || components.Length == 0) return SceneBfsDecision.Continue;
+
+                List<string> matchedTypeNames = null;
+                for (int c = 0; c < components.Length; c++)
+                {
+                    var comp = components[c];
+                    if (ReferenceEquals(comp, null) || comp == null) continue;
+
+                    Type compType = comp.GetType();
+                    if (MatchesComponentType(compType, query, wildcardRegex))
+                    {
+                        matchedTypeNames ??= new List<string>();
+                        matchedTypeNames.Add(compType.Name);
+                    }
+                }
+
+                if (matchedTypeNames != null)
+                {
+                    if (matches.Count >= maxItems)
+                    {
+                        itemLimitReached = true;
+                        return SceneBfsDecision.Stop;
+                    }
+
+                    string goName = null;
+                    try { goName = go.name; } catch { }
+                    string path = GetHierarchyPath(current);
+                    string status = active ? "active" : "inactive";
+                    string containerLabel = isPrefabStage ? $"prefabStage: \"{containerName}\"" : $"scene: \"{containerName}\"";
+                    matches.Add($"  • {goName} [{string.Join(", ", matchedTypeNames)}] (path: \"{path}\", {containerLabel}, {status})");
+                }
+
+                return SceneBfsDecision.Continue;
+            });
+
+            if (matches.Count == 0)
+            {
+                string scope = stage != null ? "Prefab Stage or loaded scenes" : "loaded scenes";
+                return $"(No GameObjects with component '{query}' found in {scope})";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"GameObjects with component '{query}' ({matches.Count}):");
+            for (int i = 0; i < matches.Count; i++) sb.AppendLine(matches[i]);
+            if (itemLimitReached) sb.AppendLine(ItemTruncationMarker);
+
+            return LimitOutput(sb.ToString().TrimEnd());
+        }
+
+        private static bool MatchesComponentType(Type compType, string query, Regex wildcardRegex)
+        {
+            if (compType == null) return false;
+
+            for (Type current = compType; current != null && current != typeof(UnityEngine.Object) && current != typeof(object); current = current.BaseType)
+            {
+                if (MatchesTypeName(current, query, wildcardRegex)) return true;
+            }
+
+            try
+            {
+                var interfaces = compType.GetInterfaces();
+                for (int i = 0; i < interfaces.Length; i++)
+                {
+                    if (MatchesTypeName(interfaces[i], query, wildcardRegex)) return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
+        private static bool MatchesTypeName(Type type, string query, Regex wildcardRegex)
+        {
+            if (type == null) return false;
+            string shortName = type.Name;
+            string fullName = type.FullName;
+
+            if (wildcardRegex != null)
+            {
+                return (!string.IsNullOrEmpty(shortName) && wildcardRegex.IsMatch(shortName)) ||
+                       (!string.IsNullOrEmpty(fullName) && wildcardRegex.IsMatch(fullName));
+            }
+
+            return string.Equals(shortName, query, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(fullName, query, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

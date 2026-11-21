@@ -663,5 +663,50 @@ namespace UnityLeanMcpTests
                 Assert.AreEqual(initialCamPos.Value, mainCam.transform.position);
             }
         }
+
+        [Test]
+        public void Find_And_FindByComponent_InspectRealUnityHierarchy_AndRespectFilters()
+        {
+            var root = new GameObject("InspectTest_Root");
+            var childCollider = new GameObject("InspectTest_BoxChild");
+            childCollider.transform.SetParent(root.transform, false);
+            childCollider.AddComponent<BoxCollider>();
+
+            var inactiveSphere = new GameObject("InspectTest_HiddenSphere");
+            inactiveSphere.transform.SetParent(root.transform, false);
+            inactiveSphere.AddComponent<SphereCollider>();
+            inactiveSphere.SetActive(false);
+
+            m_CreatedObjects.Add(root);
+
+            string findMatches = Inspect.Find("InspectTest_*", includeInactive: true);
+            StringAssert.Contains("GameObjects matching 'InspectTest_*' (3):", findMatches);
+            StringAssert.Contains("InspectTest_Root", findMatches);
+            StringAssert.Contains("InspectTest_BoxChild", findMatches);
+            StringAssert.Contains("InspectTest_HiddenSphere", findMatches);
+
+            string findActiveOnly = Inspect.Find("InspectTest_HiddenSphere", includeInactive: false);
+            StringAssert.Contains("(No GameObjects found matching 'InspectTest_HiddenSphere'", findActiveOnly);
+
+            string exactComp = Inspect.FindByComponent("BoxCollider", includeInactive: false);
+            StringAssert.Contains("InspectTest_BoxChild [BoxCollider]", exactComp);
+
+            string fullComp = Inspect.FindByComponent(typeof(BoxCollider).FullName, includeInactive: false);
+            StringAssert.Contains("InspectTest_BoxChild [BoxCollider]", fullComp);
+
+            string baseCollider = Inspect.FindByComponent("Collider", includeInactive: true);
+            StringAssert.Contains("InspectTest_BoxChild [BoxCollider]", baseCollider);
+            StringAssert.Contains("InspectTest_HiddenSphere [SphereCollider]", baseCollider);
+
+            string wildcardActiveOnly = Inspect.FindByComponent("*Collider", includeInactive: false);
+            StringAssert.Contains("InspectTest_BoxChild [BoxCollider]", wildcardActiveOnly);
+            Assert.IsFalse(wildcardActiveOnly.Contains("InspectTest_HiddenSphere"));
+
+            string objectNonMatch = Inspect.FindByComponent("UnityEngine.Object");
+            StringAssert.Contains("(No GameObjects with component 'UnityEngine.Object' found", objectNonMatch);
+
+            string truncated = Inspect.FindByComponent("Collider", includeInactive: true, maxItems: 1);
+            StringAssert.Contains("... (truncated: maximum item count reached)", truncated);
+        }
     }
 }
