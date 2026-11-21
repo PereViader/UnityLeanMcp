@@ -914,4 +914,50 @@ public sealed class ToolFormattingTests
         Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
         Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, text);
     }
+
+    [Fact]
+    public async Task UnityEval_RuntimeException_CompactsTailAndFormatsSnippetLine()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = false,
+            Message = string.Join("\n", new[]
+            {
+                "System.InvalidOperationException: Bad state",
+                "  at GameService.Process () [0x00010] in Assets/Scripts/GameService.cs:42",
+                "  at __UnityLeanMcpEvalRunner.Run () [0x00005] in eval:line 3",
+                "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj) [0x0006a] in <000>:0",
+                "  at UnityLeanMcp.EvalHandler.Execute (System.String code) [0x00050] in Packages/com.pereviader.unityleanmcp/Editor/EvalHandler.cs:120"
+            })
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("GameService.Process();");
+
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Contains("System.InvalidOperationException: Bad state", text);
+        Assert.Contains("at GameService.Process () [0x00010] in Assets/Scripts/GameService.cs:42", text);
+        Assert.Contains("at __UnityLeanMcpEvalRunner.Run () [0x00005] in snippet line 3", text);
+        Assert.DoesNotContain("RuntimeMethodInfo.Invoke", text);
+        Assert.DoesNotContain("UnityLeanMcp.EvalHandler", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_NonExceptionErrorMessage_RemainsUntouched()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        const string message = "Unity is busy with another operation: BUSY test";
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = false,
+            Message = message
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return 1;");
+
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.Equal(message, text);
+    }
 }

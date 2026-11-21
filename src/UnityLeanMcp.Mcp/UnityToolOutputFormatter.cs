@@ -345,7 +345,12 @@ internal sealed partial class UnityToolOutputFormatter
                 isEval: true);
         }
 
-        return string.IsNullOrWhiteSpace(result.Message) ? "Evaluation failed." : result.Message;
+        if (string.IsNullOrWhiteSpace(result.Message))
+        {
+            return "Evaluation failed.";
+        }
+
+        return _diagnosticFormatter.FormatEvalException(result.Message);
     }
 
     private static bool IsAmbiguousReferenceDiagnostic(StructuredCompilerDiagnostic diagnostic)

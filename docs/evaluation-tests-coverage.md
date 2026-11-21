@@ -36,6 +36,8 @@ Public responses are capped at 65,536 UTF-16 characters and 65,536 UTF-8 bytes, 
 
 Warnings are capped at 10; errors take priority within the overall response budget. Test failures show up to 5 detailed entries followed by up to 20 compact summaries with reserved capacity, so one large trace cannot hide every later failure. Preserve multiline assertion messages in details, strip recognized runner plumbing, prioritize pre-execution errors over empty-filter notices, and omit zero skipped counts.
 
+Runtime `unity_eval` exceptions preserve exception messages, inner exception headers, project frames, and `__UnityLeanMcpEvalRunner` frames (with `eval:line N` formatted as `snippet line N`) while stripping eval harness, reflection, and async dispatch tails and leaving non-exception messages without `at ...` stack frames unchanged.
+
 ## Learned pitfalls
 
 ### Reflection signatures and reference discovery

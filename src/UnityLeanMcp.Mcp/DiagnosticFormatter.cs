@@ -28,6 +28,10 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         @"^(?<severity>error|warning)(?::|\s+(?<code>[A-Z0-9]+):|\s+)(?<msg>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex s_SyntheticEvalLocationRegex = new(
+        @"\b(?:eval|snippet):(?:line\s+)?(?<line>\d+)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     public static bool IsPathRootedCrossPlatform(string? path) =>
         FileUriBuilder.IsPathRootedCrossPlatform(path);
 
@@ -177,6 +181,131 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
         return string.Join(Environment.NewLine, lines.Take(maxLines));
     }
+
+    public string FormatEvalException(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return message ?? string.Empty;
+
+        string bounded = BoundInputPrefix(message, McpOutputLimits.MaxFormattedOutputCharacters);
+        var lines = bounded.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+        if (!HasStackFrameLine(lines))
+            return message;
+
+        var result = new List<string>(lines.Length);
+        int segmentStart = 0;
+        while (segmentStart < lines.Length)
+        {
+            int innerEndIndex = FindNextInnerExceptionEnd(lines, segmentStart);
+            int segmentEnd = innerEndIndex >= 0 ? innerEndIndex - 1 : lines.Length - 1;
+
+            if (segmentEnd >= segmentStart)
+            {
+                int trimmedEnd = FindTrimmedEvalEndIndex(lines, segmentStart, segmentEnd, requireFramePrefix: true);
+                for (int i = segmentStart; i <= trimmedEnd; i++)
+                {
+                    result.Add(FormatSyntheticEvalLocation(lines[i]));
+                }
+            }
+
+            if (innerEndIndex >= 0)
+            {
+                result.Add(lines[innerEndIndex]);
+                segmentStart = innerEndIndex + 1;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        while (result.Count > 0 && string.IsNullOrWhiteSpace(result[^1]))
+        {
+            result.RemoveAt(result.Count - 1);
+        }
+
+        return string.Join(Environment.NewLine, result);
+    }
+
+    private static string BoundInputPrefix(string value, int maxCharacters) =>
+        value.Length > maxCharacters
+            ? value[..McpOutputLimits.GetSafePrefixLength(value, maxCharacters)]
+            : value;
+
+    private static bool HasStackFrameLine(string[] lines)
+    {
+        foreach (string line in lines)
+        {
+            if (line.TrimStart().StartsWith("at ", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int FindNextInnerExceptionEnd(string[] lines, int startIndex)
+    {
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            if (lines[i].TrimStart().StartsWith("--- End of inner exception stack trace ---", StringComparison.Ordinal))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindTrimmedEvalEndIndex(
+        string[] lines,
+        int startIndex,
+        int endIndexInclusive,
+        bool requireFramePrefix)
+    {
+        int markerIndex = -1;
+        for (int i = startIndex; i <= endIndexInclusive; i++)
+        {
+            string trimmed = lines[i].TrimStart();
+            if ((!requireFramePrefix || IsStackFrameLine(trimmed)) && IsEvalHarnessMarker(trimmed))
+            {
+                markerIndex = i;
+                break;
+            }
+        }
+
+        int endIndex = markerIndex >= 0 ? markerIndex - 1 : endIndexInclusive;
+        while (endIndex >= startIndex)
+        {
+            string trimmed = lines[endIndex].TrimStart();
+            bool isPlumbing = IsAsyncLocationBoundary(trimmed) ||
+                              ((!requireFramePrefix || IsStackFrameLine(trimmed)) && IsEvalDispatchPlumbing(trimmed));
+            if (!isPlumbing)
+            {
+                break;
+            }
+
+            endIndex--;
+        }
+
+        return endIndex;
+    }
+
+    private static bool IsStackFrameLine(string trimmedLine) =>
+        trimmedLine.StartsWith("at ", StringComparison.Ordinal) ||
+        trimmedLine.StartsWith("(wrapper ", StringComparison.Ordinal);
+
+    private static bool IsEvalHarnessMarker(string trimmedLine) =>
+        trimmedLine.Contains("UnityLeanMcp.EvalHandler", StringComparison.Ordinal) ||
+        trimmedLine.Contains("UnityLeanMcp.OperationExecutionEngine", StringComparison.Ordinal);
+
+    private static bool IsEvalDispatchPlumbing(string trimmedLine) =>
+        IsInvocationPlumbing(trimmedLine) ||
+        trimmedLine.Contains("System.Runtime.ExceptionServices.ExceptionDispatchInfo", StringComparison.Ordinal) ||
+        trimmedLine.Contains("System.Runtime.CompilerServices.TaskAwaiter", StringComparison.Ordinal);
+
+    private static bool IsAsyncLocationBoundary(string trimmedLine) =>
+        trimmedLine.StartsWith("--- End of stack trace from previous location", StringComparison.Ordinal);
+
+    private static string FormatSyntheticEvalLocation(string line) =>
+        s_SyntheticEvalLocationRegex.Replace(line, "snippet line ${line}");
 
     internal static bool IsProjectLine(string line)
     {

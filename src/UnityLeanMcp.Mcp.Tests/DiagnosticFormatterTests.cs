@@ -751,6 +751,130 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.DoesNotContain("Assert.AreEqual", compacted);
     }
 
+    [Fact]
+    public void FormatEvalException_StandardExceptionWithReflectionAndHarnessTail_StripsTailAndFormatsEvalLine()
+    {
+        string message = string.Join("\n", new[]
+        {
+            "System.NullReferenceException: Object reference not set to an instance of an object",
+            "  at GameService.Process () [0x00012] in Assets/Scripts/GameService.cs:42",
+            "  at __UnityLeanMcpEvalRunner.Run () [0x00005] in eval:line 3",
+            "  at (wrapper managed-to-native) System.Reflection.RuntimeMethodInfo.InternalInvoke()",
+            "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj) [0x0006a] in <000>:0",
+            "  at UnityLeanMcp.EvalHandler.Execute (System.String code) [0x00050] in Packages/com.pereviader.unityleanmcp/Editor/EvalHandler.cs:120"
+        });
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Contains("System.NullReferenceException: Object reference not set to an instance of an object", formatted);
+        Assert.Contains("at GameService.Process () [0x00012] in Assets/Scripts/GameService.cs:42", formatted);
+        Assert.Contains("at __UnityLeanMcpEvalRunner.Run () [0x00005] in snippet line 3", formatted);
+        Assert.DoesNotContain("InternalInvoke", formatted);
+        Assert.DoesNotContain("RuntimeMethodInfo.Invoke", formatted);
+        Assert.DoesNotContain("UnityLeanMcp.EvalHandler", formatted);
+    }
+
+    [Fact]
+    public void FormatEvalException_AsyncExceptionWithDispatchInfoAndTaskAwaiter_StripsOrphanedBoundaryAndTail()
+    {
+        string message = string.Join("\n", new[]
+        {
+            "System.InvalidOperationException: Async boom",
+            "  at MyAsyncHelper.FailAsync () [0x00010] in Assets/Scripts/MyAsyncHelper.cs:18",
+            "  at __UnityLeanMcpEvalRunner+<RunAsync>d__0.MoveNext () [0x00020] in eval:line 5",
+            "--- End of stack trace from previous location ---",
+            "  at System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw () [0x0000c] in <000>:0",
+            "  at System.Runtime.CompilerServices.TaskAwaiter.ThrowForNonSuccess (System.Threading.Tasks.Task task) [0x0003e] in <000>:0",
+            "  at System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification (System.Threading.Tasks.Task task) [0x00028] in <000>:0",
+            "  at UnityLeanMcp.OperationExecutionEngine.PumpTasks () [0x00030] in Packages/com.pereviader.unityleanmcp/Editor/OperationExecutionEngine.cs:88"
+        });
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Contains("System.InvalidOperationException: Async boom", formatted);
+        Assert.Contains("at MyAsyncHelper.FailAsync () [0x00010] in Assets/Scripts/MyAsyncHelper.cs:18", formatted);
+        Assert.Contains("at __UnityLeanMcpEvalRunner+<RunAsync>d__0.MoveNext () [0x00020] in snippet line 5", formatted);
+        Assert.DoesNotContain("End of stack trace from previous location", formatted);
+        Assert.DoesNotContain("ExceptionDispatchInfo", formatted);
+        Assert.DoesNotContain("TaskAwaiter", formatted);
+        Assert.DoesNotContain("OperationExecutionEngine", formatted);
+    }
+
+    [Fact]
+    public void FormatEvalException_MultilineMessage_PreservesAllMessageLines()
+    {
+        string message = string.Join("\n", new[]
+        {
+            "System.InvalidOperationException: First line of message",
+            "Second line of message (UnityLeanMcp.EvalHandler mentioned in text)",
+            "Third line of message",
+            "  at Foo.Bar () in Assets/Scripts/Foo.cs:10",
+            "  at __UnityLeanMcpEvalRunner.Run () in eval:line 1",
+            "  at UnityLeanMcp.EvalHandler.Execute () in Packages/com.pereviader.unityleanmcp/Editor/EvalHandler.cs:100"
+        });
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Contains("First line of message", formatted);
+        Assert.Contains("Second line of message (UnityLeanMcp.EvalHandler mentioned in text)", formatted);
+        Assert.Contains("Third line of message", formatted);
+        Assert.Contains("at Foo.Bar () in Assets/Scripts/Foo.cs:10", formatted);
+        Assert.Contains("at __UnityLeanMcpEvalRunner.Run () in snippet line 1", formatted);
+        Assert.DoesNotContain("EvalHandler.Execute", formatted);
+    }
+
+    [Fact]
+    public void FormatEvalException_InnerExceptionChain_PreservesHeadersAndStripsHarnessTail()
+    {
+        string message = string.Join("\n", new[]
+        {
+            "System.AggregateException: One or more errors occurred. (Inner boom)",
+            " ---> System.InvalidOperationException: Inner boom",
+            "  at InnerService.DoWork () [0x00010] in Assets/Scripts/InnerService.cs:12",
+            "  at OuterService.Run () [0x00020] in Assets/Scripts/OuterService.cs:25",
+            "   --- End of inner exception stack trace ---",
+            "  at OuterService.Call () [0x00030] in Assets/Scripts/OuterService.cs:40",
+            "  at __UnityLeanMcpEvalRunner.Run () [0x00005] in eval:line 2",
+            "  at System.Reflection.RuntimeMethodInfo.Invoke (System.Object obj) [0x0006a] in <000>:0",
+            "  at UnityLeanMcp.EvalHandler.Execute (System.String code) [0x00050] in Packages/com.pereviader.unityleanmcp/Editor/EvalHandler.cs:120"
+        });
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Contains("System.AggregateException: One or more errors occurred. (Inner boom)", formatted);
+        Assert.Contains("---> System.InvalidOperationException: Inner boom", formatted);
+        Assert.Contains("at InnerService.DoWork ()", formatted);
+        Assert.Contains("--- End of inner exception stack trace ---", formatted);
+        Assert.Contains("at OuterService.Call ()", formatted);
+        Assert.Contains("at __UnityLeanMcpEvalRunner.Run () [0x00005] in snippet line 2", formatted);
+        Assert.DoesNotContain("RuntimeMethodInfo.Invoke", formatted);
+        Assert.DoesNotContain("UnityLeanMcp.EvalHandler", formatted);
+    }
+
+    [Theory]
+    [InlineData("Unity version 2020.3 is not supported. Minimum supported version is 2021.3.")]
+    [InlineData("Unity is busy with another operation: BUSY test")]
+    [InlineData("Evaluation timed out or failed without stack frames.")]
+    public void FormatEvalException_NonExceptionMessageWithoutStackFrames_ReturnsUnchanged(string message)
+    {
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Equal(message, formatted);
+    }
+
+    [Theory]
+    [InlineData(@"  at GameService.Process () in C:\Projects\Game\Assets\Scripts\GameService.cs:line 42")]
+    [InlineData(@"  at GameService.Process () in /Users/dev/Game/Assets/Scripts/GameService.cs:42")]
+    public void FormatEvalException_CrossPlatformPaths_PreservesProjectFrames(string frame)
+    {
+        string message = $"System.Exception: Fail\n{frame}\n  at UnityLeanMcp.EvalHandler.Execute ()";
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Contains(frame, formatted);
+        Assert.DoesNotContain("UnityLeanMcp.EvalHandler", formatted);
+    }
+
     private sealed class TestCustomDiagnosticFormatter : IDiagnosticFormatter
     {
         public bool ExtractSourceLocationCalled { get; private set; }
