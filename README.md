@@ -38,7 +38,7 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | | `Inspect.PrefabStage([maxDepth], [maxItems])` | Inspects active Prefab Stage (asset path, mode, root GameObject, dirty state, auto-save status, and contents hierarchy). |
 | | `Inspect.Find(namePattern, [includeInactive], [maxItems])` | Finds GameObjects across an active Prefab Stage and loaded scenes by substring or wildcard glob pattern (e.g. `*Player*`). |
 | | `Inspect.FindByComponent(typeName, [includeInactive], [maxItems])` | Finds GameObjects carrying a component matching a type name, full type name, base type, interface, or wildcard pattern across an active Prefab Stage and loaded scenes. |
-| | `Inspect.MissingScripts([maxItems])` | Detects GameObjects with missing or unassigned MonoBehaviour scripts. |
+| | `Inspect.Audit([targetOrAssetPath])` / `Inspect.Audit(root)` | Performs a one-shot integrity audit across an active Prefab Stage and loaded scenes, a `GameObject` subtree, a loaded scene, a prefab asset path, or a folder of prefabs (detecting missing scripts, broken `ObjectReference`s, broken `UnityEvent` listeners, error shaders, duplicate `AudioListener`/`EventSystem`, and missing `MainCamera` tag). Costly operation—run on the smallest appropriate subset. |
 | | `Inspect.SceneState()` | Summarizes loaded scenes, active scene, active Prefab Stage (if open), root object count, and dirty state. |
 | **Objects & Components** | `Inspect.GameObject(gameObject, [maxItems])` | Detailed inspection of active state, tag, layer, components, and children (`RectTransform` and `Canvas` aware). |
 | | `Inspect.Component(component, [maxItems])` | Serialized fields and properties without instantiating copies or mutating state. |

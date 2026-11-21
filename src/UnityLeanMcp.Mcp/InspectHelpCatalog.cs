@@ -22,7 +22,6 @@ internal static class InspectHelpCatalog
         "• string Hierarchy(GameObject root, int maxDepth = 32, int maxItems = 100, bool includeUiDetails = false)\n" +
         "• string Hierarchy(string sceneName, int maxDepth = 32, int maxItems = 100, bool includeUiDetails = false)\n" +
         "• string Hierarchy(Transform root, int maxDepth = 32, int maxItems = 100, bool includeUiDetails = false)\n" +
-        "• string MissingScripts(int maxItems = 100)\n" +
         "• string PrefabStage()\n" +
         "• string PrefabStage(int maxDepth, int maxItems = 100)\n" +
         "• string SceneState()\n" +

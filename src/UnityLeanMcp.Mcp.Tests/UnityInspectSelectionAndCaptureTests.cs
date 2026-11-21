@@ -1167,44 +1167,4 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         Assert.Contains("GameObjects with component '*Collider*' (1):", truncated);
         Assert.Contains("... (truncated: maximum item count reached)", truncated);
     }
-
-    [Fact]
-    public void MissingScripts_WhenNoMissingScripts_ReturnsCleanMessage()
-    {
-        var go = new GameObject("ValidObject");
-        go.AddComponent<Collider>();
-
-        var scene = new Scene
-        {
-            name = "CleanScene",
-            isLoaded = true,
-            RootObjects = new List<GameObject> { go }
-        };
-        SceneManager.Scenes.Add(scene);
-
-        string result = Inspect.MissingScripts();
-        Assert.Equal("(No missing MonoBehaviour scripts found in loaded scenes)", result);
-    }
-
-    [Fact]
-    public void MissingScripts_WhenMissingScriptsExist_ReportsGameObjectAndComponentIndices()
-    {
-        var go = new GameObject("BrokenObject");
-        go.AddComponent<Collider>();
-        go.AddRawComponent(null);
-
-        var scene = new Scene
-        {
-            name = "BrokenScene",
-            isLoaded = true,
-            RootObjects = new List<GameObject> { go }
-        };
-        SceneManager.Scenes.Add(scene);
-
-        string result = Inspect.MissingScripts();
-        Assert.Contains("Missing MonoBehaviour scripts found (1 missing across 1 GameObjects):", result);
-        Assert.Contains("BrokenObject", result);
-        Assert.Contains("component index [2]", result);
-        Assert.Contains("BrokenScene", result);
-    }
 }

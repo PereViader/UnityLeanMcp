@@ -78,7 +78,6 @@ public class UnityResourcesTests
         nameof(Inspect.Hierarchy) or
         nameof(Inspect.Find) or
         nameof(Inspect.FindByComponent) or
-        nameof(Inspect.MissingScripts) or
         nameof(Inspect.SceneState) or
         nameof(Inspect.PrefabStage) or
         nameof(Inspect.UIDocument) => "Scene & Hierarchy",

@@ -687,64 +687,6 @@ namespace UnityLeanMcp
         }
 
         /// <summary>
-        /// Scans active scenes for GameObjects with missing MonoBehaviour components (Component == null).
-        /// </summary>
-        public static string MissingScripts(int maxItems = DefaultMaxItems)
-        {
-            maxItems = Math.Max(1, maxItems);
-            int sceneCount = GetSceneCountSafe();
-            if (sceneCount == 0) return "(No scenes currently loaded)";
-
-            var missingEntries = new List<string>();
-            int totalMissingCount = 0;
-            bool itemLimitReached = false;
-
-            TraverseLoadedScenesBfs(sceneCount, (scene, current, go) =>
-            {
-                Component[] components = null;
-                try { components = go.GetComponents<Component>(); } catch { }
-
-                if (components == null) return SceneBfsDecision.Continue;
-
-                var missingIndices = new List<int>();
-                for (int c = 0; c < components.Length; c++)
-                {
-                    if (ReferenceEquals(components[c], null) || components[c] == null) missingIndices.Add(c);
-                }
-
-                if (missingIndices.Count > 0)
-                {
-                    totalMissingCount += missingIndices.Count;
-                    if (missingEntries.Count < maxItems)
-                    {
-                        string path = GetHierarchyPath(current);
-                        string indicesStr = string.Join(", ", missingIndices);
-                        string scriptWord = missingIndices.Count == 1 ? "missing script" : "missing scripts";
-                        missingEntries.Add($"  • {go.name} (path: \"{path}\", scene: \"{scene.name}\"): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]");
-                    }
-                    else
-                    {
-                        itemLimitReached = true;
-                    }
-                }
-
-                return SceneBfsDecision.Continue;
-            });
-
-            if (missingEntries.Count == 0)
-            {
-                return "(No missing MonoBehaviour scripts found in loaded scenes)";
-            }
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"Missing MonoBehaviour scripts found ({totalMissingCount} missing across {missingEntries.Count} GameObjects):");
-            for (int i = 0; i < missingEntries.Count; i++) sb.AppendLine(missingEntries[i]);
-            if (itemLimitReached) sb.AppendLine(ItemTruncationMarker);
-
-            return LimitOutput(sb.ToString().TrimEnd());
-        }
-
-        /// <summary>
         /// Returns active scene name, path, root GameObject count, isDirty state, and loaded scenes summary,
         /// as well as active Prefab Stage details if open.
         /// </summary>
