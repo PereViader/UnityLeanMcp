@@ -51,6 +51,9 @@ internal sealed partial class UnityToolOutputFormatter
             isSuccess: result.Success).TrimEnd();
     }
 
+    internal const string PlayModeRefreshBypassNotice =
+        "[Note: PlayMode active; AssetDatabase refresh was skipped so evaluated against live runtime state.]";
+
     public string FormatEvalResult(UnityEvalResult result, string projectRoot)
     {
         var logs = result.Logs ?? new List<ConsoleLogEntry>();
@@ -59,6 +62,11 @@ internal sealed partial class UnityToolOutputFormatter
         var output = new BoundedTextBuilder(
             McpOutputLimits.MaxFormattedOutputCharacters,
             McpOutputLimits.AggregateOutputTruncationMarker);
+
+        if (result.RefreshSkippedDueToPlayMode)
+        {
+            output.AppendLine(PlayModeRefreshBypassNotice);
+        }
 
         void AppendSection(string header, string content)
         {

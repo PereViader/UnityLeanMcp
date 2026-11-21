@@ -388,7 +388,7 @@ public class UnityClient : IUnityClient
 
         string escapedCode = ProtocolCodec.EscapeLine(code);
 
-        return await DispatchMutatingCommandAsync<UnityEvalResult>(
+        UnityEvalResult result = await DispatchMutatingCommandAsync<UnityEvalResult>(
             operationKind: "eval",
             operationDisplayName: "evaluation",
             commandFactory: opId => $"EVAL {opId} {escapedCode}",
@@ -429,6 +429,9 @@ public class UnityClient : IUnityClient
             initialProgressMessage: "Executing evaluation...",
             onImmediateResult: null,
             cancellationToken: cancellationToken);
+
+        result.RefreshSkippedDueToPlayMode = isPlayMode;
+        return result;
     }
 
     public virtual async Task<UnityTestRunResult> RunTestsAsync(

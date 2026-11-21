@@ -19,6 +19,7 @@ public sealed class AutoRefreshEfficiencyTests
         var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
 
         Assert.True(result.Success);
+        Assert.False(result.RefreshSkippedDueToPlayMode);
         int refreshIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
         int evalIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("EVAL ", StringComparison.Ordinal));
         Assert.True(refreshIndex >= 0);
@@ -34,6 +35,7 @@ public sealed class AutoRefreshEfficiencyTests
         var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
 
         Assert.True(result.Success);
+        Assert.True(result.RefreshSkippedDueToPlayMode);
         Assert.DoesNotContain(context.Transport.Commands, c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
         Assert.Contains(context.Transport.Commands, c => c.StartsWith("EVAL ", StringComparison.Ordinal));
     }
@@ -47,6 +49,7 @@ public sealed class AutoRefreshEfficiencyTests
         var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
 
         Assert.True(result.Success);
+        Assert.False(result.RefreshSkippedDueToPlayMode);
         int refreshIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
         int evalIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("EVAL ", StringComparison.Ordinal));
         Assert.True(refreshIndex >= 0);

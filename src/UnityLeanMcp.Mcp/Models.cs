@@ -207,6 +207,8 @@ public class UnityOperationResult : IOperationResult
 
 public class UnityEvalResult : UnityOperationResult
 {
+    [JsonIgnore]
+    public bool RefreshSkippedDueToPlayMode { get; set; }
 }
 
 public class UnityCompilationException : System.Exception

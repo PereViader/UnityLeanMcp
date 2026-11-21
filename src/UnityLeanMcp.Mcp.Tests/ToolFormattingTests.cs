@@ -784,4 +784,134 @@ public sealed class ToolFormattingTests
         string text = ToolFormattingTestContext.GetResultText(result);
         Assert.Contains("Hint: Ambiguous symbol", text);
     }
+
+    [Fact]
+    public async Task UnityEval_PlayModeBypass_WithPayload_PrependsNotice()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = "100",
+            Logs = [],
+            RefreshSkippedDueToPlayMode = true
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return 50 * 2;");
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, text);
+        Assert.Contains("100", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_PlayModeBypass_WithPayloadAndLogs_PrependsNoticeBeforeResultAndLogs()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = "42",
+            Logs = [new ConsoleLogEntry { LogType = "Log", Message = "step 1" }],
+            RefreshSkippedDueToPlayMode = true
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("Debug.Log(\"step 1\"); return 42;");
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, text);
+        Assert.Contains("Result:", text);
+        Assert.Contains("42", text);
+        Assert.Contains("Logs:", text);
+        Assert.Contains("step 1", text);
+        Assert.True(text.IndexOf(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, StringComparison.Ordinal)
+            < text.IndexOf("Result:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UnityEval_PlayModeBypass_WithLogsOnly_PrependsNotice()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = null,
+            Logs = [new ConsoleLogEntry { LogType = "Log", Message = "Logged message from PlayMode" }],
+            RefreshSkippedDueToPlayMode = true
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("Debug.Log(\"Logged message from PlayMode\");");
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, text);
+        Assert.Contains("Logged message from PlayMode", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_PlayModeBypass_WithNoReturn_PrependsNotice()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = null,
+            Logs = [],
+            RefreshSkippedDueToPlayMode = true
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("var x = 1;");
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, text);
+        Assert.Contains("(Evaluation completed without a return statement. Use 'return <expr>;' to return a value.)", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_PlayModeBypass_OnError_PrependsNotice()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = false,
+            Message = "NullReferenceException: Object reference not set",
+            Logs = [new ConsoleLogEntry { LogType = "Error", Message = "Failed in PlayMode" }],
+            RefreshSkippedDueToPlayMode = true
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return GameObject.Find(\"Missing\").name;");
+
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, text);
+        Assert.Contains("Error:", text);
+        Assert.Contains("NullReferenceException:", text);
+        Assert.Contains("Logs:", text);
+        Assert.Contains("Failed in PlayMode", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_PlayModeBypass_OversizedPayload_PreservesNoticeWithinOutputBudget()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        string oversizedPayload = new string('A', McpOutputLimits.MaxFormattedOutputCharacters * 2);
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = true,
+            Payload = oversizedPayload,
+            Logs = [],
+            RefreshSkippedDueToPlayMode = true
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return new string('A', 131072);");
+
+        Assert.False(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.StartsWith(UnityToolOutputFormatter.PlayModeRefreshBypassNotice, text);
+        Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.Contains(McpOutputLimits.AggregateOutputTruncationMarker, text);
+    }
 }
