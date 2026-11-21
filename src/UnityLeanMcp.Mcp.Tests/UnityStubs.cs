@@ -337,6 +337,17 @@ namespace UnityEngine
             child.parent = this;
             _children.Add(child);
         }
+        public bool IsChildOf(Transform parent)
+        {
+            var cur = this;
+            var seen = new HashSet<Transform>();
+            while (cur != null && seen.Add(cur))
+            {
+                if (ReferenceEquals(cur, parent)) return true;
+                cur = cur.parent;
+            }
+            return false;
+        }
         public System.Collections.IEnumerator GetEnumerator() => _children.GetEnumerator();
     }
 
@@ -366,10 +377,33 @@ namespace UnityEngine
 
     public class MonoBehaviour : Behaviour { }
     public class Collider : Component { public bool enabled { get; set; } = true; public Bounds bounds { get; set; } }
-    public class Renderer : Component { public bool enabled { get; set; } = true; public Bounds bounds { get; set; } }
+    public class Renderer : Component
+    {
+        public bool enabled { get; set; } = true;
+        public Bounds bounds { get; set; }
+        public Material[]? sharedMaterials { get; set; }
+        public Material? sharedMaterial
+        {
+            get => sharedMaterials != null && sharedMaterials.Length > 0 ? sharedMaterials[0] : null;
+            set => sharedMaterials = value != null ? new[] { value } : Array.Empty<Material>();
+        }
+    }
     public class AudioSource : Behaviour { }
+    public class AudioListener : Behaviour { }
     public class Rigidbody : Component { }
-    public class Material : Object { }
+    public class Shader : Object
+    {
+        public static Func<string, Shader?>? FindFunc;
+        public static Shader? Find(string name) => FindFunc != null ? FindFunc(name) : new Shader { name = name };
+    }
+    public class Material : Object
+    {
+        public Shader? shader { get; set; }
+        public Texture? mainTexture { get; set; }
+        public Material() { }
+        public Material(Shader? shader) { this.shader = shader; }
+        public void SetTexture(string name, Texture? value) { }
+    }
 
     public enum RenderMode
     {
@@ -864,13 +898,38 @@ namespace UnityEditor
         public UnityEngine.Vector4 vector4Value { get; set; }
         public UnityEngine.Rect rectValue { get; set; }
         public UnityEngine.Object? objectReferenceValue { get; set; }
+        public int objectReferenceInstanceIDValue { get; set; }
         public bool isArray { get; set; }
         public int arraySize { get; set; }
 
         private readonly List<SerializedProperty> _visibleProperties = new();
+        private readonly Dictionary<string, SerializedProperty> _relativeProperties = new(StringComparer.Ordinal);
+        private readonly List<SerializedProperty> _arrayElements = new();
         private int _currentIndex = -1;
 
         public void AddChildProperty(SerializedProperty prop) => _visibleProperties.Add(prop);
+
+        public void SetRelativeProperty(string relativePath, SerializedProperty prop)
+        {
+            _relativeProperties[relativePath] = prop;
+        }
+
+        public void AddArrayElement(SerializedProperty element)
+        {
+            _arrayElements.Add(element);
+            isArray = true;
+            arraySize = _arrayElements.Count;
+        }
+
+        public SerializedProperty? FindPropertyRelative(string relativePropertyPath)
+        {
+            return _relativeProperties.TryGetValue(relativePropertyPath, out var prop) ? prop : null;
+        }
+
+        public SerializedProperty GetArrayElementAtIndex(int index)
+        {
+            return _arrayElements[index];
+        }
 
         public bool NextVisible(bool enterChildren)
         {
@@ -894,8 +953,16 @@ namespace UnityEditor
                 vector4Value = cur.vector4Value;
                 rectValue = cur.rectValue;
                 objectReferenceValue = cur.objectReferenceValue;
+                objectReferenceInstanceIDValue = cur.objectReferenceInstanceIDValue;
                 isArray = cur.isArray;
                 arraySize = cur.arraySize;
+                _relativeProperties.Clear();
+                foreach (var kv in cur._relativeProperties)
+                {
+                    _relativeProperties[kv.Key] = kv.Value;
+                }
+                _arrayElements.Clear();
+                _arrayElements.AddRange(cur._arrayElements);
                 return true;
             }
             return false;
@@ -1041,6 +1108,23 @@ namespace UnityEditor
 
         public static List<SceneManagement.RemovedComponent> GetRemovedComponents(UnityEngine.GameObject instance) =>
             GetRemovedComponentsFunc?.Invoke(instance) ?? new List<SceneManagement.RemovedComponent>();
+
+        public static Func<string, UnityEngine.GameObject?>? LoadPrefabContentsFunc;
+        public static Action<UnityEngine.GameObject>? UnloadPrefabContentsAction;
+
+        public static UnityEngine.GameObject? LoadPrefabContents(string assetPath) =>
+            LoadPrefabContentsFunc != null
+                ? LoadPrefabContentsFunc(assetPath)
+                : AssetDatabase.LoadMainAssetAtPath(assetPath) as UnityEngine.GameObject;
+
+        public static void UnloadPrefabContents(UnityEngine.GameObject contentsRoot) =>
+            UnloadPrefabContentsAction?.Invoke(contentsRoot);
+    }
+
+    public static class ShaderUtil
+    {
+        public static Func<UnityEngine.Shader, bool>? ShaderHasErrorFunc;
+        public static bool ShaderHasError(UnityEngine.Shader s) => ShaderHasErrorFunc?.Invoke(s) ?? false;
     }
 
     namespace Compilation

@@ -74,6 +74,7 @@ public class UnityResourcesTests
 
     private static string GetCategoryForMethod(string methodName) => methodName switch
     {
+        nameof(Inspect.Audit) or
         nameof(Inspect.Hierarchy) or
         nameof(Inspect.Find) or
         nameof(Inspect.FindByComponent) or

@@ -708,5 +708,60 @@ namespace UnityLeanMcpTests
             string truncated = Inspect.FindByComponent("Collider", includeInactive: true, maxItems: 1);
             StringAssert.Contains("... (truncated: maximum item count reached)", truncated);
         }
+
+        [Test]
+        public void Audit_GameObjectAndPrefabAsset_DetectsBrokenReferencesAndErrorShadersWithoutDirtyingScene()
+        {
+            var root = CreateTestGameObject("AuditTestRoot");
+            var renderer = root.AddComponent<MeshRenderer>();
+            var errorShader = Shader.Find("Hidden/InternalErrorShader");
+            var pinkMat = new Material(errorShader) { name = "TestPinkMat" };
+            renderer.sharedMaterial = pinkMat;
+
+            var listener1 = root.AddComponent<AudioListener>();
+            var child = CreateTestGameObject("AuditTestChild");
+            child.transform.SetParent(root.transform, false);
+            var listener2 = child.AddComponent<AudioListener>();
+
+            string folderPath = "Assets/TestAuditTempFolder";
+            string matPath = folderPath + "/TestPinkMat.mat";
+            string prefabPath = folderPath + "/TestAuditPrefab.prefab";
+
+            if (!AssetDatabase.IsValidFolder(folderPath))
+            {
+                AssetDatabase.CreateFolder("Assets", "TestAuditTempFolder");
+            }
+
+            try
+            {
+                AssetDatabase.CreateAsset(pinkMat, matPath);
+                PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
+
+                bool dirtyBefore = EditorSceneManager.GetActiveScene().isDirty;
+
+                string subtreeAudit = Inspect.Audit(root);
+                StringAssert.Contains("Audit of GameObject \"AuditTestRoot\"", subtreeAudit);
+                StringAssert.Contains("Material & Shader Errors (1):", subtreeAudit);
+                StringAssert.Contains("MeshRenderer.sharedMaterials[0] (\"TestPinkMat\") uses error shader \"Hidden/InternalErrorShader\"", subtreeAudit);
+                StringAssert.Contains("Duplicate active AudioListener components (2)", subtreeAudit);
+
+                string prefabAudit = Inspect.Audit(prefabPath);
+                StringAssert.Contains($"Audit of Prefab Asset \"{prefabPath}\"", prefabAudit);
+                StringAssert.Contains("Hidden/InternalErrorShader", prefabAudit);
+
+                string folderAudit = Inspect.Audit(folderPath);
+                StringAssert.Contains($"Audit of Folder \"{folderPath}\" (1 prefab(s))", folderAudit);
+                StringAssert.Contains("Hidden/InternalErrorShader", folderAudit);
+
+                Assert.AreEqual(dirtyBefore, EditorSceneManager.GetActiveScene().isDirty);
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(prefabPath);
+                AssetDatabase.DeleteAsset(matPath);
+                AssetDatabase.DeleteAsset(folderPath);
+                AssetDatabase.Refresh();
+            }
+        }
     }
 }

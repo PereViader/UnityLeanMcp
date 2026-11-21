@@ -863,4 +863,344 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         Assert.Contains("VisualElement #polyVE (size: 100x100)", result);
         Assert.Contains("Label (text: \"Polymorphic\")", result);
     }
+
+    public class EventTargetComponent : MonoBehaviour
+    {
+        public void ValidVoidAction() { }
+        public void ValidIntAction(int count) { }
+        public void ValidObjectAction(GameObject go) { }
+    }
+
+    public class EventSystem : Behaviour { }
+
+    public class CustomGraphicComponent : Behaviour
+    {
+        public Material? sharedMaterial { get; set; }
+    }
+
+    [Fact]
+    public void Audit_WhenNoScenesOrPrefabStageLoaded_ReturnsCleanNotification()
+    {
+        string result = Inspect.Audit();
+        Assert.Equal("(No scenes currently loaded)", result);
+    }
+
+    [Fact]
+    public void Audit_NullOrDestroyedGameObject_ReturnsCleanNotification()
+    {
+        GameObject nullGo = null!;
+        Assert.Equal("(GameObject is null)", Inspect.Audit(nullGo));
+
+        var deadGo = new GameObject("DeadGo");
+        UnityEngine.Object.DestroyImmediate(deadGo);
+        Assert.Equal("(GameObject is destroyed)", Inspect.Audit(deadGo));
+    }
+
+    [Fact]
+    public void Audit_CleanSceneWithMainCamera_ReportsZeroIssues()
+    {
+        var camGo = new GameObject("Main Camera", typeof(Camera), typeof(AudioListener));
+        camGo.tag = "MainCamera";
+
+        var scene = new Scene
+        {
+            name = "CleanScene",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { camGo }
+        };
+        SceneManager.Scenes.Add(scene);
+
+        string result = Inspect.Audit();
+        Assert.Contains("Audit of 1 loaded scene(s): 0 issues found (1 GameObject(s) scanned).", result);
+    }
+
+    [Fact]
+    public void Audit_DetectsAllIntegrityCategoriesInScene()
+    {
+        var brokenGo = new GameObject("Player");
+        var childGo = new GameObject("HUDButton");
+        brokenGo.transform.AddChild(childGo.transform);
+
+        // 1. Missing script
+        brokenGo.AddRawComponent(null);
+
+        // 2. Broken ObjectReference (null value with non-zero instanceID) + valid null reference (instanceID == 0)
+        var targetComp = brokenGo.AddComponent<EventTargetComponent>();
+        SerializedObject.CustomProperties[targetComp] = new List<SerializedProperty>
+        {
+            new SerializedProperty
+            {
+                name = "m_WeaponPrefab",
+                propertyPath = "m_WeaponPrefab",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 4242
+            },
+            new SerializedProperty
+            {
+                name = "m_OptionalEffect",
+                propertyPath = "m_OptionalEffect",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 0
+            }
+        };
+
+        // 3. Broken UnityEvent listeners (missing target, missing method, and valid method)
+        var buttonComp = childGo.AddComponent<EventTargetComponent>();
+        var onClickProp = CreateUnityEventProperty(
+            "m_OnClick",
+            CreatePersistentCall(target: null, targetInstanceId: 9999, methodName: "OnFire", mode: 1),
+            CreatePersistentCall(target: targetComp, targetInstanceId: 100, methodName: "RenamedOrDeletedMethod", mode: 1),
+            CreatePersistentCall(target: targetComp, targetInstanceId: 100, methodName: "ValidVoidAction", mode: 1));
+        SerializedObject.CustomProperties[buttonComp] = new List<SerializedProperty> { onClickProp };
+
+        // 4. Error shaders (Hidden/InternalErrorShader, null shader, and ShaderUtil compilation error)
+        var renderer = brokenGo.AddComponent<Renderer>();
+        var pinkMat = new Material(new Shader { name = "Hidden/InternalErrorShader" }) { name = "PinkMat" };
+        var nullShaderMat = new Material(null) { name = "NullShaderMat" };
+        var brokenCustomShader = new Shader { name = "Custom/BrokenLit" };
+        var brokenShaderMat = new Material(brokenCustomShader) { name = "BrokenLitMat" };
+        ShaderUtil.ShaderHasErrorFunc = s => ReferenceEquals(s, brokenCustomShader);
+        renderer.sharedMaterials = new[] { pinkMat, nullShaderMat, brokenShaderMat };
+
+        var graphic = childGo.AddComponent<CustomGraphicComponent>();
+        graphic.sharedMaterial = pinkMat;
+
+        // 5. Scene hygiene: duplicate AudioListener, duplicate EventSystem, and missing MainCamera tag (untagged Camera present)
+        brokenGo.AddComponent<Camera>(); // Untagged!
+        brokenGo.AddComponent<AudioListener>();
+        childGo.AddComponent<AudioListener>();
+        brokenGo.AddComponent<EventSystem>();
+        childGo.AddComponent<EventSystem>();
+
+        var scene = new Scene
+        {
+            name = "GameplayScene",
+            path = "Assets/Scenes/GameplayScene.unity",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { brokenGo }
+        };
+        SceneManager.Scenes.Add(scene);
+
+        string result = Inspect.Audit();
+
+        Assert.Contains("Audit of 1 loaded scene(s): 11 issue(s) found (2 GameObject(s) scanned):", result);
+        Assert.Contains("Missing Scripts (1):", result);
+        Assert.Contains("Player (path: \"/Player\", scene: \"GameplayScene\"): 1 missing script at component index [1]", result);
+
+        Assert.Contains("Broken Object References (1):", result);
+        Assert.Contains("Player (path: \"/Player\", scene: \"GameplayScene\"): EventTargetComponent.m_WeaponPrefab is Missing (instanceID: 4242)", result);
+        Assert.DoesNotContain("m_OptionalEffect", result);
+
+        Assert.Contains("Broken UnityEvent Listeners (2):", result);
+        Assert.Contains("HUDButton (path: \"/Player/HUDButton\", scene: \"GameplayScene\"): EventTargetComponent.m_OnClick[0] has missing target object (instanceID: 9999) (method: \"OnFire\")", result);
+        Assert.Contains("HUDButton (path: \"/Player/HUDButton\", scene: \"GameplayScene\"): EventTargetComponent.m_OnClick[1] method \"EventTargetComponent.RenamedOrDeletedMethod\" not found on target \"EventTargetComponent\"", result);
+        Assert.DoesNotContain("ValidVoidAction", result);
+
+        Assert.Contains("Material & Shader Errors (4):", result);
+        Assert.Contains("Renderer.sharedMaterials[0] (\"PinkMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+        Assert.Contains("Renderer.sharedMaterials[1] (\"NullShaderMat\") has missing/null Shader", result);
+        Assert.Contains("Renderer.sharedMaterials[2] (\"BrokenLitMat\") shader \"Custom/BrokenLit\" has compilation errors", result);
+        Assert.Contains("CustomGraphicComponent.sharedMaterial (\"PinkMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+
+        Assert.Contains("Scene Hygiene Issues (3):", result);
+        Assert.Contains("Duplicate active AudioListener components (2) in scene: \"GameplayScene\": [/Player, /Player/HUDButton]", result);
+        Assert.Contains("Duplicate active EventSystem components (2) in scene: \"GameplayScene\": [/Player, /Player/HUDButton]", result);
+        Assert.Contains("Missing \"MainCamera\" tag in scene: \"GameplayScene\" (1 untagged Camera component(s) present)", result);
+    }
+
+    [Fact]
+    public void Audit_GameObjectRoot_ScansSubtreeOnlyAndOmitsSceneMainCameraWarning()
+    {
+        var root = new GameObject("EnemyRoot");
+        var child = new GameObject("EnemyChild");
+        root.transform.AddChild(child.transform);
+        child.AddRawComponent(null);
+
+        string result = Inspect.Audit(root);
+
+        Assert.Contains("Audit of GameObject \"EnemyRoot\"", result);
+        Assert.Contains("1 issue(s) found (2 GameObject(s) scanned)", result);
+        Assert.Contains("EnemyChild (path: \"/EnemyRoot/EnemyChild\"", result);
+        Assert.DoesNotContain("MainCamera", result);
+    }
+
+    [Fact]
+    public void Audit_PrefabAssetPath_LoadsAndUnloadsPrefabContentsSafely()
+    {
+        var prefabRoot = new GameObject("ChestPrefab");
+        prefabRoot.AddRawComponent(null);
+
+        bool loaded = false;
+        bool unloaded = false;
+
+        AssetDatabase.LoadMainAssetAtPathFunc = path =>
+            path == "Assets/Prefabs/Chest.prefab" ? prefabRoot : null;
+        PrefabUtility.LoadPrefabContentsFunc = path =>
+        {
+            if (path == "Assets/Prefabs/Chest.prefab")
+            {
+                loaded = true;
+                return prefabRoot;
+            }
+            return null;
+        };
+        PrefabUtility.UnloadPrefabContentsAction = go =>
+        {
+            if (ReferenceEquals(go, prefabRoot))
+            {
+                unloaded = true;
+            }
+        };
+
+        string result = Inspect.Audit("Assets/Prefabs/Chest.prefab");
+
+        Assert.True(loaded);
+        Assert.True(unloaded);
+        Assert.Contains("Audit of Prefab Asset \"Assets/Prefabs/Chest.prefab\": 1 issue(s) found (1 GameObject(s) scanned):", result);
+        Assert.Contains("ChestPrefab (path: \"/ChestPrefab\", prefab: \"Assets/Prefabs/Chest.prefab\"): 1 missing script", result);
+    }
+
+    [Fact]
+    public void Audit_FolderTarget_ScansAllPrefabsInFolderWithoutItemCap()
+    {
+        // Create 120 prefabs (> DefaultMaxItems = 100) to verify there is no maxItems limit on folder audits
+        const int prefabCount = 120;
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        var guidsToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < prefabCount; i++)
+        {
+            string guid = $"guid_prefab_{i:D3}";
+            string path = $"Assets/Prefabs/Props/Prop_{i:D3}.prefab";
+            var go = new GameObject($"Prop_{i:D3}");
+            if (i == 0 || i == 119)
+            {
+                go.AddRawComponent(null);
+            }
+            prefabsByPath[path] = go;
+            guidsToPath[guid] = path;
+        }
+
+        int unloadedCount = 0;
+        AssetDatabase.IsValidFolderFunc = path =>
+            string.Equals(path, "Assets/Prefabs/Props", StringComparison.OrdinalIgnoreCase);
+        AssetDatabase.FindAssetsInFoldersFunc = (filter, folders) =>
+            folders.Length == 1 && folders[0] == "Assets/Prefabs/Props"
+                ? new List<string>(guidsToPath.Keys).ToArray()
+                : Array.Empty<string>();
+        AssetDatabase.GUIDToAssetPathFunc = guid =>
+            guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path =>
+            prefabsByPath.TryGetValue(path, out var go) ? go : null;
+        PrefabUtility.UnloadPrefabContentsAction = _ => unloadedCount++;
+
+        string result = Inspect.Audit("Assets/Prefabs/Props/");
+
+        Assert.Equal(prefabCount, unloadedCount);
+        Assert.Contains("Audit of Folder \"Assets/Prefabs/Props\" (120 prefab(s)): 2 issue(s) found (120 GameObject(s) scanned):", result);
+        Assert.Contains("Prop_000 (path: \"/Prop_000\", prefab: \"Assets/Prefabs/Props/Prop_000.prefab\"): 1 missing script", result);
+        Assert.Contains("Prop_119 (path: \"/Prop_119\", prefab: \"Assets/Prefabs/Props/Prop_119.prefab\"): 1 missing script", result);
+        Assert.DoesNotContain(Inspect.ItemTruncationMarker, result);
+    }
+
+    [Fact]
+    public void Audit_PrefabStageAndSpecificSceneAndEmptyFolder_HandlesEdgeCases()
+    {
+        var stageRoot = new GameObject("StageHero");
+        stageRoot.AddRawComponent(null);
+        var stage = new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/StageHero.prefab",
+            prefabContentsRoot = stageRoot,
+            scene = new Scene { isDirty = false }
+        };
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+        string stageAudit = Inspect.Audit("PrefabStage");
+        Assert.Contains("Audit of Prefab Stage \"Assets/Prefabs/StageHero.prefab\": 1 issue(s) found", stageAudit);
+        Assert.Contains("StageHero (path: \"/StageHero\", prefabStage: \"Assets/Prefabs/StageHero.prefab\"): 1 missing script", stageAudit);
+
+        var unloadedScene = new Scene { name = "UnloadedScene", isLoaded = false };
+        SceneManager.Scenes.Add(unloadedScene);
+        Assert.Equal("(Scene \"UnloadedScene\" is not currently loaded)", Inspect.Audit("UnloadedScene"));
+
+        AssetDatabase.IsValidFolderFunc = path => path == "Assets/EmptyPrefabs";
+        AssetDatabase.FindAssetsInFoldersFunc = (_, _) => Array.Empty<string>();
+        Assert.Equal("(No prefab assets found in folder: \"Assets/EmptyPrefabs\")", Inspect.Audit("Assets/EmptyPrefabs"));
+
+        AssetDatabase.LoadMainAssetAtPathFunc = _ => null;
+        AssetDatabase.AssetPathToGUIDFunc = _ => string.Empty;
+        Assert.Equal("(Audit target not found: \"Assets/NonExistent/MissingPrefab.prefab\")", Inspect.Audit("Assets/NonExistent/MissingPrefab.prefab"));
+    }
+
+    [Fact]
+    public void Audit_LargeOutput_TruncatesAt64KiBOutputLimit()
+    {
+        var root = new GameObject("MassiveBrokenRoot");
+        for (int i = 0; i < 1200; i++)
+        {
+            var child = new GameObject($"BrokenChildWithLongDescriptiveHierarchyName_{i:D4}");
+            child.AddRawComponent(null);
+            root.transform.AddChild(child.transform);
+        }
+
+        string result = Inspect.Audit(root);
+
+        Assert.True(result.Length <= Inspect.DefaultMaxOutputCharacters);
+        Assert.EndsWith(Inspect.OutputTruncationMarker, result);
+    }
+
+    private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)
+    {
+        var eventProp = new SerializedProperty
+        {
+            name = propertyPath,
+            propertyPath = propertyPath,
+            propertyType = SerializedPropertyType.Generic
+        };
+
+        var callsArrayProp = new SerializedProperty
+        {
+            name = "m_Calls",
+            propertyPath = $"{propertyPath}.m_PersistentCalls.m_Calls",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+
+        foreach (var call in calls)
+        {
+            callsArrayProp.AddArrayElement(call);
+        }
+
+        eventProp.SetRelativeProperty("m_PersistentCalls.m_Calls", callsArrayProp);
+        return eventProp;
+    }
+
+    private static SerializedProperty CreatePersistentCall(
+        UnityEngine.Object? target,
+        int targetInstanceId,
+        string methodName,
+        int mode)
+    {
+        var callProp = new SerializedProperty { propertyType = SerializedPropertyType.Generic };
+        callProp.SetRelativeProperty("m_Target", new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.ObjectReference,
+            objectReferenceValue = target,
+            objectReferenceInstanceIDValue = targetInstanceId
+        });
+        callProp.SetRelativeProperty("m_MethodName", new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.String,
+            stringValue = methodName
+        });
+        callProp.SetRelativeProperty("m_Mode", new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.Enum,
+            intValue = mode
+        });
+        return callProp;
+    }
 }

@@ -56,7 +56,11 @@ internal sealed class UnityInspectTestScope : IDisposable
         PrefabUtility.GetPropertyModificationsFunc = null;
         PrefabUtility.GetAddedComponentsFunc = null;
         PrefabUtility.GetRemovedComponentsFunc = null;
+        PrefabUtility.LoadPrefabContentsFunc = null;
+        PrefabUtility.UnloadPrefabContentsAction = null;
         PrefabStageUtility.GetCurrentPrefabStageFunc = null;
+        Shader.FindFunc = null;
+        ShaderUtil.ShaderHasErrorFunc = null;
         EditorSettings.prefabModeAllowAutoSave = true;
         SerializedObject.CustomProperties.Clear();
         UnityEngine.UIElements.UIDocument.AllUIDocuments.Clear();
