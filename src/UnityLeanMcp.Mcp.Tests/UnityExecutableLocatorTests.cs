@@ -484,7 +484,7 @@ public class UnityExecutableLocatorTests
             };
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => pm.EnsureUnityRunningAsync(cts.Token));
+            var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => pm.EnsureUnityRunningAsync(cancellationToken: cts.Token));
             Assert.Contains("Unity executable not found for project", ex.Message);
             Assert.Contains("2022.3.99f1", ex.Message);
         }

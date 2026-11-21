@@ -310,4 +310,124 @@ public class ToolProgressTests
             Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
         }
     }
+
+    [Fact]
+    public async Task UnityClient_RefreshAsync_ForwardsProgressToEnsureUnityRunningAsync()
+    {
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new SynchronousProgress<ProgressNotificationValue>(p =>
+        {
+            lock (receivedProgress)
+            {
+                receivedProgress.Add(p);
+            }
+        });
+
+        string tempDir = Path.Combine(Path.GetTempPath(), "client_startup_progress_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var pathResolver = new UnityPathResolver(tempDir);
+            var forwardingProcessManager = new ProgressEmittingProcessManager(pathResolver);
+            var transport = new RefreshResultTransport(pathResolver);
+            var poller = new OperationPoller(forwardingProcessManager, pathResolver, transport, NullLogger.Instance);
+            var client = new UnityClient(
+                forwardingProcessManager,
+                pathResolver,
+                NullLogger<UnityClient>.Instance,
+                transport,
+                poller);
+
+            var result = await client.RefreshAsync(isRecompile: false, progress, CancellationToken.None);
+
+            Assert.True(result.Success);
+            lock (receivedProgress)
+            {
+                Assert.Contains(receivedProgress, p =>
+                    p.Progress == 2 &&
+                    p.Total == 100 &&
+                    p.Message == "Starting Unity Editor (batchmode, PID 4242)...");
+                Assert.Contains(receivedProgress, p =>
+                    p.Progress == 3 &&
+                    p.Total == 100 &&
+                    p.Message == "Starting Unity Editor: Resolving packages...");
+                Assert.All(receivedProgress, p => Assert.InRange(p.Progress, 0, 100));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private sealed class ProgressEmittingProcessManager : IUnityProcessManager
+    {
+        public ProgressEmittingProcessManager(IUnityPathResolver pathResolver)
+        {
+            PathResolver = pathResolver;
+        }
+
+        public IUnityPathResolver PathResolver { get; }
+        public IUnityExecutableLocator ExecutableLocator => throw new NotSupportedException();
+        public bool IsUnityRunning(out int? processId) { processId = 4242; return true; }
+        public string GetUnityMode(int? pid = null) => "Batchmode";
+        public int ReadPortFile() => 12345;
+        public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public void PurgeOperationState() { }
+
+        public Task EnsureUnityRunningAsync(IProgress<ProgressNotificationValue>? progress = null, CancellationToken cancellationToken = default)
+        {
+            progress?.Report(new ProgressNotificationValue
+            {
+                Progress = 2,
+                Total = 100,
+                Message = "Starting Unity Editor (batchmode, PID 4242)..."
+            });
+            progress?.Report(new ProgressNotificationValue
+            {
+                Progress = 3,
+                Total = 100,
+                Message = "Starting Unity Editor: Resolving packages..."
+            });
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RefreshResultTransport : IUnitySocketTransport
+    {
+        private readonly IUnityPathResolver _pathResolver;
+
+        public RefreshResultTransport(IUnityPathResolver pathResolver)
+        {
+            _pathResolver = pathResolver;
+        }
+
+        public Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds, CancellationToken cancellationToken) =>
+            Task.FromResult(true);
+
+        public Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds, CancellationToken cancellationToken)
+        {
+            if (command.StartsWith("REFRESH ", StringComparison.Ordinal))
+            {
+                string opId = command["REFRESH ".Length..];
+                string resultFile = _pathResolver.GetResultFilePath(UnityOperationKind.Refresh, opId);
+                Directory.CreateDirectory(Path.GetDirectoryName(resultFile)!);
+                File.WriteAllText(resultFile, JsonSerializer.Serialize(new UnityRefreshResult
+                {
+                    OperationId = opId,
+                    Success = true,
+                    Message = "Refreshed"
+                }));
+                return Task.FromResult<string?>("REFRESHING");
+            }
+
+            if (command.StartsWith("POLL_REFRESH", StringComparison.Ordinal))
+            {
+                return Task.FromResult<string?>("READY");
+            }
+
+            return Task.FromResult<string?>(null);
+        }
+    }
 }

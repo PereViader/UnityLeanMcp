@@ -10,6 +10,7 @@ public interface IUnityLogScanner
     bool HasCompilationErrors(string logText);
     List<string> ExtractUniqueCompilationLines(string logText);
     string GetLogSnippet(string logFilePath, long initialOffset = 0);
+    string? ExtractLatestStartupMilestone(string logText);
 }
 
 public class UnityLogScanner : IUnityLogScanner
@@ -63,5 +64,56 @@ public class UnityLogScanner : IUnityLogScanner
         {
             return $"Error reading log file: {ex.Message}";
         }
+    }
+
+    public virtual string? ExtractLatestStartupMilestone(string logText)
+    {
+        if (string.IsNullOrWhiteSpace(logText))
+        {
+            return null;
+        }
+
+        string? latest = null;
+        var lines = logText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (string rawLine in lines)
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            if (ContainsAny(line, "ReloadAssembly", "Domain Reload", "Reloading assemblies", "Reloading domain"))
+            {
+                latest = "Starting Unity Editor: Reloading domain...";
+            }
+            else if (ContainsAny(line, "[ScriptCompilation]", "Compilation started", "Compiling scripts", "Starting C# compiler", "Compiling "))
+            {
+                latest = "Starting Unity Editor: Compiling scripts...";
+            }
+            else if (ContainsAny(line, "Start importing", "Rebuilding", "Updating Assets", "AssetDatabase", "detecting if any assets need to be imported"))
+            {
+                latest = "Starting Unity Editor: Importing assets...";
+            }
+            else if (ContainsAny(line, "[Package Manager]", "Resolving packages", "Restoring packages"))
+            {
+                latest = "Starting Unity Editor: Resolving packages...";
+            }
+        }
+
+        return latest;
+    }
+
+    private static bool ContainsAny(string line, params string[] tokens)
+    {
+        foreach (string token in tokens)
+        {
+            if (line.Contains(token, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

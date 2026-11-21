@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 
 namespace UnityLeanMcp.Mcp;
 
@@ -360,9 +361,13 @@ public class UnityProcessManager : IUnityProcessManager
         return _processIdentityStore.TryGetOwnedProcess(pid, _pathResolver.ProjectRoot, out process);
     }
 
-    private async Task<FileStream> AcquireStartupLockAsync(CancellationToken cancellationToken)
+    private async Task<FileStream> AcquireStartupLockAsync(
+        IProgress<ProgressNotificationValue>? progress,
+        CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_pathResolver.TempDir);
+        Stopwatch? waitStopwatch = null;
+        TimeSpan lastProgressReport = TimeSpan.MinValue;
 
         while (true)
         {
@@ -382,6 +387,7 @@ public class UnityProcessManager : IUnityProcessManager
                 // FileShare.None is the inter-process claim. A persistent
                 // inode is intentionally retained: on POSIX, unlinking an
                 // open lock file would let a waiter create a second inode.
+                ReportLockContentionProgress(progress, ref waitStopwatch, ref lastProgressReport);
                 await Task.Delay(100, cancellationToken);
             }
             catch (UnauthorizedAccessException) when (File.Exists(_pathResolver.StartupLockFile))
@@ -389,8 +395,33 @@ public class UnityProcessManager : IUnityProcessManager
                 // Windows can surface a sharing violation as access denied.
                 // Keep waiting for the owning handle to close; cancellation
                 // remains the only bounded exit from this wait.
+                ReportLockContentionProgress(progress, ref waitStopwatch, ref lastProgressReport);
                 await Task.Delay(100, cancellationToken);
             }
+        }
+    }
+
+    private static void ReportLockContentionProgress(
+        IProgress<ProgressNotificationValue>? progress,
+        ref Stopwatch? waitStopwatch,
+        ref TimeSpan lastProgressReport)
+    {
+        if (progress == null)
+        {
+            return;
+        }
+
+        waitStopwatch ??= Stopwatch.StartNew();
+        TimeSpan elapsed = waitStopwatch.Elapsed;
+        if (lastProgressReport == TimeSpan.MinValue || elapsed - lastProgressReport >= TimeSpan.FromSeconds(1))
+        {
+            lastProgressReport = elapsed;
+            progress.Report(new ProgressNotificationValue
+            {
+                Progress = 1,
+                Total = 100,
+                Message = "Waiting for another Unity Editor startup to finish..."
+            });
         }
     }
 
@@ -586,7 +617,9 @@ public class UnityProcessManager : IUnityProcessManager
     /// Ensures the project has a live Unity socket, auto-starting Unity in interactive mode only when
     /// no project-scoped endpoint responds to PING and process discovery finds no existing Editor.
     /// </summary>
-    public async Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default)
+    public async Task EnsureUnityRunningAsync(
+        IProgress<ProgressNotificationValue>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         // The port file is written by the Unity package under this project's Temp
         // directory. A successful PING is stronger evidence than lockfile shape or
@@ -603,7 +636,7 @@ public class UnityProcessManager : IUnityProcessManager
         if (IsUnityRunning(out int? existingPid))
         {
             _logger.LogInformation("Unity is running (PID {Pid}) but socket is not ready yet. Waiting for readiness...", existingPid);
-            await WaitForSocketReadinessAsync(null, cancellationToken);
+            await WaitForSocketReadinessAsync(null, cancellationToken, progress: progress);
             return;
         }
 
@@ -611,7 +644,7 @@ public class UnityProcessManager : IUnityProcessManager
         // coordinate through the same project directory. Keep it until the
         // launched Editor is ready (or startup fails) so a second host cannot
         // launch while the first one is still publishing its identity.
-        using FileStream startupLock = await AcquireStartupLockAsync(cancellationToken);
+        using FileStream startupLock = await AcquireStartupLockAsync(progress, cancellationToken);
         // Another caller may have completed startup while this caller was waiting
         // for the inter-process claim. Repeat the endpoint check before process
         // discovery so a newly ready GUI Editor is never mistaken for absent.
@@ -627,7 +660,7 @@ public class UnityProcessManager : IUnityProcessManager
         if (IsUnityRunning(out existingPid))
         {
             _logger.LogInformation("Unity is running (PID {Pid}) but socket is not ready yet. Waiting for readiness...", existingPid);
-            await WaitForSocketReadinessAsync(null, cancellationToken);
+            await WaitForSocketReadinessAsync(null, cancellationToken, progress: progress);
             return;
         }
 
@@ -724,14 +757,29 @@ public class UnityProcessManager : IUnityProcessManager
                     $"Failed to publish startup ownership for Unity process {proc.Id}.", ex);
             }
 
+            string modeLabel = isBatchmode ? "batchmode" : "interactive";
             _logger.LogInformation("Unity process started with PID {Pid}. Waiting for socket server...", proc.Id);
-            await WaitForSocketReadinessAsync(proc, cancellationToken, initialLogOffset);
+            progress?.Report(new ProgressNotificationValue
+            {
+                Progress = 2,
+                Total = 100,
+                Message = $"Starting Unity Editor ({modeLabel}, PID {proc.Id})..."
+            });
+            await WaitForSocketReadinessAsync(proc, cancellationToken, initialLogOffset, progress);
         }
     }
 
 
-    internal virtual async Task WaitForSocketReadinessAsync(Process? startedProcess, CancellationToken cancellationToken, long initialLogOffset = 0)
+    internal virtual async Task WaitForSocketReadinessAsync(
+        Process? startedProcess,
+        CancellationToken cancellationToken,
+        long initialLogOffset = 0,
+        IProgress<ProgressNotificationValue>? progress = null)
     {
+        long milestoneLogOffset = initialLogOffset;
+        string? lastMilestone = null;
+        int progressValue = 3;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -774,13 +822,14 @@ public class UnityProcessManager : IUnityProcessManager
             }
 
             // 3. Check socket connection
+            string? refreshState = null;
             if (File.Exists(_pathResolver.PortFile))
             {
                 bool isReady = socketIsLive ?? await IsSocketReadyAsync(2, cancellationToken);
                 if (isReady)
                 {
                     // Check if server is settled
-                    string? refreshState = await ProbeSocketCommandAsync("POLL_REFRESH", 2, cancellationToken);
+                    refreshState = await ProbeSocketCommandAsync("POLL_REFRESH", 2, cancellationToken);
                     if (refreshState == "READY" || refreshState == "PLAYMODE" || refreshState == "COMPILATION_ERROR")
                     {
                         _logger.LogInformation("Unity socket server is ready (state: {State}).", refreshState);
@@ -789,7 +838,58 @@ public class UnityProcessManager : IUnityProcessManager
                 }
             }
 
+            if (startedProcess != null)
+            {
+                long previousOffset = milestoneLogOffset;
+                (milestoneLogOffset, string? detectedMilestone) = TryReadNextStartupMilestone(milestoneLogOffset);
+                if (milestoneLogOffset < previousOffset)
+                {
+                    lastMilestone = null;
+                }
+
+                if (!string.IsNullOrEmpty(detectedMilestone))
+                {
+                    lastMilestone = detectedMilestone;
+                }
+            }
+
+            string progressMessage = !string.IsNullOrWhiteSpace(refreshState)
+                ? $"Waiting for Unity Editor ({refreshState})..."
+                : lastMilestone ?? "Waiting for Unity Editor socket...";
+
+            progress?.Report(new ProgressNotificationValue
+            {
+                Progress = progressValue,
+                Total = 100,
+                Message = progressMessage
+            });
+
+            progressValue = Math.Min(9, progressValue + 1);
+
             await Task.Delay(1000, cancellationToken);
+        }
+    }
+
+    private (long NextOffset, string? Milestone) TryReadNextStartupMilestone(long currentOffset)
+    {
+        if (!File.Exists(_pathResolver.LogFile))
+        {
+            return (0, null);
+        }
+
+        try
+        {
+            (string delta, long nextOffset) = FileIoRetryHelper.ReadFileDeltaWithRetry(_pathResolver.LogFile, currentOffset);
+            if (string.IsNullOrEmpty(delta))
+            {
+                return (nextOffset, null);
+            }
+
+            return (nextOffset, _logScanner.ExtractLatestStartupMilestone(delta));
+        }
+        catch
+        {
+            return (currentOffset, null);
         }
     }
 

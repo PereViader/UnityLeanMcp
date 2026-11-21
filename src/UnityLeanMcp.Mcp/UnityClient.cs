@@ -166,7 +166,7 @@ public class UnityClient : IUnityClient
 
         try
         {
-            await _processManager.EnsureUnityRunningAsync(cancellationToken);
+            await _processManager.EnsureUnityRunningAsync(progress, cancellationToken);
         }
         catch (Exception ex) when (ex is UnityCompilationException or FileNotFoundException or InvalidOperationException)
         {

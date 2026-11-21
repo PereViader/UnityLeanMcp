@@ -27,11 +27,25 @@ internal static class FileIoRetryHelper
         long fromOffset,
         Func<string, long, string> reader)
     {
+        return RetryIo(() => reader(path, fromOffset), maxRetries, delayMs);
+    }
+
+    internal static (string Text, long NextOffset) ReadFileDeltaWithRetry(
+        string path,
+        long fromOffset = 0,
+        int maxRetries = 5,
+        int delayMs = 100)
+    {
+        return RetryIo(() => ReadFileDeltaFromOffset(path, fromOffset), maxRetries, delayMs);
+    }
+
+    private static T RetryIo<T>(Func<T> action, int maxRetries, int delayMs)
+    {
         for (int i = 0; i < maxRetries; i++)
         {
             try
             {
-                return reader(path, fromOffset);
+                return action();
             }
             catch (IOException) when (i < maxRetries - 1)
             {
@@ -43,7 +57,7 @@ internal static class FileIoRetryHelper
             }
         }
 
-        return reader(path, fromOffset);
+        return action();
     }
 
     internal static string ReadFileFromOffset(string path, long fromOffset = 0)
@@ -60,6 +74,30 @@ internal static class FileIoRetryHelper
 
         using var reader = new StreamReader(fs, Encoding.UTF8);
         return reader.ReadToEnd();
+    }
+
+    internal static (string Text, long NextOffset) ReadFileDeltaFromOffset(string path, long fromOffset = 0)
+    {
+        using var fs = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        long length = fs.Length;
+        long effectiveOffset = fromOffset > 0 && length >= fromOffset ? fromOffset : 0;
+        if (effectiveOffset == length)
+        {
+            return (string.Empty, effectiveOffset);
+        }
+
+        if (effectiveOffset > 0)
+        {
+            fs.Seek(effectiveOffset, SeekOrigin.Begin);
+        }
+
+        using var reader = new StreamReader(fs, Encoding.UTF8);
+        string text = reader.ReadToEnd();
+        return (text, fs.Position);
     }
 
     internal static void WriteTextAtomically(string path, string content)

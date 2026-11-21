@@ -1,5 +1,7 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
+using ModelContextProtocol;
 
 namespace UnityLeanMcp.Mcp;
 
@@ -10,7 +12,7 @@ public interface IUnityProcessManager
     bool IsUnityRunning(out int? processId);
     string GetUnityMode(int? pid = null);
     int ReadPortFile();
-    Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default);
+    Task EnsureUnityRunningAsync(IProgress<ProgressNotificationValue>? progress = null, CancellationToken cancellationToken = default);
     Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default);
     void PurgeOperationState();
 }

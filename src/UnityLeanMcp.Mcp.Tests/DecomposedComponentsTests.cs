@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
 using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
@@ -81,6 +82,28 @@ public class DecomposedComponentsTests
         {
             try { File.Delete(tempFile); } catch { }
         }
+    }
+
+    [Fact]
+    public void UnityLogScanner_ExtractLatestStartupMilestone_IdentifiesCoarseMilestonesAndReturnsLatest()
+    {
+        var scanner = new UnityLogScanner();
+
+        Assert.Null(scanner.ExtractLatestStartupMilestone(""));
+        Assert.Null(scanner.ExtractLatestStartupMilestone("Unrelated Unity diagnostic line"));
+
+        Assert.Contains("Resolving packages", scanner.ExtractLatestStartupMilestone("[Package Manager] Done resolving packages."));
+        Assert.Contains("Importing assets", scanner.ExtractLatestStartupMilestone("Start importing Assets/Foo.cs using Guid(1234)"));
+        Assert.Contains("Compiling scripts", scanner.ExtractLatestStartupMilestone("Compilation started: Assembly-CSharp"));
+        Assert.Contains("Reloading domain", scanner.ExtractLatestStartupMilestone("Begin MonoManager ReloadAssembly"));
+
+        string combined = """
+            [Package Manager] Done resolving packages.
+            Start importing Assets/Foo.cs
+            Compilation started
+            Begin MonoManager ReloadAssembly
+            """;
+        Assert.Contains("Reloading domain", scanner.ExtractLatestStartupMilestone(combined));
     }
 
     [Fact]
@@ -907,7 +930,7 @@ public class DecomposedComponentsTests
         }
         public string GetUnityMode(int? pid = null) => "Batchmode";
         public int ReadPortFile() => 12345;
-        public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task EnsureUnityRunningAsync(IProgress<ProgressNotificationValue>? progress = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
         public void PurgeOperationState() { }
     }

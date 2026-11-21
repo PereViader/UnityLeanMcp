@@ -68,7 +68,7 @@ Escape backslashes before interpreting line escapes or Windows paths can become 
 
 ### Historical startup logs
 
-A previous launch's compiler errors can abort attachment to a healthy Editor if the whole background log is scanned. Record the launch offset and read only new content while monitoring a process started by this host. If the file is shorter than that offset, read from the beginning because it was truncated. This protects the launch window; it is separate from the refresh-window Console diagnostic rules.
+A previous launch's compiler errors can abort attachment to a healthy Editor if the whole background log is scanned. Record the launch offset and read only new content while monitoring a process started by this host. If the file is shorter than that offset, read from the beginning because it was truncated. Startup progress milestone scanning follows the same rule: read incrementally from the launch offset only when monitoring a host-started process, resetting to the beginning on truncation, and never scan the log when attaching to an already-running Editor. This protects the launch window; it is separate from the refresh-window Console diagnostic rules.
 
 ### MCP stdio and encoding
 

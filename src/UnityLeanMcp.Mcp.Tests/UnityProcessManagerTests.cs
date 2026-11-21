@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
 using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
@@ -340,7 +341,7 @@ public class UnityProcessManagerTests
                 }
             };
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cts.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
 
             Assert.NotNull(capturedPsi);
             Assert.DoesNotContain("-batchmode", capturedPsi!.Arguments, StringComparison.OrdinalIgnoreCase);
@@ -395,7 +396,7 @@ public class UnityProcessManagerTests
                 }
             };
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cts.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
 
             Assert.NotNull(capturedPsi);
             Assert.Contains("-batchmode", capturedPsi!.Arguments, StringComparison.OrdinalIgnoreCase);
@@ -538,7 +539,7 @@ public class UnityProcessManagerTests
             };
 
             // Should succeed without throwing UnityCompilationException from historical log
-            var ensureTask = procManager.EnsureUnityRunningAsync(cts.Token);
+            var ensureTask = procManager.EnsureUnityRunningAsync(cancellationToken: cts.Token);
             await ensureTask;
         }
         finally
@@ -630,7 +631,7 @@ public class UnityProcessManagerTests
             };
 
             // Should wait for socket readiness without aborting on historical errors in WaitForSocketReadinessAsync
-            await procManager.EnsureUnityRunningAsync(cts.Token);
+            await procManager.EnsureUnityRunningAsync(cancellationToken: cts.Token);
         }
         finally
         {
@@ -1223,10 +1224,10 @@ public class UnityProcessManagerTests
 
         try
         {
-            Task firstStartup = first.EnsureUnityRunningAsync(cancellation.Token);
+            Task firstStartup = first.EnsureUnityRunningAsync(cancellationToken: cancellation.Token);
             await state.FirstReadinessEntered.Task.WaitAsync(cancellation.Token);
 
-            Task secondStartup = second.EnsureUnityRunningAsync(cancellation.Token);
+            Task secondStartup = second.EnsureUnityRunningAsync(cancellationToken: cancellation.Token);
             state.ReleaseReadiness.TrySetResult(true);
 
             await Task.WhenAll(firstStartup, secondStartup);
@@ -1785,7 +1786,8 @@ public class UnityProcessManagerTests
         internal override Task WaitForSocketReadinessAsync(
             Process? startedProcess,
             CancellationToken cancellationToken,
-            long initialLogOffset = 0)
+            long initialLogOffset = 0,
+            IProgress<ModelContextProtocol.ProgressNotificationValue>? progress = null)
         {
             WaitedForExistingEditorSocket = true;
             return Task.CompletedTask;
@@ -1838,7 +1840,8 @@ public class UnityProcessManagerTests
         internal override async Task WaitForSocketReadinessAsync(
             Process? startedProcess,
             CancellationToken cancellationToken,
-            long initialLogOffset = 0)
+            long initialLogOffset = 0,
+            IProgress<ModelContextProtocol.ProgressNotificationValue>? progress = null)
         {
             _state.FirstReadinessEntered.TrySetResult(true);
             await _state.ReleaseReadiness.Task.WaitAsync(cancellationToken);
@@ -1887,7 +1890,7 @@ public class UnityProcessManagerTests
         public override Task<bool> IsSocketReadyAsync(int timeoutSeconds = 2, CancellationToken cancellationToken = default) =>
             Task.FromResult(Volatile.Read(ref _running));
 
-        internal override async Task WaitForSocketReadinessAsync(Process? startedProcess, CancellationToken cancellationToken, long initialLogOffset = 0)
+        internal override async Task WaitForSocketReadinessAsync(Process? startedProcess, CancellationToken cancellationToken, long initialLogOffset = 0, IProgress<ModelContextProtocol.ProgressNotificationValue>? progress = null)
         {
             _firstReadinessEntered.TrySetResult(true);
             await _releaseReadiness.Task.WaitAsync(cancellationToken);
@@ -2157,7 +2160,7 @@ public class UnityProcessManagerTests
                 }
             };
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cts.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
 
             using (var liveProc = Process.GetProcessById(dummyPid))
             {
@@ -2179,5 +2182,421 @@ public class UnityProcessManagerTests
             catch { }
             try { Directory.Delete(projectRoot, true); } catch { }
         }
+    }
+
+    private sealed class RecordingProgress : IProgress<ProgressNotificationValue>
+    {
+        private readonly Action<ProgressNotificationValue>? _onReport;
+        public List<ProgressNotificationValue> Values { get; } = new();
+
+        public RecordingProgress(Action<ProgressNotificationValue>? onReport = null)
+        {
+            _onReport = onReport;
+        }
+
+        public void Report(ProgressNotificationValue value)
+        {
+            lock (Values)
+            {
+                Values.Add(value);
+            }
+
+            _onReport?.Invoke(value);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_WhenHostLaunchesProcess_EmitsLaunchModeAndPidProgress()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_launch_prog_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(projectRoot);
+        var resolver = new UnityPathResolver(projectRoot);
+        int dummyPid = 0;
+
+        try
+        {
+            var dummyProc = StartDummyProcess();
+            dummyPid = dummyProc.Id;
+            var launchReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message != null && p.Message.Contains($"PID {dummyPid}"))
+                {
+                    launchReported.TrySetResult(true);
+                }
+            });
+
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: new DiscoverySocketTransport(isReady: false),
+                executableLocator: new FixedExecutableLocator())
+            {
+                LaunchMode = "Batchmode",
+                ProcessProvider = () => Array.Empty<Process>(),
+                ProcessStarter = _ => dummyProc
+            };
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Task ensureTask = manager.EnsureUnityRunningAsync(progress, cts.Token);
+            await launchReported.Task.WaitAsync(cts.Token);
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ensureTask);
+
+            Assert.Contains(progress.Values, p =>
+                p.Progress == 2 &&
+                p.Total == 100 &&
+                p.Message == $"Starting Unity Editor (batchmode, PID {dummyPid})...");
+        }
+        finally
+        {
+            try
+            {
+                using var p = Process.GetProcessById(dummyPid);
+                if (!p.HasExited) p.Kill(true);
+            }
+            catch { }
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_WhenStartupLockIsContended_EmitsStartupLockProgress()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_lock_prog_" + Guid.NewGuid().ToString("N"));
+        var resolver = new UnityPathResolver(projectRoot);
+        Directory.CreateDirectory(resolver.TempDir);
+
+        try
+        {
+            var lockContentionReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message != null && p.Message.Contains("Waiting for another Unity Editor startup to finish"))
+                {
+                    lockContentionReported.TrySetResult(true);
+                }
+            });
+
+            bool socketReady = false;
+            var transport = new ConfigurableSocketTransport(() => socketReady);
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: transport,
+                executableLocator: new FixedExecutableLocator())
+            {
+                ProcessProvider = () => Array.Empty<Process>()
+            };
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Task ensureTask;
+            using (var heldLock = new FileStream(
+                resolver.StartupLockFile,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None))
+            {
+                ensureTask = manager.EnsureUnityRunningAsync(progress, cts.Token);
+                await lockContentionReported.Task.WaitAsync(cts.Token);
+                socketReady = true;
+            }
+
+            await ensureTask;
+
+            Assert.Contains(progress.Values, p =>
+                p.Progress == 1 &&
+                p.Total == 100 &&
+                p.Message == "Waiting for another Unity Editor startup to finish...");
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenStartedProcessNotNull_EmitsCoarseLogMilestonesAfterOffsetAndHandlesTruncation()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_milestones_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var serverTask = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                TcpClient tcp;
+                try { tcp = await listener.AcceptTcpClientAsync(cts.Token); }
+                catch { break; }
+
+                _ = Task.Run(async () =>
+                {
+                    using (tcp)
+                    using (var stream = tcp.GetStream())
+                    using (var reader = new StreamReader(stream, Encoding.UTF8))
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
+                    {
+                        string? line = await reader.ReadLineAsync(cts.Token);
+                        UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line!, tempDir, out line);
+                        if (line == "PING") await writer.WriteLineAsync("PONG".AsMemory(), cts.Token);
+                        else if (line != null && line.StartsWith("POLL_REFRESH")) await writer.WriteLineAsync("READY".AsMemory(), cts.Token);
+                    }
+                }, cts.Token);
+            }
+        });
+
+        using var proc = StartDummyProcess();
+        try
+        {
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
+            // Historical milestone BEFORE initialOffset must be ignored.
+            await File.WriteAllTextAsync(logFile, "Begin MonoManager ReloadAssembly\n", cts.Token);
+            long initialOffset = new FileInfo(logFile).Length;
+
+            var genericReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resolvingReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var truncatedCompilingReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message == "Waiting for Unity Editor socket...")
+                {
+                    genericReported.TrySetResult(true);
+                }
+                else if (p.Message == "Starting Unity Editor: Resolving packages...")
+                {
+                    resolvingReported.TrySetResult(true);
+                }
+                else if (p.Message == "Starting Unity Editor: Compiling scripts...")
+                {
+                    truncatedCompilingReported.TrySetResult(true);
+                }
+            });
+
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            Task waitTask = procManager.WaitForSocketReadinessAsync(proc, cts.Token, initialOffset, progress);
+
+            // 1. No new log content after offset -> generic waiting-for-socket progress (ignoring pre-offset ReloadAssembly).
+            await genericReported.Task.WaitAsync(cts.Token);
+
+            // 2. Append new milestone after offset -> Resolving packages.
+            await File.AppendAllTextAsync(
+                logFile,
+                "[Package Manager] Done resolving packages.\nSome extra padding to make the log longer than the truncated replacement.\n",
+                cts.Token);
+            await resolvingReported.Task.WaitAsync(cts.Token);
+
+            // 3. Truncate log file below the cursor and write a shorter milestone -> Compiling scripts.
+            await File.WriteAllTextAsync(logFile, "Compilation started\n", cts.Token);
+            await truncatedCompilingReported.Task.WaitAsync(cts.Token);
+
+            // 4. Publish port file so socket readiness completes.
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString(), cts.Token);
+            await waitTask;
+
+            Assert.DoesNotContain(progress.Values, p => p.Message != null && p.Message.Contains("Reloading domain"));
+            Assert.All(progress.Values, p =>
+            {
+                Assert.InRange(p.Progress, 3, 9);
+                Assert.Equal(100, p.Total);
+            });
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            cts.Cancel();
+            listener.Stop();
+            try { await serverTask; } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenStartedProcessIsNull_EmitsGenericProgressWithoutScanningLogFile()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_null_prog_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var serverTask = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                TcpClient tcp;
+                try { tcp = await listener.AcceptTcpClientAsync(cts.Token); }
+                catch { break; }
+
+                _ = Task.Run(async () =>
+                {
+                    using (tcp)
+                    using (var stream = tcp.GetStream())
+                    using (var reader = new StreamReader(stream, Encoding.UTF8))
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
+                    {
+                        string? line = await reader.ReadLineAsync(cts.Token);
+                        UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line!, tempDir, out line);
+                        if (line == "PING") await writer.WriteLineAsync("PONG".AsMemory(), cts.Token);
+                        else if (line != null && line.StartsWith("POLL_REFRESH")) await writer.WriteLineAsync("READY".AsMemory(), cts.Token);
+                    }
+                }, cts.Token);
+            }
+        });
+
+        using var proc = StartDummyProcess();
+        try
+        {
+            // Historical milestones in the log must NEVER be scanned when attaching (startedProcess == null).
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
+            await File.WriteAllTextAsync(
+                logFile,
+                "[Package Manager] Done resolving packages.\nStart importing Assets/Foo.cs\nCompilation started\nBegin MonoManager ReloadAssembly\n",
+                cts.Token);
+
+            var genericReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message == "Waiting for Unity Editor socket...")
+                {
+                    genericReported.TrySetResult(true);
+                }
+            });
+
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => new[] { proc },
+                ProcessCommandLineProvider = _ => $"Unity -projectPath \"{tempDir}\""
+            };
+
+            Task waitTask = procManager.WaitForSocketReadinessAsync(null, cts.Token, progress: progress);
+            await genericReported.Task.WaitAsync(cts.Token);
+
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString(), cts.Token);
+            await waitTask;
+
+            Assert.Contains(progress.Values, p => p.Message == "Waiting for Unity Editor socket...");
+            Assert.DoesNotContain(progress.Values, p =>
+                p.Message != null &&
+                (p.Message.Contains("Resolving packages") ||
+                 p.Message.Contains("Importing assets") ||
+                 p.Message.Contains("Compiling scripts") ||
+                 p.Message.Contains("Reloading domain")));
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            cts.Cancel();
+            listener.Stop();
+            try { await serverTask; } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenPollRefreshReturnsNonReadyState_ReflectsStateInProgress()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_poll_state_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        bool ready = false;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var serverTask = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                TcpClient tcp;
+                try { tcp = await listener.AcceptTcpClientAsync(cts.Token); }
+                catch { break; }
+
+                _ = Task.Run(async () =>
+                {
+                    using (tcp)
+                    using (var stream = tcp.GetStream())
+                    using (var reader = new StreamReader(stream, Encoding.UTF8))
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
+                    {
+                        string? line = await reader.ReadLineAsync(cts.Token);
+                        UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line!, tempDir, out line);
+                        if (line == "PING")
+                        {
+                            await writer.WriteLineAsync("PONG".AsMemory(), cts.Token);
+                        }
+                        else if (line != null && line.StartsWith("POLL_REFRESH"))
+                        {
+                            string reply = Volatile.Read(ref ready) ? "READY" : "COMPILING";
+                            await writer.WriteLineAsync(reply.AsMemory(), cts.Token);
+                        }
+                    }
+                }, cts.Token);
+            }
+        });
+
+        using var proc = StartDummyProcess();
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString(), cts.Token);
+
+            var compilingReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message != null && p.Message.Contains("COMPILING"))
+                {
+                    compilingReported.TrySetResult(true);
+                }
+            });
+
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            Task waitTask = procManager.WaitForSocketReadinessAsync(proc, cts.Token, progress: progress);
+
+            await compilingReported.Task.WaitAsync(cts.Token);
+            Volatile.Write(ref ready, true);
+            await waitTask;
+
+            Assert.Contains(progress.Values, p =>
+                p.Progress >= 3 &&
+                p.Progress <= 9 &&
+                p.Total == 100 &&
+                p.Message == "Waiting for Unity Editor (COMPILING)...");
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            cts.Cancel();
+            listener.Stop();
+            try { await serverTask; } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private sealed class ConfigurableSocketTransport : IUnitySocketTransport
+    {
+        private readonly Func<bool> _isReady;
+
+        public ConfigurableSocketTransport(Func<bool> isReady)
+        {
+            _isReady = isReady;
+        }
+
+        public Task<bool> IsSocketReadyAsync(int port, string projectRoot, int timeoutSeconds, CancellationToken cancellationToken) =>
+            Task.FromResult(_isReady());
+
+        public Task<string?> SendCommandAsync(int port, string projectRoot, string command, int timeoutSeconds, CancellationToken cancellationToken) =>
+            Task.FromResult<string?>(_isReady() ? "READY" : null);
     }
 }

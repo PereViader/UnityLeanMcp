@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using ModelContextProtocol;
 using Xunit;
 
 namespace UnityLeanMcp.Mcp.Tests;
@@ -30,7 +31,7 @@ internal sealed class StubProcessManager : IUnityProcessManager
 
     public string GetUnityMode(int? pid = null) => "Batchmode";
     public int ReadPortFile() => _port;
-    public Task EnsureUnityRunningAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task EnsureUnityRunningAsync(IProgress<ProgressNotificationValue>? progress = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task<bool> StopUnityAsync(bool force = false, CancellationToken cancellationToken = default) => Task.FromResult(true);
     public void PurgeOperationState() { }
 }
