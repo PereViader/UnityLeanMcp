@@ -51,6 +51,7 @@
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.ObjectAndComponent.cs" Link="UnityInspect.ObjectAndComponent.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.AssetsAndPrefabs.cs" Link="UnityInspect.AssetsAndPrefabs.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.CameraAndCapture.cs" Link="UnityInspect.CameraAndCapture.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityInspect.Console.cs" Link="UnityInspect.Console.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpDispatcher.cs" Link="UnityLeanMcpDispatcher.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\CancelOperationHandler.cs" Link="CancelOperationHandler.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpCompilationTracker.cs" Link="UnityLeanMcpCompilationTracker.cs" />

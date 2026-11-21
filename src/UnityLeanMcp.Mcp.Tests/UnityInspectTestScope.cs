@@ -64,6 +64,7 @@ internal sealed class UnityInspectTestScope : IDisposable
         EditorSettings.prefabModeAllowAutoSave = true;
         SerializedObject.CustomProperties.Clear();
         UnityEngine.UIElements.UIDocument.AllUIDocuments.Clear();
+        LogEntries.Reset();
     }
 
     public void Dispose()

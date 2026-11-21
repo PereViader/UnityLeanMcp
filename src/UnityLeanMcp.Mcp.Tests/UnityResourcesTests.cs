@@ -98,6 +98,7 @@ public class UnityResourcesTests
         nameof(Inspect.CaptureSceneView) or
         nameof(Inspect.CaptureTarget) => "Visual Capture",
 
+        nameof(Inspect.Console) or
         nameof(Inspect.Selection) or
         nameof(Inspect.MainCamera) => "Editor",
 
@@ -120,6 +121,7 @@ public class UnityResourcesTests
                     null => "null",
                     bool b => b ? "true" : "false",
                     string s => $"\"{s}\"",
+                    _ when p.ParameterType.IsEnum => $"{FormatTypeName(p.ParameterType)}.{Enum.ToObject(p.ParameterType, p.DefaultValue)}",
                     _ => Convert.ToString(p.DefaultValue, CultureInfo.InvariantCulture) ?? "null"
                 };
                 paramText += $" = {defaultValue}";

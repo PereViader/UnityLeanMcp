@@ -50,6 +50,7 @@ internal static class InspectHelpCatalog
         "• string CaptureTarget(GameObject target, string outputPath = \"Temp/unity_target.png\", int width = 1024, int height = 768, Vector3? viewDirection = null)\n" +
         "\n" +
         "Editor:\n" +
+        "• string Console(ConsoleSeverity severity = ConsoleSeverity.All, string filter = null, int maxItems = 50, bool includeStackTrace = false)\n" +
         "• string MainCamera()\n" +
         "• string Selection(int maxItems = 50)";
 

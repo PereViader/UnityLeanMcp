@@ -809,6 +809,82 @@ namespace UnityEditor
         public static void EraseInt(string key) => IntValues.Remove(key);
     }
     public class Editor { }
+
+    public sealed class LogEntry
+    {
+        public string message = string.Empty;
+        public string file = string.Empty;
+        public int line;
+        public int mode;
+    }
+
+    public static class LogEntries
+    {
+        public sealed class StubEntry
+        {
+            public string Message { get; set; } = string.Empty;
+            public string File { get; set; } = string.Empty;
+            public int Line { get; set; }
+            public int Mode { get; set; }
+            public int Count { get; set; } = 1;
+        }
+
+        public static readonly List<StubEntry> Entries = new();
+        public static int StartGettingEntriesCallCount { get; private set; }
+        public static int EndGettingEntriesCallCount { get; private set; }
+        public static bool ThrowOnGetEntry { get; set; }
+
+        public static void Reset()
+        {
+            Entries.Clear();
+            StartGettingEntriesCallCount = 0;
+            EndGettingEntriesCallCount = 0;
+            ThrowOnGetEntry = false;
+        }
+
+        public static int StartGettingEntries()
+        {
+            StartGettingEntriesCallCount++;
+            return Entries.Count;
+        }
+
+        public static void EndGettingEntries()
+        {
+            EndGettingEntriesCallCount++;
+        }
+
+        public static int GetCount() => Entries.Count;
+
+        public static bool GetEntryInternal(int row, LogEntry outputEntry)
+        {
+            if (ThrowOnGetEntry)
+            {
+                throw new InvalidOperationException("Simulated LogEntries failure");
+            }
+
+            if (row < 0 || row >= Entries.Count || outputEntry == null)
+            {
+                return false;
+            }
+
+            var src = Entries[row];
+            outputEntry.message = src.Message;
+            outputEntry.file = src.File;
+            outputEntry.line = src.Line;
+            outputEntry.mode = src.Mode;
+            return true;
+        }
+
+        public static int GetEntryCount(int row)
+        {
+            if (row < 0 || row >= Entries.Count)
+            {
+                return 0;
+            }
+
+            return Entries[row].Count;
+        }
+    }
     public class EditorWindow : UnityEngine.ScriptableObject
     {
         public static EditorWindow? focusedWindow { get; set; }
