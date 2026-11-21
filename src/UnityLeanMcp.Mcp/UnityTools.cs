@@ -36,7 +36,7 @@ public class UnityTools
     private static CallToolResult Error(string message) =>
         Result(message.StartsWith("Error:") ? message : $"Error: {message}", isError: true);
 
-    [McpServerTool(Name = "unity_refresh")]
+    [McpServerTool(Name = "unity_refresh", ReadOnly = false, Idempotent = true, Destructive = false, OpenWorld = false)]
     [Description("Refreshes AssetDatabase and returns compiler and asset import diagnostics. Do not call immediately before unity_test or unity_eval, which automatically compile and refresh pending changes. C# compiler errors persist across no-op refreshes, while non-C# diagnostics (shaders, import failures) are captured only during active imports and not re-emitted if assets are unchanged. Normal refresh is fast when unchanged; set clean to true only when a full script recompilation is needed to recover from a stale or corrupted compiler cache; clean refreshes are more expensive.")]
     public async Task<CallToolResult> UnityRefreshAsync(
         [Description("Optional. If true, forces a more expensive full script recompilation by clearing the assembly compiler cache. Defaults to false; use only when recovering from corrupted cache or stale errors.")]
@@ -56,7 +56,7 @@ public class UnityTools
         }
     }
 
-    [McpServerTool(Name = "unity_eval")]
+    [McpServerTool(Name = "unity_eval", ReadOnly = false, Idempotent = false, Destructive = true, OpenWorld = false)]
     [Description("Evaluates C# top-level statements in the active Unity Editor with top-level await. Pre-imports System, System.Collections.Generic, System.Linq, UnityEngine, UnityEditor, and UnityLeanMcp. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. Use 'return <value>;' to return results. Includes a built-in Inspect utility to speed up scene, object, asset, UI, and capture analysis—read the unity://inspect/help resource for its docs.")]
     public async Task<CallToolResult> UnityEvalAsync(
         [Description("Raw C# source text to evaluate. Send plain text directly—do not wrap in JSON.")] string code,
@@ -76,7 +76,7 @@ public class UnityTools
         }
     }
 
-    [McpServerTool(Name = "unity_test")]
+    [McpServerTool(Name = "unity_test", ReadOnly = false, Idempotent = false, Destructive = false, OpenWorld = false)]
     [Description("Runs Unity tests in 'editmode' or 'playmode'. Automatically ensures compilation and refresh are settled prior to execution, so manual pre-refresh is unnecessary. The mode parameter is required; callers must determine whether target tests are EditMode or PlayMode before calling. Use 'editmode' for fast unit tests, editor utilities, and tests without player/runtime lifecycle. Use 'playmode' for integration tests, tests that load scenes, use MonoBehaviour lifecycle, or yield frames via UnityTest/IEnumerator. Use testNames for exact fully qualified name filters and groupNames for .NET regex filters; categoryNames and assemblyNames are also supported as string arrays. Set failedOnly to re-run only failed tests (recommended for slow suites). Set coverage to true to capture in-memory code coverage.")]
     public async Task<CallToolResult> UnityTestAsync(
         [Description("Test execution mode: 'editmode' or 'playmode' (required). Must be specified explicitly. Use 'editmode' for unit tests and editor utilities; use 'playmode' for integration tests, scene loading, and MonoBehaviour runtime tests.")]
@@ -143,7 +143,7 @@ public class UnityTools
         }
     }
 
-    [McpServerTool(Name = "unity_coverage")]
+    [McpServerTool(Name = "unity_coverage", ReadOnly = true, Idempotent = true, Destructive = false, OpenWorld = false)]
     [Description("Queries in-memory code coverage for specified files or directories from the latest test run. Does not run tests. Accepts individual C# files and directory paths (which include all scripts in that folder and its subdirectories). Returns line coverage percentages sorted from lowest to highest coverage and lists uncovered line spans for each file. Set uncoveredOnly to true to omit 100%-covered files and files with 0 executable points.")]
     public async Task<CallToolResult> UnityCoverageAsync(
         [Description("File or directory paths to inspect coverage for (e.g. ['Assets/Scripts/PlayerController.cs'] or ['Assets/Scripts/Combat/']). Directory paths recursively match all contained C# files. Accepts a single string or an array of strings. Required.")]

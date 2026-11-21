@@ -129,6 +129,25 @@ public class McpProtocolTests
             new[] { "editmode", "playmode" },
             modeProp.GetProperty("enum").EnumerateArray().Select(value => value.GetString()).ToArray());
 
+        var expectedAnnotations = new Dictionary<string, (bool ReadOnly, bool Idempotent, bool Destructive, bool OpenWorld)>
+        {
+            ["unity_coverage"] = (true, true, false, false),
+            ["unity_refresh"] = (false, true, false, false),
+            ["unity_test"] = (false, false, false, false),
+            ["unity_eval"] = (false, false, true, false)
+        };
+
+        var toolsByName = toolsElem.EnumerateArray().ToDictionary(t => t.GetProperty("name").GetString()!);
+        foreach (var (toolName, expected) in expectedAnnotations)
+        {
+            Assert.True(toolsByName.TryGetValue(toolName, out var toolElem), $"Missing tool '{toolName}' in tools/list.");
+            Assert.True(toolElem.TryGetProperty("annotations", out var annotations), $"Missing 'annotations' for '{toolName}'.");
+            Assert.Equal(expected.ReadOnly, annotations.GetProperty("readOnlyHint").GetBoolean());
+            Assert.Equal(expected.Idempotent, annotations.GetProperty("idempotentHint").GetBoolean());
+            Assert.Equal(expected.Destructive, annotations.GetProperty("destructiveHint").GetBoolean());
+            Assert.Equal(expected.OpenWorld, annotations.GetProperty("openWorldHint").GetBoolean());
+        }
+
         writer.Close();
         if (!proc.WaitForExit(3000))
         {

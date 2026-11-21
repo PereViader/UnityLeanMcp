@@ -66,6 +66,31 @@ public sealed class ToolSchemaTests
         Assert.DoesNotContain("uncoveredOnly", required);
     }
 
+    [Theory]
+    [InlineData(nameof(UnityTools.UnityCoverageAsync), "unity_coverage", true, true, false, false)]
+    [InlineData(nameof(UnityTools.UnityRefreshAsync), "unity_refresh", false, true, false, false)]
+    [InlineData(nameof(UnityTools.UnityTestAsync), "unity_test", false, false, false, false)]
+    [InlineData(nameof(UnityTools.UnityEvalAsync), "unity_eval", false, false, true, false)]
+    public void AllTools_ExposeExpectedAnnotations(
+        string methodName,
+        string expectedToolName,
+        bool expectedReadOnly,
+        bool expectedIdempotent,
+        bool expectedDestructive,
+        bool expectedOpenWorld)
+    {
+        var tools = new UnityTools(null!, new UnityPathResolver("/tmp"));
+        MethodInfo method = typeof(UnityTools).GetMethod(methodName)!;
+        var tool = McpServerTool.Create(method, tools, new McpServerToolCreateOptions());
+
+        Assert.Equal(expectedToolName, tool.ProtocolTool.Name);
+        Assert.NotNull(tool.ProtocolTool.Annotations);
+        Assert.Equal(expectedReadOnly, tool.ProtocolTool.Annotations!.ReadOnlyHint);
+        Assert.Equal(expectedIdempotent, tool.ProtocolTool.Annotations.IdempotentHint);
+        Assert.Equal(expectedDestructive, tool.ProtocolTool.Annotations.DestructiveHint);
+        Assert.Equal(expectedOpenWorld, tool.ProtocolTool.Annotations.OpenWorldHint);
+    }
+
     private static IEnumerable<string> GetSchemaTypes(JsonElement schema)
     {
         JsonElement type = schema.GetProperty("type");
