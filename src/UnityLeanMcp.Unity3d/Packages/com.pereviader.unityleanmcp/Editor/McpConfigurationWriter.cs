@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace UnityLeanMcp
 {
@@ -81,17 +82,12 @@ namespace UnityLeanMcp
 
         public static void AppendCodexMcpConfig(string configPath, string mcpDir)
         {
-            string dir = Path.GetDirectoryName(configPath);
-            if (!Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
             string formattedMcpDir = mcpDir.Replace('\\', '/');
             if (!formattedMcpDir.EndsWith("/"))
             {
                 formattedMcpDir += "/";
             }
+            formattedMcpDir = formattedMcpDir.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
             string codexTomlSnippet =
                 "[mcp_servers.unity-lean-mcp]\n" +
@@ -107,21 +103,23 @@ namespace UnityLeanMcp
             }
 
             string existing = File.ReadAllText(configPath, Encoding.UTF8);
-            const string targetHeader = "[mcp_servers.unity-lean-mcp]";
-            int headerIndex = existing.IndexOf(targetHeader, StringComparison.Ordinal);
+            var headerMatch = Regex.Match(
+                existing,
+                @"(?m)^[ \t]*\[mcp_servers\.unity-lean-mcp\][ \t]*(#.*)?(\r?\n|$)");
 
-            if (headerIndex != -1)
+            if (headerMatch.Success)
             {
+                int afterHeaderIndex = headerMatch.Index + headerMatch.Length;
                 int nextSectionIndex = -1;
-                var nextMatch = System.Text.RegularExpressions.Regex.Match(
-                    existing.Substring(headerIndex + targetHeader.Length),
+                var nextMatch = Regex.Match(
+                    existing.Substring(afterHeaderIndex),
                     @"(?m)^\[");
                 if (nextMatch.Success)
                 {
-                    nextSectionIndex = headerIndex + targetHeader.Length + nextMatch.Index;
+                    nextSectionIndex = afterHeaderIndex + nextMatch.Index;
                 }
 
-                string before = existing.Substring(0, headerIndex);
+                string before = existing.Substring(0, headerMatch.Index);
                 string after = nextSectionIndex != -1 ? existing.Substring(nextSectionIndex) : string.Empty;
 
                 var sbReplace = new StringBuilder();
@@ -131,7 +129,7 @@ namespace UnityLeanMcp
                 {
                     if (!sbReplace.ToString().EndsWith("\n\n"))
                     {
-                        sbReplace.AppendLine();
+                        sbReplace.Append('\n');
                     }
                     sbReplace.Append(after.TrimStart('\r', '\n'));
                 }
@@ -148,9 +146,9 @@ namespace UnityLeanMcp
             sb.Append(existing);
             if (!existing.EndsWith("\n"))
             {
-                sb.AppendLine();
+                sb.Append('\n');
             }
-            sb.AppendLine();
+            sb.Append('\n');
             sb.Append(codexTomlSnippet);
             WriteAtomic(configPath, sb.ToString());
         }

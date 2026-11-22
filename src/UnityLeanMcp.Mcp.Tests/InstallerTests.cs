@@ -407,6 +407,120 @@ public class InstallerTests
     }
 
     [Fact]
+    public void AppendCodexMcpConfig_WithFilenameOnlyPath_CreatesFile()
+    {
+        string configFile = $"codex_test_{Guid.NewGuid():N}.toml";
+        try
+        {
+            AppendCodexMcpConfig(configFile, "C:/Packages/UnityLeanMcp/MCP~/");
+
+            Assert.True(File.Exists(configFile));
+            string content = File.ReadAllText(configFile);
+            Assert.Contains("[mcp_servers.unity-lean-mcp]", content);
+            Assert.DoesNotContain("\r\n", content);
+        }
+        finally
+        {
+            if (File.Exists(configFile)) File.Delete(configFile);
+        }
+    }
+
+    [Fact]
+    public void AppendCodexMcpConfig_WithQuotesInMcpDir_EscapesTomlString()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            string mcpDir = "/tmp/my \"quoted\" dir/MCP~/";
+
+            AppendCodexMcpConfig(configFile, mcpDir);
+
+            string content = File.ReadAllText(configFile);
+            Assert.Contains("cwd = \"/tmp/my \\\"quoted\\\" dir/MCP~/\"", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
+    public void AppendCodexMcpConfig_IgnoresCommentedAndSubTableHeaders_AppendsNewSection()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
+            string existing = "# [mcp_servers.unity-lean-mcp]\n[mcp_servers.unity-lean-mcp.env]\nFOO = \"bar\"\n";
+            File.WriteAllText(configFile, existing);
+
+            AppendCodexMcpConfig(configFile, "C:/Packages/UnityLeanMcp/MCP~/");
+
+            string content = File.ReadAllText(configFile);
+            Assert.StartsWith(existing, content);
+            Assert.Contains("\n[mcp_servers.unity-lean-mcp]\n", content);
+            Assert.DoesNotContain("\r\n", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
+    public void AppendCodexMcpConfig_ReplacesAnchoredSectionWithLfOnly()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
+            string existing =
+                "[model]\nname = \"o3-mini\"\n\n" +
+                "  [mcp_servers.unity-lean-mcp] # inline comment\n" +
+                "cwd = \"C:/Old/MCP~/\"\n\n" +
+                "[other]\nvalue = 1\n";
+            File.WriteAllText(configFile, existing);
+
+            AppendCodexMcpConfig(configFile, "C:/New/MCP~/");
+
+            string content = File.ReadAllText(configFile);
+            Assert.Contains("cwd = \"C:/New/MCP~/\"", content);
+            Assert.DoesNotContain("C:/Old/MCP~/", content);
+            Assert.Contains("[other]\nvalue = 1\n", content);
+            Assert.DoesNotContain("\r\n", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
+    public void AppendCodexMcpConfig_WhenExistingFileLacksTrailingNewline_UsesLfOnly()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
+            File.WriteAllText(configFile, "[model]\nname = \"o3-mini\"");
+
+            AppendCodexMcpConfig(configFile, "C:/Packages/UnityLeanMcp/MCP~/");
+
+            string content = File.ReadAllText(configFile);
+            Assert.StartsWith("[model]\nname = \"o3-mini\"\n\n[mcp_servers.unity-lean-mcp]\n", content);
+            Assert.DoesNotContain("\r\n", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
     public void TrackedMcpConfig_VsCode_UsesWorkspaceFolderVariableAndMcpDll()
     {
         string repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
