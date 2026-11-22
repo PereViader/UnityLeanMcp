@@ -162,10 +162,14 @@ namespace UnityLeanMcp
                 GetPathComparison());
         }
 
-        private static StringComparison GetPathComparison()
+        internal static StringComparison GetPathComparison()
         {
-            return Environment.OSVersion.Platform == PlatformID.Win32NT ||
-                   RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            return GetPathComparison(RuntimeInformation.IsOSPlatform);
+        }
+
+        internal static StringComparison GetPathComparison(Func<OSPlatform, bool> isOSPlatform)
+        {
+            return isOSPlatform != null && isOSPlatform(OSPlatform.Windows)
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal;
         }

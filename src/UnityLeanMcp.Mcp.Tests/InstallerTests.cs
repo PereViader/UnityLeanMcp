@@ -796,9 +796,7 @@ public class InstallerTests
             targetPath,
             out string relativePath);
 
-        bool isCaseInsensitiveOs =
-            RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ||
-            RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+        bool isCaseInsensitiveOs = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
         if (isCaseInsensitiveOs)
         {
@@ -811,6 +809,35 @@ public class InstallerTests
             Assert.False(success);
             Assert.Equal("../reporoot/SubFolder/file.json", UnityLeanMcp.McpConfigurationPaths.MakeRelativePath(repoUpper, targetPath));
         }
+    }
+
+    public static IEnumerable<object[]> PathComparisonPlatforms()
+    {
+        yield return new object[] { OSPlatform.Windows, StringComparison.OrdinalIgnoreCase };
+        yield return new object[] { OSPlatform.OSX, StringComparison.Ordinal };
+        yield return new object[] { OSPlatform.Linux, StringComparison.Ordinal };
+    }
+
+    [Theory]
+    [MemberData(nameof(PathComparisonPlatforms))]
+    public void McpConfigurationPaths_GetPathComparison_UsesOrdinalExceptOnWindows(
+        OSPlatform platform,
+        StringComparison expected)
+    {
+        StringComparison actual = UnityLeanMcp.McpConfigurationPaths.GetPathComparison(
+            candidate => candidate == platform);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_GetPathComparison_MatchesCurrentPlatform()
+    {
+        StringComparison expected = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        Assert.Equal(expected, UnityLeanMcp.McpConfigurationPaths.GetPathComparison());
     }
 
     [Fact]
