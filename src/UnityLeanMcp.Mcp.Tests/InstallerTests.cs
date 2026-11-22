@@ -2,6 +2,7 @@ using static UnityLeanMcp.McpConfigurationWriter;
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Xunit;
 
@@ -690,63 +691,120 @@ public class InstallerTests
     }
 
     [Fact]
-    public void McpConfigurationPaths_WhenPackageIsInsideRepository_ReturnsPortablePaths()
+    public void McpConfigurationPaths_TryGetRepositoryRelativePath_WhenTargetIsInsideRepository_ReturnsRelativePath()
     {
         string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
-        string projectRoot = Path.Combine(repositoryRoot, "src", "UnityProject");
-        string mcpDirectory = Path.Combine(projectRoot, "Packages", "com.example.mcp", "MCP~");
+        string targetPath = Path.Combine(repositoryRoot, "src", "UnityProject", "Packages", "com.example.mcp", "MCP~", "UnityLeanMcp.Mcp.dll");
 
-        try
-        {
-            bool portable = UnityLeanMcp.McpConfigurationPaths.TryGetPortablePaths(
-                repositoryRoot,
-                mcpDirectory,
-                projectRoot,
-                out string relativeMcpDll,
-                out string relativeProjectRoot);
+        bool success = UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(
+            repositoryRoot,
+            targetPath,
+            out string relativePath);
 
-            Assert.True(portable);
-            Assert.Equal("src/UnityProject/Packages/com.example.mcp/MCP~/UnityLeanMcp.Mcp.dll", relativeMcpDll);
-            Assert.Equal("src/UnityProject", relativeProjectRoot);
-        }
-        finally
-        {
-            if (Directory.Exists(repositoryRoot)) Directory.Delete(repositoryRoot, true);
-        }
+        Assert.True(success);
+        Assert.Equal("src/UnityProject/Packages/com.example.mcp/MCP~/UnityLeanMcp.Mcp.dll", relativePath);
     }
 
     [Fact]
-    public void McpConfigurationPaths_WhenProjectIsRepositoryRoot_UsesDotPath()
+    public void McpConfigurationPaths_TryGetRepositoryRelativePath_WhenTargetIsRepositoryRoot_UsesDotPath()
     {
         string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
-        string mcpDirectory = Path.Combine(repositoryRoot, "Packages", "com.example.mcp", "MCP~");
 
-        bool portable = UnityLeanMcp.McpConfigurationPaths.TryGetPortablePaths(
+        bool success = UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(
             repositoryRoot,
-            mcpDirectory,
             repositoryRoot,
-            out string relativeMcpDll,
-            out string relativeProjectRoot);
+            out string relativePath);
 
-        Assert.True(portable);
-        Assert.Equal("Packages/com.example.mcp/MCP~/UnityLeanMcp.Mcp.dll", relativeMcpDll);
-        Assert.Equal(".", relativeProjectRoot);
+        Assert.True(success);
+        Assert.Equal(".", relativePath);
     }
 
     [Fact]
-    public void McpConfigurationPaths_WhenPackageIsOutsideRepository_RequestsInstallerSpecificPaths()
+    public void McpConfigurationPaths_TryGetRepositoryRelativePath_WhenTargetIsOutsideRepository_ReturnsFalse()
     {
         string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp_paths_" + Guid.NewGuid().ToString("N"));
         string externalPackage = Path.Combine(Path.GetTempPath(), "mcp_package_" + Guid.NewGuid().ToString("N"), "MCP~");
 
-        bool portable = UnityLeanMcp.McpConfigurationPaths.TryGetPortablePaths(
+        bool success = UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(
             repositoryRoot,
             externalPackage,
-            repositoryRoot,
-            out _,
             out _);
 
-        Assert.False(portable);
+        Assert.False(success);
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_MakeRelativePath_PreservesHashAndPercentSequences()
+    {
+        string repositoryRoot = Path.Combine(Path.GetTempPath(), "mcp#paths_%20_" + Guid.NewGuid().ToString("N"));
+        string targetPath = Path.Combine(repositoryRoot, "C#Projects", "My%20App", "config#1.json");
+
+        string makeRelative = UnityLeanMcp.McpConfigurationPaths.MakeRelativePath(repositoryRoot, targetPath);
+        Assert.Equal("C#Projects/My%20App/config#1.json", makeRelative);
+
+        bool relativeSuccess = UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(
+            repositoryRoot,
+            targetPath,
+            out string relativePath);
+        Assert.True(relativeSuccess);
+        Assert.Equal("C#Projects/My%20App/config#1.json", relativePath);
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_TryGetRepositoryRelativePath_RespectsOsCasingRules()
+    {
+        string baseTemp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string unique = "mcp_case_" + Guid.NewGuid().ToString("N");
+        string repoUpper = Path.Combine(baseTemp, unique, "RepoRoot");
+        string repoLower = Path.Combine(baseTemp, unique, "reporoot");
+        string targetPath = Path.Combine(repoLower, "SubFolder", "file.json");
+
+        bool success = UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(
+            repoUpper,
+            targetPath,
+            out string relativePath);
+
+        bool isCaseInsensitiveOs =
+            RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ||
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+
+        if (isCaseInsensitiveOs)
+        {
+            Assert.True(success);
+            Assert.Equal("SubFolder/file.json", relativePath);
+            Assert.Equal("SubFolder/file.json", UnityLeanMcp.McpConfigurationPaths.MakeRelativePath(repoUpper, targetPath));
+        }
+        else
+        {
+            Assert.False(success);
+            Assert.Equal("../reporoot/SubFolder/file.json", UnityLeanMcp.McpConfigurationPaths.MakeRelativePath(repoUpper, targetPath));
+        }
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_MakeRelativePath_WhenSiblingOrPrefixSimilar_ReturnsDotDotPath()
+    {
+        string baseTemp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string repo = Path.Combine(baseTemp, "repo");
+        string sibling = Path.Combine(baseTemp, "repo2", "file.txt");
+
+        Assert.Equal("../repo2/file.txt", UnityLeanMcp.McpConfigurationPaths.MakeRelativePath(repo, sibling));
+        Assert.False(UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(repo, sibling, out _));
+    }
+
+    [Fact]
+    public void McpConfigurationPaths_MakeRelativePath_WhenRootsDiffer_ReturnsAbsoluteTargetWithForwardSlashes()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        string fromPath = @"C:\Repo\Project";
+        string toPath = @"D:\Other\file.txt";
+
+        Assert.Equal("D:/Other/file.txt", UnityLeanMcp.McpConfigurationPaths.MakeRelativePath(fromPath, toPath));
+        Assert.False(UnityLeanMcp.McpConfigurationPaths.TryGetRepositoryRelativePath(fromPath, toPath, out _));
     }
 
     [Fact]

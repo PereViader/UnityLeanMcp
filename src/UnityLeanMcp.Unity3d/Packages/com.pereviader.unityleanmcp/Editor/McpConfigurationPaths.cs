@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 
@@ -120,37 +121,6 @@ namespace UnityLeanMcp
             return true;
         }
 
-        public static bool TryGetPortablePaths(
-            string repositoryRoot,
-            string mcpDirectory,
-            string projectRoot,
-            out string relativeMcpDll,
-            out string relativeProjectRoot)
-        {
-            relativeMcpDll = null;
-            relativeProjectRoot = null;
-
-            if (string.IsNullOrWhiteSpace(repositoryRoot) ||
-                string.IsNullOrWhiteSpace(mcpDirectory) ||
-                string.IsNullOrWhiteSpace(projectRoot))
-            {
-                return false;
-            }
-
-            if (!TryGetRepositoryRelativePath(
-                    repositoryRoot,
-                    Path.Combine(mcpDirectory, "UnityLeanMcp.Mcp.dll"),
-                    out relativeMcpDll) ||
-                !TryGetRepositoryRelativePath(repositoryRoot, projectRoot, out relativeProjectRoot))
-            {
-                relativeMcpDll = null;
-                relativeProjectRoot = null;
-                return false;
-            }
-
-            return true;
-        }
-
         public static bool TryGetRepositoryRelativePath(string repositoryRoot, string targetPath, out string relativePath)
         {
             relativePath = null;
@@ -186,15 +156,18 @@ namespace UnityLeanMcp
 
         private static bool PathsEqual(string left, string right)
         {
-            StringComparison comparison =
-                Environment.OSVersion.Platform == PlatformID.Win32NT ||
-                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal;
             return string.Equals(
                 left.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                 right.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                comparison);
+                GetPathComparison());
+        }
+
+        private static StringComparison GetPathComparison()
+        {
+            return Environment.OSVersion.Platform == PlatformID.Win32NT ||
+                   RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
         }
 
         private static bool IsAbsolutePath(string path)
@@ -207,23 +180,46 @@ namespace UnityLeanMcp
 
         internal static string MakeRelativePath(string fromPath, string toPath)
         {
-            var fromUri = new Uri(AppendSlash(Path.GetFullPath(fromPath)));
-            var toUri = new Uri(Path.GetFullPath(toPath));
-            if (fromUri.Scheme != toUri.Scheme)
+            string fullFrom = Path.GetFullPath(fromPath);
+            string fullTo = Path.GetFullPath(toPath);
+            StringComparison comparison = GetPathComparison();
+
+            string fromRoot = Path.GetPathRoot(fullFrom) ?? string.Empty;
+            string toRoot = Path.GetPathRoot(fullTo) ?? string.Empty;
+            if (!string.Equals(
+                    fromRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    toRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    comparison))
             {
-                return toPath;
+                return fullTo.Replace('\\', '/');
             }
 
-            string relative = Uri.UnescapeDataString(fromUri.MakeRelativeUri(toUri).ToString());
-            return relative.Replace('\\', '/');
-        }
+            char[] separators = { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
+            string[] fromSegments = fullFrom.Substring(fromRoot.Length).Split(separators, StringSplitOptions.RemoveEmptyEntries);
+            string[] toSegments = fullTo.Substring(toRoot.Length).Split(separators, StringSplitOptions.RemoveEmptyEntries);
 
-        private static string AppendSlash(string path)
-        {
-            return path.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal) ||
-                path.EndsWith(Path.AltDirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-                ? path
-                : path + Path.DirectorySeparatorChar;
+            int minLength = Math.Min(fromSegments.Length, toSegments.Length);
+            int commonCount = 0;
+            while (commonCount < minLength &&
+                   string.Equals(fromSegments[commonCount], toSegments[commonCount], comparison))
+            {
+                commonCount++;
+            }
+
+            var relativeSegments = new List<string>();
+            for (int i = commonCount; i < fromSegments.Length; i++)
+            {
+                relativeSegments.Add("..");
+            }
+
+            for (int i = commonCount; i < toSegments.Length; i++)
+            {
+                relativeSegments.Add(toSegments[i]);
+            }
+
+            return relativeSegments.Count == 0
+                ? "."
+                : string.Join("/", relativeSegments);
         }
     }
 }
