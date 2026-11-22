@@ -553,6 +553,50 @@ public class InstallerTests
         }
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n\t  ")]
+    public void AppendCodexMcpConfig_WhenFileIsEmptyOrWhitespace_DoesNotPrependBlankLines(string initialContent)
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_empty_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
+            File.WriteAllBytes(configFile, System.Text.Encoding.UTF8.GetBytes(initialContent));
+
+            AppendCodexMcpConfig(configFile, "C:/Packages/UnityLeanMcp/MCP~/");
+
+            string content = File.ReadAllText(configFile);
+            Assert.StartsWith("[mcp_servers.unity-lean-mcp]\n", content);
+            Assert.DoesNotContain("\r\n", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
+    public void AppendCodexMcpConfig_WithTomlControlCharactersInMcpDir_EscapesTomlBasicString()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_escape_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            string mcpDir = "/tmp/a\bb\tc\nd\fe\rf\u0001g\u007Fh\"i/MCP~/";
+
+            AppendCodexMcpConfig(configFile, mcpDir);
+
+            string content = File.ReadAllText(configFile);
+            Assert.Contains("cwd = \"/tmp/a\\bb\\tc\\nd\\fe\\rf\\u0001g\\u007Fh\\\"i/MCP~/\"", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
     [Fact]
     public void TrackedMcpConfig_VsCode_UsesWorkspaceFolderVariableAndMcpDll()
     {

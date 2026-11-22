@@ -315,7 +315,7 @@ namespace UnityLeanMcp
 
         internal static OperationCancelResult CancelActiveTestRun(string operationId)
         {
-            if (string.IsNullOrWhiteSpace(operationId))
+            if (!UnityLeanMcpPaths.IsValidOperationId(operationId))
                 return OperationCancelResult.NotFound;
 
             var operation = UnityCommandGate.ReadSnapshot();

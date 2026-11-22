@@ -212,6 +212,58 @@ public sealed class OperationIdValidationTests : IDisposable
     }
 
     [Theory]
+    [MemberData(nameof(InvalidOperationIds))]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void UnityCommandGate_TryRequestCancellation_ReturnsFalseForInvalidOrEmptyIds(string? operationId)
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, "valid-active-op", OperationStatus.Running, out _));
+
+        bool accepted = UnityCommandGate.TryRequestCancellation(operationId!, out var snapshot);
+
+        Assert.False(accepted);
+        Assert.NotNull(snapshot);
+        Assert.Equal("valid-active-op", snapshot.OperationId);
+        Assert.False(UnityCommandGate.IsCancellationRequested(operationId!));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void UnityCommandGate_ClearPendingResultAndComplete_DoesNotWildcardClearActiveOperation(string? emptyOperationId)
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, "valid-active-op", OperationStatus.Running, out _));
+
+        Type pendingType = typeof(UnityCommandGate).GetNestedType("PendingResult", BindingFlags.NonPublic)!;
+        object pending = Activator.CreateInstance(pendingType)!;
+        pendingType.GetField("Kind")!.SetValue(pending, OperationKinds.Eval);
+        pendingType.GetField("OperationId")!.SetValue(pending, emptyOperationId);
+        pendingType.GetField("Path")!.SetValue(pending, Path.Combine(UnityLeanMcpPaths.TempDir, "empty.json"));
+        pendingType.GetField("Json")!.SetValue(pending, "{}");
+        typeof(UnityCommandGate).GetField("s_PendingResult", BindingFlags.NonPublic | BindingFlags.Static)!.SetValue(null, pending);
+
+        MethodInfo retryMethod = typeof(UnityCommandGate).GetMethod("RetryPendingResult", BindingFlags.NonPublic | BindingFlags.Static)!;
+        retryMethod.Invoke(null, null);
+
+        Assert.False(UnityCommandGate.HasPendingResult(emptyOperationId!));
+        Assert.True(UnityCommandGate.IsOwnedBy("valid-active-op", OperationKinds.Eval));
+        Assert.NotNull(UnityCommandGate.ReadSnapshot());
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidOperationIds))]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void RunTestsHandler_CancelActiveTestRun_RejectsInvalidIdsWithoutPathTraversal(string? operationId)
+    {
+        var result = RunTestsHandler.CancelActiveTestRun(operationId!);
+
+        Assert.Equal(OperationCancelResult.NotFound, result);
+    }
+
+    [Theory]
     [InlineData(null, null)]
     [InlineData("", null)]
     [InlineData("   ", null)]

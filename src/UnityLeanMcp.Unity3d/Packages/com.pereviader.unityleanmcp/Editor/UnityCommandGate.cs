@@ -199,11 +199,9 @@ namespace UnityLeanMcp
             lock (s_Lock)
             {
                 operation = s_Snapshot;
-                if (!s_AcceptingCancellationRequests) return false;
-                if (UnityLeanMcpPaths.IsValidOperationId(opId))
-                {
-                    s_CancellationRequests.Add(opId);
-                }
+                if (!s_AcceptingCancellationRequests || !UnityLeanMcpPaths.IsValidOperationId(opId))
+                    return false;
+                s_CancellationRequests.Add(opId);
                 return true;
             }
         }
@@ -458,7 +456,10 @@ namespace UnityLeanMcp
                     s_LastRetryTicks = 0;
                     EditorApplication.update -= RetryPendingResult;
                 }
-                Complete(operationId);
+                if (!string.IsNullOrEmpty(operationId))
+                {
+                    Complete(operationId);
+                }
             }
         }
 
