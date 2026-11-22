@@ -57,6 +57,7 @@
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\UnityLeanMcpCompilationTracker.cs" Link="UnityLeanMcpCompilationTracker.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\RefreshErrorLogCapture.cs" Link="RefreshErrorLogCapture.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollHelper.cs" Link="PollHelper.cs" />
+    <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollEvalHandler.cs" Link="PollEvalHandler.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollRefreshHandler.cs" Link="PollRefreshHandler.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\PollTestsHandler.cs" Link="PollTestsHandler.cs" />
     <Compile Include="..\UnityLeanMcp.Unity3d\Packages\com.pereviader.unityleanmcp\Editor\EvalHandler.cs" Link="EvalHandler.cs" />

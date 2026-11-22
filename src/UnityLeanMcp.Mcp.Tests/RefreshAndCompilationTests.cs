@@ -554,5 +554,68 @@ namespace UnityLeanMcp.Mcp.Tests
                 try { if (File.Exists(runningFile)) File.Delete(runningFile); } catch { }
             }
         }
+
+        [Theory]
+        [InlineData(OperationKinds.Test, OperationStatus.Running)]
+        [InlineData(OperationKinds.Refresh, OperationStatus.Refreshing)]
+        public void PollEvalHandler_WhenForeignKindOwnsGate_ReturnsBusyForBareMatchingAndMismatchedOperationId(
+            string foreignKind,
+            string foreignStatus)
+        {
+            const string foreignOpId = "foreign-op-123";
+            UnityCommandGate.ForceReset();
+            try
+            {
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(foreignKind, foreignOpId, foreignStatus, out _));
+                var handler = new PollEvalHandler();
+                string expectedBusy = $"BUSY {foreignKind} {foreignOpId}";
+
+                foreach (string pollPayload in new[] { "", foreignOpId, "different-eval-op" })
+                {
+                    using var stream = new MemoryStream();
+                    using var writer = new StreamWriter(stream) { AutoFlush = true };
+                    handler.Handle(pollPayload, writer);
+                    string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                    Assert.Equal(expectedBusy, response);
+                }
+            }
+            finally
+            {
+                UnityCommandGate.ForceReset();
+            }
+        }
+
+        [Fact]
+        public void PollEvalHandler_WhenEvalOwnsGate_ReturnsRunningForBareAndMatchingAndBusyForMismatched()
+        {
+            const string evalOpId = "eval-op-456";
+            UnityCommandGate.ForceReset();
+            try
+            {
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, evalOpId, OperationStatus.Executing, out _));
+                var handler = new PollEvalHandler();
+
+                foreach (string pollPayload in new[] { "", evalOpId })
+                {
+                    using var stream = new MemoryStream();
+                    using var writer = new StreamWriter(stream) { AutoFlush = true };
+                    handler.Handle(pollPayload, writer);
+                    string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                    Assert.Equal("RUNNING", response);
+                }
+
+                using (var stream = new MemoryStream())
+                using (var writer = new StreamWriter(stream) { AutoFlush = true })
+                {
+                    handler.Handle("other-eval-op", writer);
+                    string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                    Assert.Equal($"BUSY {OperationKinds.Eval} {evalOpId}", response);
+                }
+            }
+            finally
+            {
+                UnityCommandGate.ForceReset();
+            }
+        }
     }
 }

@@ -35,6 +35,7 @@ namespace UnityLeanMcp
 
         public static void PollOperationResult(
             string operationId,
+            string expectedKind,
             string resultFilePath,
             StreamWriter writer,
             Action<WorkerOperationResultSnapshot, StreamWriter> writeResultResponse)
@@ -72,7 +73,8 @@ namespace UnityLeanMcp
             var operation = UnityCommandGate.ReadSnapshot();
             if (operation != null)
             {
-                if (!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId)
+                if ((!string.IsNullOrEmpty(operationId) && operation.OperationId != operationId) ||
+                    !string.Equals(operation.Kind, expectedKind, StringComparison.OrdinalIgnoreCase))
                 {
                     writer.WriteLine($"BUSY {operation.Kind} {operation.OperationId}");
                 }
