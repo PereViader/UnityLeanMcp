@@ -804,7 +804,6 @@ namespace UnityLeanMcp
             {
                 rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.Default, RenderTextureReadWrite.Default);
                 camera.targetTexture = rt;
-                RenderTexture.active = rt;
 
                 bool renderedViaRequest = false;
                 try
@@ -830,6 +829,7 @@ namespace UnityLeanMcp
                 }
 
                 tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                RenderTexture.active = rt;
                 tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
 
                 byte[] pngBytes = tex.EncodeToPNG();

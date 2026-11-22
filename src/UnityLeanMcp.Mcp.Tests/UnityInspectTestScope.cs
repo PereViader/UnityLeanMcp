@@ -32,6 +32,11 @@ internal sealed class UnityInspectTestScope : IDisposable
         Camera.main = null;
         Camera.OnBeforeRenderAction = null;
         Camera.AllCamerasList.Clear();
+        Texture2D.OnReadPixelsAction = null;
+        RenderTexture.active = null;
+        UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline = null;
+        UnityEngine.Rendering.RenderPipeline.SupportsRenderRequestFunc = null;
+        UnityEngine.Rendering.RenderPipeline.SubmitRenderRequestAction = null;
         SceneView.lastActiveSceneView = null;
         SceneView.SceneViewsList.Clear();
         UnityEngine.Object.FindObjectsOfTypeFunc = null;

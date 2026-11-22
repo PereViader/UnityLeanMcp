@@ -523,6 +523,72 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public void CaptureCamera_WhenCameraRenderMutatesActiveRenderTexture_BindsTargetBeforeReadPixelsAndRestoresPrevious()
+    {
+        var go = new GameObject("RenderActiveCamObj");
+        var cam = go.AddComponent<Camera>();
+        cam.name = "RenderActiveCam";
+
+        var prevActive = new RenderTexture { width = 64, height = 64 };
+        var mutatedActive = new RenderTexture { width = 128, height = 128 };
+        RenderTexture.active = prevActive;
+
+        RenderTexture? renderedTarget = null;
+        RenderTexture? activeDuringReadPixels = null;
+
+        Camera.OnBeforeRenderAction = c =>
+        {
+            renderedTarget = c.targetTexture;
+            RenderTexture.active = mutatedActive;
+        };
+        Texture2D.OnReadPixelsAction = _ => activeDuringReadPixels = RenderTexture.active;
+
+        string outputPath = "Temp/test_inspect_cam_render_active.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+        Assert.Contains("Captured camera \"RenderActiveCam\"", result);
+        Assert.NotNull(renderedTarget);
+        Assert.Same(renderedTarget, activeDuringReadPixels);
+        Assert.Same(prevActive, RenderTexture.active);
+    }
+
+    [Fact]
+    public void CaptureCamera_WhenRenderPipelineRequestMutatesActiveRenderTexture_BindsTargetBeforeReadPixelsAndRestoresPrevious()
+    {
+        var go = new GameObject("SrpActiveCamObj");
+        var cam = go.AddComponent<Camera>();
+        cam.name = "SrpActiveCam";
+
+        var prevActive = new RenderTexture { width = 64, height = 64 };
+        RenderTexture.active = prevActive;
+
+        GraphicsSettings.currentRenderPipeline = new RenderPipelineAsset();
+        RenderPipeline.SupportsRenderRequestFunc = (_, _) => true;
+
+        RenderTexture? requestedDestination = null;
+        RenderTexture? activeDuringReadPixels = null;
+
+        RenderPipeline.SubmitRenderRequestAction = (_, req) =>
+        {
+            requestedDestination = req.destination;
+            RenderTexture.active = null;
+        };
+        Texture2D.OnReadPixelsAction = _ => activeDuringReadPixels = RenderTexture.active;
+
+        string outputPath = "Temp/test_inspect_cam_srp_active.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: cam);
+
+        Assert.Contains("Captured camera \"SrpActiveCam\"", result);
+        Assert.NotNull(requestedDestination);
+        Assert.Same(requestedDestination, activeDuringReadPixels);
+        Assert.Same(prevActive, RenderTexture.active);
+    }
+
+    [Fact]
     public void CaptureSceneView_WhenSceneViewPresent_SavesPngAndReturnsSummary()
     {
         var camGo = new GameObject("SceneCamObj");

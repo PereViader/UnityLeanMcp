@@ -440,6 +440,7 @@ namespace UnityEngine
     public enum TextureFormat { RGB24, RGBA32 }
     public class Texture2D : Texture
     {
+        public static Action<Texture2D>? OnReadPixelsAction;
         public int width { get; set; }
         public int height { get; set; }
         public Texture2D(int width, int height, TextureFormat format = TextureFormat.RGBA32, bool mipChain = false)
@@ -447,7 +448,10 @@ namespace UnityEngine
             this.width = width;
             this.height = height;
         }
-        public void ReadPixels(Rect source, int destX, int destY, bool recalculateMipMaps = true) { }
+        public void ReadPixels(Rect source, int destX, int destY, bool recalculateMipMaps = true)
+        {
+            OnReadPixelsAction?.Invoke(this);
+        }
         public void Apply(bool updateMipmaps = true, bool makeNoLongerReadable = false) { }
         public byte[] EncodeToPNG() => new byte[128];
     }
@@ -705,8 +709,13 @@ namespace UnityEngine.Rendering
             public RenderTexture? destination;
         }
 
-        public static bool SupportsRenderRequest(Camera camera, StandardRequest data) => false;
-        public static void SubmitRenderRequest(Camera camera, StandardRequest data) { }
+        public static Func<Camera, StandardRequest, bool>? SupportsRenderRequestFunc;
+        public static Action<Camera, StandardRequest>? SubmitRenderRequestAction;
+
+        public static bool SupportsRenderRequest(Camera camera, StandardRequest data) =>
+            SupportsRenderRequestFunc?.Invoke(camera, data) ?? false;
+        public static void SubmitRenderRequest(Camera camera, StandardRequest data) =>
+            SubmitRenderRequestAction?.Invoke(camera, data);
     }
 }
 
