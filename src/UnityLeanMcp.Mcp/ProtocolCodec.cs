@@ -114,7 +114,8 @@ public static class ProtocolCodec
         string trimmed = response.Trim();
         if (trimmed.StartsWith("INTERRUPTION", StringComparison.OrdinalIgnoreCase))
         {
-            string message = trimmed.Length > 12 ? trimmed[12..].Trim() : "Operation interrupted.";
+            string stripped = StripStatusPrefix(trimmed);
+            string message = string.IsNullOrWhiteSpace(stripped) ? "Operation interrupted." : stripped;
             return new TResult
             {
                 OperationId = operationId,

@@ -655,6 +655,25 @@ public class DecomposedComponentsTests
         Assert.Equal(expected, actual);
     }
 
+    [Theory]
+    [InlineData("INTERRUPTION: Domain reload", "Domain reload")]
+    [InlineData("INTERRUPTION:Domain reload", "Domain reload")]
+    [InlineData("INTERRUPTION Domain reload", "Domain reload")]
+    [InlineData("INTERRUPTION: Line 1\\nLine 2", "Line 1\nLine 2")]
+    [InlineData("INTERRUPTION", "Operation interrupted.")]
+    [InlineData("INTERRUPTION:", "Operation interrupted.")]
+    [InlineData("INTERRUPTION:   ", "Operation interrupted.")]
+    public void ProtocolCodec_TryCreateImmediateTerminalResult_HandlesInterruptionVariants(string response, string expectedMessage)
+    {
+        var result = ProtocolCodec.TryCreateImmediateTerminalResult<UnityOperationResult>(response, "op_int_1");
+
+        Assert.NotNull(result);
+        Assert.Equal("op_int_1", result!.OperationId);
+        Assert.False(result.Success);
+        Assert.True(result.Interrupted);
+        Assert.Equal(expectedMessage, result.Message);
+    }
+
     [Fact]
     public async Task OperationPoller_PollOperationUntilTerminalAsync_WhenSocketReturnsErrorWithColon_StripsPrefixAndUnescapes()
     {
