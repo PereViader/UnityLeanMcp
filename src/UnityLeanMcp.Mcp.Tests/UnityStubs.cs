@@ -844,6 +844,10 @@ namespace UnityEditor
         public static int StartGettingEntriesCallCount { get; private set; }
         public static int EndGettingEntriesCallCount { get; private set; }
         public static bool ThrowOnGetEntry { get; set; }
+        public static int? UnfilteredErrorCount { get; set; }
+        public static int? UnfilteredWarningCount { get; set; }
+        public static int? UnfilteredLogCount { get; set; }
+        public static string FilteringText { get; set; } = string.Empty;
 
         public static void Reset()
         {
@@ -851,6 +855,10 @@ namespace UnityEditor
             StartGettingEntriesCallCount = 0;
             EndGettingEntriesCallCount = 0;
             ThrowOnGetEntry = false;
+            UnfilteredErrorCount = null;
+            UnfilteredWarningCount = null;
+            UnfilteredLogCount = null;
+            FilteringText = string.Empty;
         }
 
         public static int StartGettingEntries()
@@ -895,6 +903,38 @@ namespace UnityEditor
 
             return Entries[row].Count;
         }
+
+        public static void GetCountsByType(ref int errorCount, ref int warningCount, ref int logCount)
+        {
+            const int errorMask = (1 << 0) | (1 << 1) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 11) | (1 << 17) | (1 << 20) | (1 << 21);
+            const int warningMask = (1 << 7) | (1 << 9) | (1 << 12);
+
+            int computedErrors = 0;
+            int computedWarnings = 0;
+            int computedLogs = 0;
+            foreach (StubEntry entry in Entries)
+            {
+                int count = Math.Max(1, entry.Count);
+                if ((entry.Mode & errorMask) != 0)
+                {
+                    computedErrors += count;
+                }
+                else if ((entry.Mode & warningMask) != 0)
+                {
+                    computedWarnings += count;
+                }
+                else
+                {
+                    computedLogs += count;
+                }
+            }
+
+            errorCount = UnfilteredErrorCount ?? computedErrors;
+            warningCount = UnfilteredWarningCount ?? computedWarnings;
+            logCount = UnfilteredLogCount ?? computedLogs;
+        }
+
+        public static string GetFilteringText() => FilteringText;
     }
     public class EditorWindow : UnityEngine.ScriptableObject
     {

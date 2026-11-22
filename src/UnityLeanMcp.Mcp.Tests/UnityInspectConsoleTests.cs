@@ -343,4 +343,99 @@ public class UnityInspectConsoleTests
         Assert.Equal(1, LogEntries.StartGettingEntriesCallCount);
         Assert.Equal(1, LogEntries.EndGettingEntriesCallCount);
     }
+
+    [Fact]
+    public void Console_WhenUiFiltersHideEntries_IncludesConciseNoteInHeader()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.Add(new LogEntries.StubEntry { Message = "Visible log", Mode = ModeScriptingLog });
+        LogEntries.UnfilteredErrorCount = 2;
+        LogEntries.UnfilteredWarningCount = 1;
+        LogEntries.UnfilteredLogCount = 1;
+
+        string result = Inspect.Console();
+
+        Assert.Contains(
+            "Console entries (1 shown, 1 unique matched of 1 total; 0 error, 0 warning, 1 log) [Console UI filters hiding 3: 2 error, 1 warning, 0 log]:",
+            result);
+        Assert.Contains("[Log] Visible log", result);
+    }
+
+    [Fact]
+    public void Console_WhenUiSearchFilterHidesEntries_IncludesSearchTextInHeaderNote()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.Add(new LogEntries.StubEntry { Message = "Player spawned", Mode = ModeScriptingLog });
+        LogEntries.UnfilteredErrorCount = 1;
+        LogEntries.UnfilteredWarningCount = 0;
+        LogEntries.UnfilteredLogCount = 3;
+        LogEntries.FilteringText = "Player";
+
+        string result = Inspect.Console();
+
+        Assert.Contains(
+            "Console entries (1 shown, 1 unique matched of 1 total; 0 error, 0 warning, 1 log) [Console UI filters hiding 3: 1 error, 0 warning, 2 log; search: \"Player\"]:",
+            result);
+    }
+
+    [Fact]
+    public void Console_WhenUiFiltersHideAllEntries_DoesNotReportEmptyConsole()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.UnfilteredErrorCount = 3;
+        LogEntries.UnfilteredWarningCount = 1;
+        LogEntries.UnfilteredLogCount = 0;
+        LogEntries.FilteringText = "Missing";
+
+        string result = Inspect.Console();
+
+        Assert.Equal(
+            "(No visible entries in Unity Console; Console UI filters hiding 4: 3 error, 1 warning, 0 log; search: \"Missing\")",
+            result);
+    }
+
+    [Fact]
+    public void Console_WhenNoEntriesMatchQueryAndUiFiltersHideEntries_IncludesFilterNote()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.Add(new LogEntries.StubEntry { Message = "Visible log", Mode = ModeScriptingLog });
+        LogEntries.UnfilteredErrorCount = 2;
+        LogEntries.UnfilteredWarningCount = 0;
+        LogEntries.UnfilteredLogCount = 1;
+
+        string result = Inspect.Console(filter: "DoesNotExist");
+
+        Assert.Equal(
+            "(No Console entries matched; 1 total in Console: 0 error, 0 warning, 1 log; Console UI filters hiding 2: 2 error, 0 warning, 0 log)",
+            result);
+    }
+
+    [Fact]
+    public void Console_WhenUiSearchTextMatchesAllEntries_DoesNotEmitHiddenNote()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.Add(new LogEntries.StubEntry { Message = "Player spawned", Mode = ModeScriptingLog });
+        LogEntries.FilteringText = "Player";
+
+        string result = Inspect.Console();
+
+        Assert.Contains("Console entries (1 shown, 1 unique matched of 1 total; 0 error, 0 warning, 1 log):", result);
+        Assert.DoesNotContain("Console UI filters hiding", result);
+    }
+
+    [Fact]
+    public void Console_InternalHarnessLogsDoNotTriggerFalseHiddenFilterNote()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.AddRange(new[]
+        {
+            new LogEntries.StubEntry { Message = "UnityLeanMcp: Server started", Mode = ModeScriptingLog, Count = 2 },
+            new LogEntries.StubEntry { Message = "User log", Mode = ModeScriptingLog }
+        });
+
+        string result = Inspect.Console();
+
+        Assert.Contains("Console entries (1 shown, 1 unique matched of 1 total; 0 error, 0 warning, 1 log):", result);
+        Assert.DoesNotContain("Console UI filters hiding", result);
+    }
 }

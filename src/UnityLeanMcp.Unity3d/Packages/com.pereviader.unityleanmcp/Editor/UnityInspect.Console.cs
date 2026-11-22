@@ -67,6 +67,8 @@ namespace UnityLeanMcp
             public readonly MethodInfo GetCount;
             public readonly MethodInfo GetEntryInternal;
             public readonly MethodInfo GetEntryCount;
+            public readonly MethodInfo GetCountsByType;
+            public readonly MethodInfo GetFilteringText;
             public readonly Type LogEntryType;
             public readonly MemberInfo MessageMember;
             public readonly MemberInfo FileMember;
@@ -88,6 +90,8 @@ namespace UnityLeanMcp
                 MethodInfo getCount,
                 MethodInfo getEntryInternal,
                 MethodInfo getEntryCount,
+                MethodInfo getCountsByType,
+                MethodInfo getFilteringText,
                 Type logEntryType,
                 MemberInfo messageMember,
                 MemberInfo fileMember,
@@ -99,6 +103,8 @@ namespace UnityLeanMcp
                 GetCount = getCount;
                 GetEntryInternal = getEntryInternal;
                 GetEntryCount = getEntryCount;
+                GetCountsByType = getCountsByType;
+                GetFilteringText = getFilteringText;
                 LogEntryType = logEntryType;
                 MessageMember = messageMember;
                 FileMember = fileMember;
@@ -218,6 +224,14 @@ namespace UnityLeanMcp
             int totalErrors = 0;
             int totalWarnings = 0;
             int totalLogs = 0;
+            int skippedInternalErrors = 0;
+            int skippedInternalWarnings = 0;
+            int skippedInternalLogs = 0;
+            bool hasCountsByType = false;
+            int unfilteredErrors = 0;
+            int unfilteredWarnings = 0;
+            int unfilteredLogs = 0;
+            string filteringText = null;
 
             bool started = false;
             try
@@ -255,34 +269,26 @@ namespace UnityLeanMcp
                             out string primaryMessage,
                             out string stackTrace);
 
+                        int count = ReadEntryCount(api, getCountArgs, i);
+                        ConsoleSeverity entrySeverity = MapModeToSeverity(mode);
+
                         if (IsInternalHarnessLog(rawMessage, primaryMessage))
                         {
+                            switch (entrySeverity)
+                            {
+                                case ConsoleSeverity.Error:
+                                    skippedInternalErrors += count;
+                                    break;
+                                case ConsoleSeverity.Warning:
+                                    skippedInternalWarnings += count;
+                                    break;
+                                default:
+                                    skippedInternalLogs += count;
+                                    break;
+                            }
                             continue;
                         }
 
-                        int count = 1;
-                        if (api.GetEntryCount != null)
-                        {
-                            try
-                            {
-                                getCountArgs[0] = i;
-                                object countObj = api.GetEntryCount.Invoke(null, getCountArgs);
-                                if (countObj != null)
-                                {
-                                    int nativeCount = Convert.ToInt32(countObj, CultureInfo.InvariantCulture);
-                                    if (nativeCount >= 1)
-                                    {
-                                        count = nativeCount;
-                                    }
-                                }
-                            }
-                            catch
-                            {
-                                count = 1;
-                            }
-                        }
-
-                        ConsoleSeverity entrySeverity = MapModeToSeverity(mode);
                         totalEntryCount += count;
                         switch (entrySeverity)
                         {
@@ -342,6 +348,9 @@ namespace UnityLeanMcp
                         }
                     }
                 }
+
+                hasCountsByType = TryReadCountsByType(api, out unfilteredErrors, out unfilteredWarnings, out unfilteredLogs);
+                filteringText = TryReadFilteringText(api);
             }
             catch (Exception ex)
             {
@@ -364,20 +373,47 @@ namespace UnityLeanMcp
                 }
             }
 
+            string uiFilterNote = BuildConsoleUiFilterNote(
+                hasCountsByType,
+                unfilteredErrors,
+                unfilteredWarnings,
+                unfilteredLogs,
+                totalErrors + skippedInternalErrors,
+                totalWarnings + skippedInternalWarnings,
+                totalLogs + skippedInternalLogs,
+                filteringText);
+
             if (totalEntryCount == 0)
             {
-                return "(No entries in Unity Console)";
+                return string.IsNullOrEmpty(uiFilterNote)
+                    ? "(No entries in Unity Console)"
+                    : string.Format(
+                        CultureInfo.InvariantCulture,
+                        "(No visible entries in Unity Console; {0})",
+                        uiFilterNote);
             }
 
             if (collapsedList.Count == 0)
             {
+                if (string.IsNullOrEmpty(uiFilterNote))
+                {
+                    return string.Format(
+                        CultureInfo.InvariantCulture,
+                        "(No Console entries matched; {0} total in Console: {1} error, {2} warning, {3} log)",
+                        totalEntryCount,
+                        totalErrors,
+                        totalWarnings,
+                        totalLogs);
+                }
+
                 return string.Format(
                     CultureInfo.InvariantCulture,
-                    "(No Console entries matched; {0} total in Console: {1} error, {2} warning, {3} log)",
+                    "(No Console entries matched; {0} total in Console: {1} error, {2} warning, {3} log; {4})",
                     totalEntryCount,
                     totalErrors,
                     totalWarnings,
-                    totalLogs);
+                    totalLogs,
+                    uiFilterNote);
             }
 
             int startIndex = Math.Max(0, collapsedList.Count - maxItems);
@@ -387,14 +423,20 @@ namespace UnityLeanMcp
             var sb = new StringBuilder();
             sb.AppendFormat(
                 CultureInfo.InvariantCulture,
-                "Console entries ({0} shown, {1} unique matched of {2} total; {3} error, {4} warning, {5} log):",
+                "Console entries ({0} shown, {1} unique matched of {2} total; {3} error, {4} warning, {5} log)",
                 shownCount,
                 collapsedList.Count,
                 totalEntryCount,
                 totalErrors,
                 totalWarnings,
                 totalLogs);
-            sb.AppendLine();
+            if (!string.IsNullOrEmpty(uiFilterNote))
+            {
+                sb.Append(" [");
+                sb.Append(uiFilterNote);
+                sb.Append(']');
+            }
+            sb.AppendLine(":");
 
             int currentIndex = 0;
             foreach (CollapsedConsoleEntry entry in collapsedList)
@@ -446,6 +488,9 @@ namespace UnityLeanMcp
                     MethodInfo getCount = logEntriesType.GetMethod("GetCount", staticFlags, null, Type.EmptyTypes, null);
                     MethodInfo getEntryInternal = logEntriesType.GetMethod("GetEntryInternal", staticFlags, null, new[] { typeof(int), logEntryType }, null);
                     MethodInfo getEntryCount = logEntriesType.GetMethod("GetEntryCount", staticFlags, null, new[] { typeof(int) }, null);
+                    Type intByRef = typeof(int).MakeByRefType();
+                    MethodInfo getCountsByType = logEntriesType.GetMethod("GetCountsByType", staticFlags, null, new[] { intByRef, intByRef, intByRef }, null);
+                    MethodInfo getFilteringText = logEntriesType.GetMethod("GetFilteringText", staticFlags, null, Type.EmptyTypes, null);
 
                     MemberInfo messageMember =
                         FindFieldOrProperty(logEntryType, "message", instanceFlags) ??
@@ -460,6 +505,8 @@ namespace UnityLeanMcp
                         getCount,
                         getEntryInternal,
                         getEntryCount,
+                        getCountsByType,
+                        getFilteringText,
                         logEntryType,
                         messageMember,
                         fileMember,
@@ -475,6 +522,159 @@ namespace UnityLeanMcp
                 s_LogEntriesApiResolved = true;
                 return s_LogEntriesApi;
             }
+        }
+
+        private static int ReadEntryCount(LogEntriesApi api, object[] getCountArgs, int row)
+        {
+            if (api.GetEntryCount == null || getCountArgs == null)
+            {
+                return 1;
+            }
+
+            try
+            {
+                getCountArgs[0] = row;
+                object countObj = api.GetEntryCount.Invoke(null, getCountArgs);
+                if (countObj != null)
+                {
+                    int nativeCount = Convert.ToInt32(countObj, CultureInfo.InvariantCulture);
+                    if (nativeCount >= 1)
+                    {
+                        return nativeCount;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return 1;
+        }
+
+        private static bool TryReadCountsByType(
+            LogEntriesApi api,
+            out int errorCount,
+            out int warningCount,
+            out int logCount)
+        {
+            errorCount = 0;
+            warningCount = 0;
+            logCount = 0;
+            if (api.GetCountsByType == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                object[] args = new object[] { 0, 0, 0 };
+                api.GetCountsByType.Invoke(null, args);
+                errorCount = Convert.ToInt32(args[0], CultureInfo.InvariantCulture);
+                warningCount = Convert.ToInt32(args[1], CultureInfo.InvariantCulture);
+                logCount = Convert.ToInt32(args[2], CultureInfo.InvariantCulture);
+                return true;
+            }
+            catch
+            {
+                errorCount = 0;
+                warningCount = 0;
+                logCount = 0;
+                return false;
+            }
+        }
+
+        private static string TryReadFilteringText(LogEntriesApi api)
+        {
+            if (api.GetFilteringText == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return api.GetFilteringText.Invoke(null, null) as string;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string BuildConsoleUiFilterNote(
+            bool hasCountsByType,
+            int unfilteredErrors,
+            int unfilteredWarnings,
+            int unfilteredLogs,
+            int visibleErrors,
+            int visibleWarnings,
+            int visibleLogs,
+            string filteringText)
+        {
+            string sanitizedFilter = SanitizeConsoleUiFilterText(filteringText);
+
+            if (hasCountsByType)
+            {
+                int hiddenErrors = Math.Max(0, unfilteredErrors - visibleErrors);
+                int hiddenWarnings = Math.Max(0, unfilteredWarnings - visibleWarnings);
+                int hiddenLogs = Math.Max(0, unfilteredLogs - visibleLogs);
+                int hiddenTotal = hiddenErrors + hiddenWarnings + hiddenLogs;
+                if (hiddenTotal <= 0)
+                {
+                    return null;
+                }
+
+                if (!string.IsNullOrEmpty(sanitizedFilter))
+                {
+                    return string.Format(
+                        CultureInfo.InvariantCulture,
+                        "Console UI filters hiding {0}: {1} error, {2} warning, {3} log; search: \"{4}\"",
+                        hiddenTotal,
+                        hiddenErrors,
+                        hiddenWarnings,
+                        hiddenLogs,
+                        sanitizedFilter);
+                }
+
+                return string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Console UI filters hiding {0}: {1} error, {2} warning, {3} log",
+                    hiddenTotal,
+                    hiddenErrors,
+                    hiddenWarnings,
+                    hiddenLogs);
+            }
+
+            if (!string.IsNullOrEmpty(sanitizedFilter))
+            {
+                return string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Console UI search filter active: \"{0}\"",
+                    sanitizedFilter);
+            }
+
+            return null;
+        }
+
+        private static string SanitizeConsoleUiFilterText(string filteringText)
+        {
+            if (string.IsNullOrEmpty(filteringText))
+            {
+                return string.Empty;
+            }
+
+            string singleLine = filteringText.Replace("\r", " ").Replace("\n", " ");
+            const int maxFilterLength = 40;
+            if (singleLine.Length > maxFilterLength)
+            {
+                int prefixLength = maxFilterLength;
+                if (prefixLength > 0 && char.IsHighSurrogate(singleLine[prefixLength - 1]))
+                {
+                    prefixLength--;
+                }
+                singleLine = singleLine.Substring(0, prefixLength) + "...";
+            }
+
+            return singleLine;
         }
 
         private static MemberInfo FindFieldOrProperty(Type type, string name, BindingFlags flags)
