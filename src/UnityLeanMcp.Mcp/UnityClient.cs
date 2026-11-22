@@ -698,7 +698,14 @@ public class UnityClient : IUnityClient
                 var busyInfo = ParseBusyResponse(initialResponse);
                 if (busyInfo.isBusy)
                 {
-                    cancellationMayBeNeeded = string.Equals(busyInfo.opId, opId, StringComparison.Ordinal);
+                    if (string.Equals(busyInfo.opId, opId, StringComparison.Ordinal))
+                    {
+                        // The poller owns cancellation once dispatch hands off.
+                        cancellationMayBeNeeded = false;
+                        return await pollExecutor(opId, resultFile, cancellationToken);
+                    }
+
+                    cancellationMayBeNeeded = false;
                     if (busyInfo.isCompilation)
                     {
                         progress?.Report(new ProgressNotificationValue

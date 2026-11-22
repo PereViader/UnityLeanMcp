@@ -80,7 +80,7 @@ public class TieredAutowaitingTests
     public async Task UnityClient_EvalAsync_WhenBusyCompile_AutowaitsAndSucceeds()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
-        var progress = new Progress<ProgressNotificationValue>(p =>
+        var progress = new SyncProgress(p =>
         {
             lock (receivedProgress)
             {
@@ -139,7 +139,7 @@ public class TieredAutowaitingTests
     public async Task UnityClient_EvalAsync_WhenBusyForeignOperation_WaitsUntilCallerCancels()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
-        var progress = new Progress<ProgressNotificationValue>(p =>
+        var progress = new SyncProgress(p =>
         {
             lock (receivedProgress)
             {
@@ -228,7 +228,7 @@ public class TieredAutowaitingTests
     public async Task UnityClient_RunTestsAsync_WhenBusyCompile_AutowaitsAndSucceeds()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
-        var progress = new Progress<ProgressNotificationValue>(p =>
+        var progress = new SyncProgress(p =>
         {
             lock (receivedProgress)
             {
@@ -411,7 +411,7 @@ public class TieredAutowaitingTests
     public async Task UnityClient_GetCoverageAsync_WhenBusyForeignOperation_WaitsUntilCallerCancels()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
-        var progress = new Progress<ProgressNotificationValue>(p =>
+        var progress = new SyncProgress(p =>
         {
             lock (receivedProgress)
             {
@@ -500,7 +500,7 @@ public class TieredAutowaitingTests
     public async Task UnityClient_RefreshAsync_WhenBusyCompile_AutowaitsAndSucceeds()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
-        var progress = new Progress<ProgressNotificationValue>(p =>
+        var progress = new SyncProgress(p =>
         {
             lock (receivedProgress)
             {
@@ -559,7 +559,7 @@ public class TieredAutowaitingTests
     public async Task UnityClient_RefreshAsync_WhenBusyForeignOperation_WaitsUntilCallerCancels()
     {
         var receivedProgress = new List<ProgressNotificationValue>();
-        var progress = new Progress<ProgressNotificationValue>(p =>
+        var progress = new SyncProgress(p =>
         {
             lock (receivedProgress)
             {
@@ -590,5 +590,154 @@ public class TieredAutowaitingTests
         {
             Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("Waiting for active 'test'"));
         }
+    }
+
+    [Fact]
+    public async Task UnityClient_EvalAsync_WhenRetryReceivesBusySameOpId_HandsOffToPollEvalWithoutPollRefresh()
+    {
+        int evalAttempts = 0;
+        int pollEvalAttempts = 0;
+        int pollRefreshAfterEval = 0;
+        bool evalDispatched = false;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (evalDispatched)
+                {
+                    pollRefreshAfterEval++;
+                }
+                return "PLAYMODE";
+            }
+            if (line.StartsWith("EVAL "))
+            {
+                evalDispatched = true;
+                evalAttempts++;
+                string[] parts = line.Split(' ');
+                string opId = parts[1];
+                if (evalAttempts == 1)
+                {
+                    return null;
+                }
+                return $"BUSY eval {opId}";
+            }
+            if (line.StartsWith("POLL_EVAL "))
+            {
+                pollEvalAttempts++;
+                string opId = line.Split(' ')[1];
+                if (pollEvalAttempts == 1)
+                {
+                    return "RUNNING";
+                }
+                srv.WriteEvalResult(opId, "\"ok\"");
+                return "READY";
+            }
+            return null;
+        }, new UnityClientOptions(PollIntervalMs: 1));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.EvalAsync("\"ok\"", null, cts.Token);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal("\"ok\"", result.Payload);
+        Assert.Equal(2, evalAttempts);
+        Assert.True(pollEvalAttempts >= 2, $"Expected at least 2 POLL_EVAL calls, got {pollEvalAttempts}");
+        Assert.Equal(0, pollRefreshAfterEval);
+    }
+
+    [Fact]
+    public async Task UnityClient_RunTestsAsync_WhenRetryReceivesBusySameOpId_HandsOffToPollTestsWithoutPollRefresh()
+    {
+        var receivedProgress = new List<ProgressNotificationValue>();
+        var progress = new SyncProgress(p =>
+        {
+            lock (receivedProgress)
+            {
+                receivedProgress.Add(p);
+            }
+        });
+
+        int runTestsAttempts = 0;
+        int pollTestsAttempts = 0;
+        int pollRefreshAfterRunTests = 0;
+        bool runTestsDispatched = false;
+
+        await using var server = await MockUnityServer.StartAsync((srv, line) =>
+        {
+            if (line.StartsWith("POLL_REFRESH"))
+            {
+                if (runTestsDispatched)
+                {
+                    pollRefreshAfterRunTests++;
+                }
+                return "READY";
+            }
+            if (line.StartsWith("REFRESH "))
+            {
+                string opId = line.Split(' ')[1];
+                srv.WriteRefreshResult(opId, success: true);
+                return $"SUCCESS {opId}";
+            }
+            if (line.StartsWith("RUN_TESTS "))
+            {
+                runTestsDispatched = true;
+                runTestsAttempts++;
+                string opId = line.Split(' ')[1];
+                if (runTestsAttempts == 1)
+                {
+                    return null;
+                }
+                return $"BUSY test {opId}";
+            }
+            if (line.StartsWith("POLL_TESTS "))
+            {
+                pollTestsAttempts++;
+                string opId = line.Split(' ')[1];
+                if (pollTestsAttempts == 1)
+                {
+                    var runningState = new UnityTestRunState
+                    {
+                        RunId = opId,
+                        TotalTests = 2,
+                        CompletedTests = 1,
+                        PassCount = 1,
+                        FailCount = 0,
+                        CurrentTestName = "SampleTest",
+                        Status = "Running"
+                    };
+                    string stateJson = System.Text.Json.JsonSerializer.Serialize(runningState);
+                    return "RUNNING " + ProtocolCodec.EscapeLine(stateJson);
+                }
+                srv.WriteTestResult(opId, new UnityTestRunResult
+                {
+                    RunId = opId,
+                    Success = true,
+                    PassCount = 2,
+                    FailCount = 0
+                });
+                return "READY";
+            }
+            return null;
+        }, new UnityClientOptions(PollIntervalMs: 1));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var result = await server.Client.RunTestsAsync(null, null, null, null, "editmode", false, false, progress, cts.Token);
+
+        Assert.True(result.Success, result.Message);
+        Assert.Equal(2, result.PassCount);
+        Assert.Equal(2, runTestsAttempts);
+        Assert.True(pollTestsAttempts >= 2, $"Expected at least 2 POLL_TESTS calls, got {pollTestsAttempts}");
+        Assert.Equal(0, pollRefreshAfterRunTests);
+
+        lock (receivedProgress)
+        {
+            Assert.Contains(receivedProgress, p => p.Message != null && p.Message.Contains("SampleTest"));
+        }
+    }
+
+    private sealed class SyncProgress(Action<ProgressNotificationValue> onReport) : IProgress<ProgressNotificationValue>
+    {
+        public void Report(ProgressNotificationValue value) => onReport(value);
     }
 }
