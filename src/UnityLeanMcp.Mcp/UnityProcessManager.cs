@@ -427,6 +427,9 @@ public class UnityProcessManager : IUnityProcessManager
 
     internal Func<Process[]>? ProcessProvider { get; init; }
 
+    // Test seam for deterministic startup log read contention testing across platforms.
+    internal Func<string, long, string>? StartupLogReader { get; init; }
+
     // This delegate is intentionally internal: it keeps process-discovery
     // tests deterministic without making command-line inspection part of the
     // public process-manager contract.
@@ -815,11 +818,7 @@ public class UnityProcessManager : IUnityProcessManager
                 socketIsLive = await IsSocketReadyAsync(2, cancellationToken);
                 if (!socketIsLive.Value && !IsUnityRunning(out _))
                 {
-                    ThrowIfNewStartupCompilationErrors(initialLogOffset);
-
-                    string logSnippet = GetLogSnippet(initialLogOffset);
-                    throw new InvalidOperationException(
-                        $"Unity background process is not running.\n{logSnippet}");
+                    throw new InvalidOperationException("Unity background process is not running.");
                 }
             }
 
@@ -908,7 +907,23 @@ public class UnityProcessManager : IUnityProcessManager
             return;
         }
 
-        string logText = FileIoRetryHelper.ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
+        string logText;
+        try
+        {
+            logText = StartupLogReader != null
+                ? StartupLogReader(_pathResolver.LogFile, initialLogOffset)
+                : FileIoRetryHelper.ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not read Unity background log '{LogFile}' from offset {Offset}; skipping startup compilation check on this poll.",
+                _pathResolver.LogFile,
+                initialLogOffset);
+            return;
+        }
+
         if (!_logScanner.HasCompilationErrors(logText))
         {
             return;

@@ -2711,6 +2711,114 @@ public class UnityProcessManagerTests
         }
     }
 
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenNullProcessAndNotRunning_IgnoresHistoricalErrorsInLogFile()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_null_hist_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
+            await File.WriteAllTextAsync(
+                logFile,
+                "Assets/Scripts/OldBroken.cs(10,5): error CS1002: ; expected\n",
+                cts.Token);
+
+            string compilationErrorsFile = Path.Combine(unityTemp, "unity_compilation_errors.txt");
+            await File.WriteAllTextAsync(compilationErrorsFile, "existing-sentinel", cts.Token);
+
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance)
+            {
+                ProcessProvider = () => Array.Empty<Process>()
+            };
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                await procManager.WaitForSocketReadinessAsync(null, cts.Token);
+            });
+
+            Assert.Equal("Unity background process is not running.", ex.Message);
+            Assert.Equal("existing-sentinel", await File.ReadAllTextAsync(compilationErrorsFile, cts.Token));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(UnauthorizedAccessException))]
+    public async Task WaitForSocketReadinessAsync_WhenStartupLogReadHasTransientContention_LogsWarningAndCompletes(Type exceptionType)
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_log_cont_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var proc = StartDummyProcess();
+
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), "12345", cts.Token);
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_background_log.txt"), "Clean startup\n", cts.Token);
+
+            int readAttempts = 0;
+            bool socketReady = false;
+            var logger = new RecordingLogger<UnityProcessManager>();
+            var transport = new ConfigurableSocketTransport(() => Volatile.Read(ref socketReady));
+            var resolver = new UnityPathResolver(tempDir);
+
+            var procManager = new UnityProcessManager(resolver, logger, socketTransport: transport)
+            {
+                StartupLogReader = (_, _) =>
+                {
+                    if (Interlocked.Increment(ref readAttempts) == 1)
+                    {
+                        throw (Exception)Activator.CreateInstance(exceptionType, "Simulated log contention")!;
+                    }
+
+                    Volatile.Write(ref socketReady, true);
+                    return "Clean startup\n";
+                }
+            };
+
+            await procManager.WaitForSocketReadinessAsync(proc, cts.Token);
+
+            Assert.True(Volatile.Read(ref readAttempts) >= 2);
+            Assert.Contains(logger.Entries, e =>
+                e.Level == Microsoft.Extensions.Logging.LogLevel.Warning &&
+                e.Exception?.GetType() == exceptionType);
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private sealed class RecordingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add((logLevel, formatter(state, exception), exception));
+        }
+    }
+
     private sealed class ConfigurableSocketTransport : IUnitySocketTransport
     {
         private readonly Func<bool> _isReady;
