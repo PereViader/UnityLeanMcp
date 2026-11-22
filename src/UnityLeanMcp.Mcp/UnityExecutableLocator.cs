@@ -153,33 +153,40 @@ public class UnityExecutableLocator : IUnityExecutableLocator
             return false;
         }
 
-        if (!IsExecutableFile(fullPath))
+        string resolvedPath = FileUnityProcessIdentityStore.ResolveRealPath(fullPath);
+
+        if (!IsExecutableFile(resolvedPath))
         {
-            RecordRejection(source, fullPath, "the file is not executable", ref firstDiagnostic);
+            RecordRejection(source, resolvedPath, "the file is not executable", ref firstDiagnostic);
             return false;
         }
 
-        string? rejectionReason = GetEditorLayoutRejectionReason(fullPath);
+        string? rejectionReason = GetEditorLayoutRejectionReason(resolvedPath);
         if (rejectionReason != null)
         {
-            RecordRejection(source, fullPath, rejectionReason, ref firstDiagnostic);
+            RecordRejection(source, resolvedPath, rejectionReason, ref firstDiagnostic);
             return false;
         }
 
-        executable = fullPath;
+        executable = resolvedPath;
         return true;
     }
 
-    private static bool IsExecutableFile(string path)
+    internal static bool IsExecutableFile(string path, Func<string, UnixFileMode>? getUnixFileMode = null)
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        if (getUnixFileMode == null)
         {
-            return true;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return true;
+            }
+
+            getUnixFileMode = File.GetUnixFileMode;
         }
 
         try
         {
-            UnixFileMode mode = File.GetUnixFileMode(path);
+            UnixFileMode mode = getUnixFileMode(path);
             return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
         }
         catch (PlatformNotSupportedException)
@@ -189,6 +196,10 @@ public class UnityExecutableLocator : IUnityExecutableLocator
             return true;
         }
         catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
         {
             return false;
         }

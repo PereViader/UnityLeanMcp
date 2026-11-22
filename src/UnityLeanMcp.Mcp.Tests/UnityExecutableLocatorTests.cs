@@ -523,6 +523,118 @@ public class UnityExecutableLocatorTests
         }
     }
 
+    [Fact]
+    public void FindUnityExecutable_WhenCandidateIsSymlinkToEditorBinary_AcceptsAndReturnsResolvedPath()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "test_symlink_editor_" + Guid.NewGuid().ToString("N"));
+        string installRoot = Path.Combine(root, "Install");
+        string binDir = Path.Combine(root, "bin");
+        Directory.CreateDirectory(installRoot);
+        Directory.CreateDirectory(binDir);
+
+        string realEditorExe = CreateEditorFixture(installRoot);
+        string symlinkPath = Path.Combine(binDir, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Unity.exe" : "unity");
+        File.WriteAllText(symlinkPath, "symlink placeholder");
+        MakeExecutableIfSupported(symlinkPath);
+
+        string? originalUnityPath = Environment.GetEnvironmentVariable("UNITY_PATH");
+        string? originalUnityEditor = Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        try
+        {
+            string expectedResolved = FileUnityProcessIdentityStore.ResolveRealPath(realEditorExe);
+            string normalizedSymlink = Path.GetFullPath(symlinkPath).Replace('\\', '/').TrimEnd('/');
+            FileUnityProcessIdentityStore.CustomLinkResolver = path =>
+            {
+                string normalized = path.Replace('\\', '/').TrimEnd('/');
+                return string.Equals(normalized, normalizedSymlink, StringComparison.OrdinalIgnoreCase)
+                    ? realEditorExe
+                    : null;
+            };
+
+            Environment.SetEnvironmentVariable("UNITY_PATH", symlinkPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", null);
+
+            var locator = new UnityExecutableLocator(root, NullLogger<UnityExecutableLocator>.Instance);
+            UnityLocatorResult result = locator.FindUnityExecutable();
+
+            Assert.True(result.Success, result.Diagnostic);
+            Assert.Equal(expectedResolved, result.ExecutablePath);
+        }
+        finally
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = null;
+            Environment.SetEnvironmentVariable("UNITY_PATH", originalUnityPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", originalUnityEditor);
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void FindUnityExecutable_WhenCandidateIsSymlinkToNonEditorBinary_RejectsItWithDiagnostic()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "test_symlink_cli_" + Guid.NewGuid().ToString("N"));
+        string cliDir = Path.Combine(root, "cli");
+        string binDir = Path.Combine(root, "bin");
+        Directory.CreateDirectory(cliDir);
+        Directory.CreateDirectory(binDir);
+
+        string exeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Unity.exe" : "Unity";
+        string realCliExe = Path.Combine(cliDir, exeName);
+        File.WriteAllText(realCliExe, "unity cli");
+        MakeExecutableIfSupported(realCliExe);
+
+        string symlinkPath = Path.Combine(binDir, RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "Unity.exe" : "unity");
+        File.WriteAllText(symlinkPath, "symlink placeholder");
+        MakeExecutableIfSupported(symlinkPath);
+
+        string? originalUnityPath = Environment.GetEnvironmentVariable("UNITY_PATH");
+        string? originalUnityEditor = Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        string? originalPath = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            string expectedResolvedCli = FileUnityProcessIdentityStore.ResolveRealPath(realCliExe);
+            string normalizedSymlink = Path.GetFullPath(symlinkPath).Replace('\\', '/').TrimEnd('/');
+            FileUnityProcessIdentityStore.CustomLinkResolver = path =>
+            {
+                string normalized = path.Replace('\\', '/').TrimEnd('/');
+                return string.Equals(normalized, normalizedSymlink, StringComparison.OrdinalIgnoreCase)
+                    ? realCliExe
+                    : null;
+            };
+
+            Environment.SetEnvironmentVariable("UNITY_PATH", symlinkPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", null);
+            Environment.SetEnvironmentVariable("PATH", GetIsolatedPathWithDotnet(root, originalPath));
+
+            var locator = new UnityExecutableLocator(root, NullLogger<UnityExecutableLocator>.Instance);
+            UnityLocatorResult result = locator.FindUnityExecutable();
+
+            Assert.False(result.Success);
+            Assert.Null(result.ExecutablePath);
+            Assert.Contains("UNITY_PATH", result.Diagnostic);
+            Assert.Contains("Unity Editor", result.Diagnostic);
+            Assert.Contains(expectedResolvedCli, result.Diagnostic);
+        }
+        finally
+        {
+            FileUnityProcessIdentityStore.CustomLinkResolver = null;
+            Environment.SetEnvironmentVariable("UNITY_PATH", originalUnityPath);
+            Environment.SetEnvironmentVariable("UNITY_EDITOR", originalUnityEditor);
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void IsExecutableFile_WhenGetUnixFileModeThrowsIOException_ReturnsFalse()
+    {
+        bool result = UnityExecutableLocator.IsExecutableFile(
+            "/nonexistent/unity",
+            _ => throw new IOException("Simulated I/O error"));
+
+        Assert.False(result);
+    }
+
     private sealed class CandidateLocator : UnityExecutableLocator
     {
         private readonly List<string> _candidates;
