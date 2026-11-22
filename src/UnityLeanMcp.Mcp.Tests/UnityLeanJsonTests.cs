@@ -115,4 +115,45 @@ public class UnityLeanJsonTests
         Assert.Equal(123.456, (double)result["floatVal"], 4);
         Assert.Equal(0.0001, (double)result["expVal"], 6);
     }
+
+    [Theory]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    [InlineData(float.NegativeInfinity)]
+    public void Serialize_NonFiniteFloat_ThrowsArgumentException(float value)
+    {
+        Assert.Throws<ArgumentException>(() => UnityLeanJson.Serialize(value));
+        Assert.Throws<ArgumentException>(() => UnityLeanJson.Serialize(new Dictionary<string, object> { ["v"] = value }));
+        Assert.Throws<ArgumentException>(() => UnityLeanJson.Serialize(new List<object> { value }));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void Serialize_NonFiniteDouble_ThrowsArgumentException(double value)
+    {
+        Assert.Throws<ArgumentException>(() => UnityLeanJson.Serialize(value));
+        Assert.Throws<ArgumentException>(() => UnityLeanJson.Serialize(new Dictionary<string, object> { ["v"] = value }));
+        Assert.Throws<ArgumentException>(() => UnityLeanJson.Serialize(new List<object> { value }));
+    }
+
+    [Fact]
+    public void Serialize_FiniteFloatAndDoubleBoundaryValues_SucceedsAndRoundtrips()
+    {
+        var data = new Dictionary<string, object>
+        {
+            ["floatVal"] = 1.5f,
+            ["floatMax"] = float.MaxValue,
+            ["floatMin"] = float.MinValue,
+            ["doubleVal"] = -2.25d,
+            ["doubleMax"] = double.MaxValue,
+            ["doubleMin"] = double.MinValue
+        };
+
+        string json = UnityLeanJson.Serialize(data);
+        var roundtripped = UnityLeanJson.DeserializeObject(json);
+        Assert.Equal(1.5, Assert.IsType<double>(roundtripped["floatVal"]), 6);
+        Assert.Equal(-2.25, Assert.IsType<double>(roundtripped["doubleVal"]), 12);
+    }
 }

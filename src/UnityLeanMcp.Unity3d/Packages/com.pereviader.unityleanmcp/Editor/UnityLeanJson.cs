@@ -88,12 +88,22 @@ namespace UnityLeanMcp
 
             if (value is float f)
             {
+                if (float.IsNaN(f) || float.IsInfinity(f))
+                {
+                    throw new ArgumentException("Non-finite float values (NaN, Infinity, -Infinity) cannot be serialized to JSON.", nameof(value));
+                }
+
                 sb.Append(f.ToString("R", CultureInfo.InvariantCulture));
                 return;
             }
 
             if (value is double d)
             {
+                if (double.IsNaN(d) || double.IsInfinity(d))
+                {
+                    throw new ArgumentException("Non-finite double values (NaN, Infinity, -Infinity) cannot be serialized to JSON.", nameof(value));
+                }
+
                 sb.Append(d.ToString("R", CultureInfo.InvariantCulture));
                 return;
             }
