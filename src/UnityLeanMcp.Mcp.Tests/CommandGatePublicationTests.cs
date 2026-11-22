@@ -1766,6 +1766,68 @@ public sealed class CommandGatePublicationTests : IDisposable
         Assert.Equal("preparing", GetCoverageHandler.GetCoverageAttemptPhase(runId));
     }
 
+    [Fact]
+    public void RunTestsHandler_SynchronousEditModeCompletion_ClearsJobGuidAndDoesNotBlockNextRunCancellation()
+    {
+        RunTestsHandler.ActiveStateKnown = true;
+        RunTestsHandler.Active = false;
+        UnityLeanMcpCompilationTracker.IsCompiling = false;
+        UnityLeanMcpCompilationTracker.IsUpdating = false;
+        UnityLeanMcpCompilationTracker.RefreshRequired = false;
+        UnityLeanMcpCompilationTracker.RefreshPending = false;
+        UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
+        UnityLeanMcpCompilationTracker.CompilationInProgress = false;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+        UnityEditor.EditorApplication.isCompiling = false;
+        UnityEditor.EditorApplication.isUpdating = false;
+
+        var cancelledJobGuids = new List<string>();
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnCancelTestRun = guid => cancelledJobGuids.Add(guid);
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnExecuteWithGuid = _ =>
+        {
+            UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.LastRegisteredCallbacks!.RunFinished(
+                new StubTestResultAdaptor
+                {
+                    ResultState = "Passed",
+                    PassCount = 1
+                });
+            return "sync-job-guid-1";
+        };
+
+        using (var response1 = new MemoryStream())
+        using (var writer1 = new StreamWriter(response1) { AutoFlush = true })
+        {
+            new RunTestsHandler().Handle("sync-run-1 {\"mode\":\"editmode\"}", writer1);
+            Assert.Equal("RUNNING", System.Text.Encoding.UTF8.GetString(response1.ToArray()).Trim());
+        }
+
+        Assert.Null(RunTestsHandler.s_CurrentTestJobGuid);
+        Assert.False(UnityCommandGate.IsOwnedBy("sync-run-1", OperationKinds.Test));
+        Assert.True(File.Exists(UnityLeanMcpPaths.GetTestResultsFile("sync-run-1")));
+
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnExecuteWithGuid = _ =>
+        {
+            RunTestsHandler.Active = true;
+            Assert.Equal(OperationCancelResult.Cancelling, RunTestsHandler.CancelActiveTestRun("async-run-2"));
+            UnityLeanMcpDispatcher.Update();
+            Assert.Empty(cancelledJobGuids);
+            return "async-job-guid-2";
+        };
+
+        using (var response2 = new MemoryStream())
+        using (var writer2 = new StreamWriter(response2) { AutoFlush = true })
+        {
+            new RunTestsHandler().Handle("async-run-2 {\"mode\":\"editmode\"}", writer2);
+            Assert.Equal("RUNNING", System.Text.Encoding.UTF8.GetString(response2.ToArray()).Trim());
+        }
+
+        Assert.Equal("async-job-guid-2", RunTestsHandler.s_CurrentTestJobGuid);
+        Assert.Equal(new[] { "async-job-guid-2" }, cancelledJobGuids);
+
+        RunTestsHandler.CleanupTestRun("async-run-2");
+        Assert.Null(RunTestsHandler.s_CurrentTestJobGuid);
+    }
+
     public void Dispose()
     {
         UnityCommandGate.ForceReset();
@@ -1774,8 +1836,13 @@ public sealed class CommandGatePublicationTests : IDisposable
         SessionState.EraseString("UnityLeanMcp_RefreshDiagnostics");
         RunTestsHandler.ActiveStateKnown = true;
         RunTestsHandler.Active = false;
+        RunTestsHandler.s_CurrentTestJobGuid = null!;
         RunTestsHandler.CancelledRunIds.Clear();
         RunTestsHandler.ClearCachedRunState();
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnExecute = null;
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnExecuteWithGuid = null;
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnCancelTestRun = null;
+        UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.LastRegisteredCallbacks = null;
         UnityEngine.TestTools.Coverage.enabled = false;
         UnityEngine.TestTools.Coverage.SetEnabledAction = null;
         SessionState.EraseString(GetCoverageHandler.CoverageAttemptKey);

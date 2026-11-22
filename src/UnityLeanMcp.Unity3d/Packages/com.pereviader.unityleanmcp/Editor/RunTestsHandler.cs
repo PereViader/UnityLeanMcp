@@ -459,16 +459,21 @@ namespace UnityLeanMcp
                 if (args.coverage)
                     CoverageLifecycleManager.MarkCoverageExecutionStarting(runId);
 
-                s_CurrentTestJobGuid = s_RunnerApi.Execute(settings);
-                UpdateTestRunJobGuid(runId, s_CurrentTestJobGuid);
+                s_CurrentTestJobGuid = null;
+                string jobGuid = s_RunnerApi.Execute(settings);
+                if (IsOwnedActiveRun(runId))
+                {
+                    s_CurrentTestJobGuid = jobGuid;
+                    UpdateTestRunJobGuid(runId, jobGuid);
 
-                // A cancellation request may have been durably recorded while
-                // this command was waiting to reach the main thread. Apply it
-                // after Execute returns, when the job identity is available.
-                if (IsCancellationRequested(runId))
-                    CancelActiveTestRunOnMainThread(runId);
+                    // A cancellation request may have been durably recorded while
+                    // this command was waiting to reach the main thread. Apply it
+                    // after Execute returns, when the job identity is available.
+                    if (IsCancellationRequested(runId))
+                        CancelActiveTestRunOnMainThread(runId);
 
-                BeginActiveRunMonitoring(runId);
+                    BeginActiveRunMonitoring(runId);
+                }
             }
             catch (Exception ex)
             {

@@ -1370,11 +1370,19 @@ namespace UnityEditor
             public static bool ActiveStateKnown = true;
             public static bool Active = false;
             public static Action<ExecutionSettings>? OnExecute;
+            public static Func<ExecutionSettings, string>? OnExecuteWithGuid;
             public static Action<string>? OnCancelTestRun;
+            public static ICallbacks? LastRegisteredCallbacks;
 
-            public void RegisterCallbacks<T>(T callbacks) where T : ICallbacks { }
+            public void RegisterCallbacks<T>(T callbacks) where T : ICallbacks
+            {
+                LastRegisteredCallbacks = callbacks;
+            }
             public string Execute(ExecutionSettings settings)
             {
+                if (OnExecuteWithGuid != null)
+                    return OnExecuteWithGuid(settings);
+
                 OnExecute?.Invoke(settings);
                 return Guid.NewGuid().ToString("N");
             }
