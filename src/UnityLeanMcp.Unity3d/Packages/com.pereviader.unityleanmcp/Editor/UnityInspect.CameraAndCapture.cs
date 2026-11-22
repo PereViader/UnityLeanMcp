@@ -9,8 +9,10 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.SceneManagement;
 using UnityEngine.UIElements;
 
 namespace UnityLeanMcp
@@ -617,7 +619,7 @@ namespace UnityLeanMcp
         }
 
         /// <summary>
-        /// Captures an auto-framed off-screen view of a GameObject and its active children without modifying scene cameras or dirty state.
+        /// Captures an auto-framed off-screen view of a scene/Prefab Stage GameObject or uninstantiated prefab asset (rendered in a temporary preview scene) and its active children without modifying scene cameras or dirty state.
         /// By default, frames from a 3/4 angle in front of the target (+forward, +right, +up); pass viewDirection to specify a world-space direction from target to camera.
         /// </summary>
         public static string CaptureTarget(
@@ -652,40 +654,60 @@ namespace UnityLeanMcp
             }
             catch { }
 
-            Bounds bounds = ComputeTargetBounds(target);
-
-            Vector3 localDefaultDirection = new Vector3(0.6f, 0.45f, 1f);
-            Vector3 direction;
-            if (viewDirection.HasValue && viewDirection.Value.sqrMagnitude > 1e-6f)
-            {
-                direction = viewDirection.Value.normalized;
-            }
-            else
-            {
-                direction = target.transform != null
-                    ? target.transform.TransformDirection(localDefaultDirection)
-                    : localDefaultDirection;
-                if (direction.sqrMagnitude <= 1e-6f)
-                {
-                    direction = localDefaultDirection;
-                }
-                direction = direction.normalized;
-            }
-
-            int clampedWidth = Mathf.Clamp(width, 16, 4096);
-            int clampedHeight = Mathf.Clamp(height, 16, 4096);
-            const float fieldOfView = 60f;
-
-            float radius = Mathf.Max(bounds.extents.magnitude, 0.1f);
-            float aspect = (float)clampedWidth / clampedHeight;
-            float vHalfFov = fieldOfView * Mathf.Deg2Rad * 0.5f;
-            float hHalfFov = Mathf.Atan(Mathf.Tan(vHalfFov) * aspect);
-            float minHalfFov = Mathf.Min(vHalfFov, hHalfFov);
-            float distance = (radius / Mathf.Sin(minHalfFov)) * 1.15f;
-
+            Scene previewScene = default;
+            GameObject instantiatedTarget = null;
             GameObject tempGo = null;
             try
             {
+                GameObject renderTarget = target;
+                if (EditorUtility.IsPersistent(target))
+                {
+                    previewScene = EditorSceneManager.NewPreviewScene();
+                    if (!previewScene.IsValid())
+                    {
+                        return $"(Failed to capture target \"{targetName}\": could not create preview scene)";
+                    }
+
+                    instantiatedTarget = PrefabUtility.InstantiatePrefab(target, previewScene) as GameObject;
+                    if (instantiatedTarget == null)
+                    {
+                        return $"(Failed to capture target \"{targetName}\": could not instantiate persistent asset in preview scene)";
+                    }
+
+                    renderTarget = instantiatedTarget;
+                }
+
+                Bounds bounds = ComputeTargetBounds(renderTarget);
+
+                Vector3 localDefaultDirection = new Vector3(0.6f, 0.45f, 1f);
+                Vector3 direction;
+                if (viewDirection.HasValue && viewDirection.Value.sqrMagnitude > 1e-6f)
+                {
+                    direction = viewDirection.Value.normalized;
+                }
+                else
+                {
+                    direction = renderTarget.transform != null
+                        ? renderTarget.transform.TransformDirection(localDefaultDirection)
+                        : localDefaultDirection;
+                    if (direction.sqrMagnitude <= 1e-6f)
+                    {
+                        direction = localDefaultDirection;
+                    }
+                    direction = direction.normalized;
+                }
+
+                int clampedWidth = Mathf.Clamp(width, 16, 4096);
+                int clampedHeight = Mathf.Clamp(height, 16, 4096);
+                const float fieldOfView = 60f;
+
+                float radius = Mathf.Max(bounds.extents.magnitude, 0.1f);
+                float aspect = (float)clampedWidth / clampedHeight;
+                float vHalfFov = fieldOfView * Mathf.Deg2Rad * 0.5f;
+                float hHalfFov = Mathf.Atan(Mathf.Tan(vHalfFov) * aspect);
+                float minHalfFov = Mathf.Min(vHalfFov, hHalfFov);
+                float distance = (radius / Mathf.Sin(minHalfFov)) * 1.15f;
+
                 tempGo = EditorUtility.CreateGameObjectWithHideFlags(
                     "__UnityLeanMcp_CaptureTargetCam",
                     HideFlags.HideAndDontSave,
@@ -697,9 +719,9 @@ namespace UnityLeanMcp
                     return $"(Failed to capture target \"{targetName}\": could not create temporary Camera)";
                 }
 
-                if (target.scene.IsValid())
+                if (renderTarget.scene.IsValid())
                 {
-                    tempCam.scene = target.scene;
+                    tempCam.scene = renderTarget.scene;
                 }
 
                 tempCam.fieldOfView = fieldOfView;
@@ -723,6 +745,16 @@ namespace UnityLeanMcp
                 if (tempGo != null)
                 {
                     UnityEngine.Object.DestroyImmediate(tempGo);
+                }
+
+                if (instantiatedTarget != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(instantiatedTarget);
+                }
+
+                if (previewScene.IsValid())
+                {
+                    EditorSceneManager.ClosePreviewScene(previewScene);
                 }
             }
         }

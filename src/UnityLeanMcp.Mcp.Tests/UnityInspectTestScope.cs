@@ -47,7 +47,10 @@ internal sealed class UnityInspectTestScope : IDisposable
         EditorWindow.focusedWindow = null;
         EditorWindow.GetWindowFunc = null;
         EditorApplication.QueuePlayerLoopUpdateAction = null;
+        EditorUtility.IsPersistentFunc = null;
         EditorUtility.UnloadUnusedAssetsImmediateAction = null;
+        EditorSceneManager.NewPreviewSceneFunc = null;
+        EditorSceneManager.ClosePreviewSceneFunc = null;
         AssetDatabase.FindAssetsFunc = null;
         AssetDatabase.FindAssetsInFoldersFunc = null;
         AssetDatabase.GUIDToAssetPathFunc = null;
@@ -64,6 +67,7 @@ internal sealed class UnityInspectTestScope : IDisposable
         PrefabUtility.GetRemovedComponentsFunc = null;
         PrefabUtility.LoadPrefabContentsFunc = null;
         PrefabUtility.UnloadPrefabContentsAction = null;
+        PrefabUtility.InstantiatePrefabInSceneFunc = null;
         PrefabStageUtility.GetCurrentPrefabStageFunc = null;
         Shader.FindFunc = null;
         ShaderUtil.ShaderHasErrorFunc = null;

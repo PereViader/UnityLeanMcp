@@ -1164,6 +1164,185 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public void CaptureTarget_PersistentPrefabAsset_RendersInPreviewSceneAndCleansUp()
+    {
+        var prefabAsset = new GameObject("EnemyPrefab");
+        EditorUtility.IsPersistentFunc = obj => ReferenceEquals(obj, prefabAsset);
+
+        int newPreviewCalls = 0;
+        var previewScene = new Scene { name = "PreviewScene_1", isLoaded = true };
+        EditorSceneManager.NewPreviewSceneFunc = () =>
+        {
+            newPreviewCalls++;
+            return previewScene;
+        };
+
+        GameObject? instantiatedPrefab = null;
+        PrefabUtility.InstantiatePrefabInSceneFunc = (asset, destinationScene) =>
+        {
+            Assert.Same(prefabAsset, asset);
+            Assert.Equal("PreviewScene_1", destinationScene.name);
+
+            instantiatedPrefab = new GameObject("EnemyPrefab")
+            {
+                scene = destinationScene
+            };
+            var renderer = instantiatedPrefab.AddComponent<Renderer>();
+            renderer.bounds = new Bounds(new Vector3(2f, 1f, -1f), new Vector3(2f, 2f, 2f));
+            return instantiatedPrefab;
+        };
+
+        Camera? renderedCam = null;
+        Scene capturedCamScene = default;
+        Vector3? capturedLookAt = null;
+        Camera.OnBeforeRenderAction = cam =>
+        {
+            renderedCam = cam;
+            capturedCamScene = cam.scene;
+            capturedLookAt = cam.transform.LastLookAtPosition;
+        };
+
+        var closedScenes = new List<Scene>();
+        bool instantiatedDestroyedBeforeClose = false;
+        EditorSceneManager.ClosePreviewSceneFunc = scene =>
+        {
+            closedScenes.Add(scene);
+            instantiatedDestroyedBeforeClose = !ReferenceEquals(instantiatedPrefab, null) && instantiatedPrefab._isDestroyed;
+            return true;
+        };
+
+        string outputPath = "Temp/test_capture_target_prefab.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(prefabAsset, outputPath, width: 800, height: 600);
+
+        Assert.Contains("Captured target \"EnemyPrefab\" (800x600,", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.Equal(1, newPreviewCalls);
+        Assert.NotNull(renderedCam);
+        Assert.Equal("PreviewScene_1", capturedCamScene.name);
+        Assert.True(capturedLookAt.HasValue);
+        Assert.InRange(capturedLookAt!.Value.x, 1.99f, 2.01f);
+        Assert.InRange(capturedLookAt!.Value.y, 0.99f, 1.01f);
+        Assert.InRange(capturedLookAt!.Value.z, -1.01f, -0.99f);
+        Assert.True(renderedCam!.gameObject._isDestroyed);
+        Assert.NotNull(instantiatedPrefab);
+        Assert.True(instantiatedPrefab!._isDestroyed);
+        Assert.True(instantiatedDestroyedBeforeClose);
+        Assert.Single(closedScenes);
+        Assert.Equal("PreviewScene_1", closedScenes[0].name);
+        Assert.False(prefabAsset._isDestroyed);
+    }
+
+    [Fact]
+    public void CaptureTarget_PersistentPrefabAsset_WhenRenderThrows_StillCleansUpPreviewSceneAndTempObjects()
+    {
+        var prefabAsset = new GameObject("BrokenPrefab");
+        EditorUtility.IsPersistentFunc = obj => ReferenceEquals(obj, prefabAsset);
+
+        var previewScene = new Scene { name = "PreviewScene_Throw", isLoaded = true };
+        EditorSceneManager.NewPreviewSceneFunc = () => previewScene;
+
+        GameObject? instantiatedPrefab = null;
+        PrefabUtility.InstantiatePrefabInSceneFunc = (_, destinationScene) =>
+        {
+            instantiatedPrefab = new GameObject("BrokenPrefab")
+            {
+                scene = destinationScene
+            };
+            return instantiatedPrefab;
+        };
+
+        Camera? renderedCam = null;
+        Camera.OnBeforeRenderAction = cam =>
+        {
+            renderedCam = cam;
+            throw new InvalidOperationException("Render boom");
+        };
+
+        var closedScenes = new List<Scene>();
+        EditorSceneManager.ClosePreviewSceneFunc = scene =>
+        {
+            closedScenes.Add(scene);
+            return true;
+        };
+
+        string outputPath = "Temp/test_capture_target_prefab_throw.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(prefabAsset, outputPath);
+
+        Assert.Equal("(Failed to capture target \"BrokenPrefab\": Render boom)", result);
+        Assert.NotNull(renderedCam);
+        Assert.True(renderedCam!.gameObject._isDestroyed);
+        Assert.NotNull(instantiatedPrefab);
+        Assert.True(instantiatedPrefab!._isDestroyed);
+        Assert.Single(closedScenes);
+        Assert.Equal("PreviewScene_Throw", closedScenes[0].name);
+    }
+
+    [Fact]
+    public void CaptureTarget_PersistentPrefabAsset_WhenInstantiateFails_ClosesPreviewSceneAndReturnsError()
+    {
+        var prefabAsset = new GameObject("UninstantiableAsset");
+        EditorUtility.IsPersistentFunc = obj => ReferenceEquals(obj, prefabAsset);
+
+        var previewScene = new Scene { name = "PreviewScene_Fail", isLoaded = true };
+        EditorSceneManager.NewPreviewSceneFunc = () => previewScene;
+        PrefabUtility.InstantiatePrefabInSceneFunc = (_, _) => null;
+
+        var closedScenes = new List<Scene>();
+        EditorSceneManager.ClosePreviewSceneFunc = scene =>
+        {
+            closedScenes.Add(scene);
+            return true;
+        };
+
+        string result = Inspect.CaptureTarget(prefabAsset, "Temp/test_capture_target_prefab_fail.png");
+
+        Assert.Equal("(Failed to capture target \"UninstantiableAsset\": could not instantiate persistent asset in preview scene)", result);
+        Assert.Single(closedScenes);
+        Assert.Equal("PreviewScene_Fail", closedScenes[0].name);
+    }
+
+    [Fact]
+    public void CaptureTarget_SceneGameObject_DoesNotCreatePreviewScene()
+    {
+        var target = new GameObject("SceneProp")
+        {
+            scene = new Scene { name = "MainScene", isLoaded = true }
+        };
+        EditorUtility.IsPersistentFunc = _ => false;
+
+        int newPreviewCalls = 0;
+        EditorSceneManager.NewPreviewSceneFunc = () =>
+        {
+            newPreviewCalls++;
+            return new Scene { name = "UnexpectedPreview", isLoaded = true };
+        };
+
+        int instantiateCalls = 0;
+        PrefabUtility.InstantiatePrefabInSceneFunc = (_, _) =>
+        {
+            instantiateCalls++;
+            return null;
+        };
+
+        Scene capturedCamScene = default;
+        Camera.OnBeforeRenderAction = cam => capturedCamScene = cam.scene;
+
+        string outputPath = "Temp/test_capture_target_scene_prop.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(target, outputPath);
+
+        Assert.Contains("Captured target \"SceneProp\"", result);
+        Assert.Equal(0, newPreviewCalls);
+        Assert.Equal(0, instantiateCalls);
+        Assert.Equal("MainScene", capturedCamScene.name);
+    }
+
+    [Fact]
     public void Find_MatchesSubstringsAndWildcards_RespectsInactiveFlag()
     {
         var rootGo = new GameObject("PlayerCharacter");

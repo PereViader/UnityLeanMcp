@@ -790,7 +790,9 @@ namespace UnityEditor
     public static class EditorUtility
     {
         public static bool scriptCompilationFailed;
+        public static Func<UnityEngine.Object, bool>? IsPersistentFunc;
         public static Action? UnloadUnusedAssetsImmediateAction;
+        public static bool IsPersistent(UnityEngine.Object target) => IsPersistentFunc?.Invoke(target) ?? false;
         public static void UnloadUnusedAssetsImmediate() => UnloadUnusedAssetsImmediateAction?.Invoke();
         public static UnityEngine.GameObject CreateGameObjectWithHideFlags(string name, UnityEngine.HideFlags flags, params Type[] components)
         {
@@ -1247,6 +1249,20 @@ namespace UnityEditor
             public static Func<PrefabStage?>? GetCurrentPrefabStageFunc;
             public static PrefabStage? GetCurrentPrefabStage() => GetCurrentPrefabStageFunc?.Invoke();
         }
+
+        public static class EditorSceneManager
+        {
+            public static Func<UnityEngine.SceneManagement.Scene>? NewPreviewSceneFunc;
+            public static Func<UnityEngine.SceneManagement.Scene, bool>? ClosePreviewSceneFunc;
+
+            public static UnityEngine.SceneManagement.Scene NewPreviewScene() =>
+                NewPreviewSceneFunc != null
+                    ? NewPreviewSceneFunc()
+                    : new UnityEngine.SceneManagement.Scene { name = "PreviewScene", isLoaded = true };
+
+            public static bool ClosePreviewScene(UnityEngine.SceneManagement.Scene scene) =>
+                ClosePreviewSceneFunc?.Invoke(scene) ?? true;
+        }
     }
 
     public static class PrefabUtility
@@ -1277,6 +1293,7 @@ namespace UnityEditor
 
         public static Func<string, UnityEngine.GameObject?>? LoadPrefabContentsFunc;
         public static Action<UnityEngine.GameObject>? UnloadPrefabContentsAction;
+        public static Func<UnityEngine.Object, UnityEngine.SceneManagement.Scene, UnityEngine.Object?>? InstantiatePrefabInSceneFunc;
 
         public static UnityEngine.GameObject? LoadPrefabContents(string assetPath) =>
             LoadPrefabContentsFunc != null
@@ -1285,6 +1302,9 @@ namespace UnityEditor
 
         public static void UnloadPrefabContents(UnityEngine.GameObject contentsRoot) =>
             UnloadPrefabContentsAction?.Invoke(contentsRoot);
+
+        public static UnityEngine.Object? InstantiatePrefab(UnityEngine.Object assetComponentOrGameObject, UnityEngine.SceneManagement.Scene destinationScene) =>
+            InstantiatePrefabInSceneFunc?.Invoke(assetComponentOrGameObject, destinationScene);
     }
 
     public static class ShaderUtil
