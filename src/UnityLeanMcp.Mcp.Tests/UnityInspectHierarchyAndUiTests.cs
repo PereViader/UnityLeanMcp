@@ -2237,6 +2237,44 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         Assert.DoesNotContain("InstantiatedMat", result);
     }
 
+    [Fact]
+    public void Audit_ResolvePersistentArgumentType_CachesResolvedAndMissingTypes()
+    {
+        string typeName = typeof(GameObject).AssemblyQualifiedName!;
+        Type first = Inspect.ResolvePersistentArgumentType(typeName);
+        Type second = Inspect.ResolvePersistentArgumentType(typeName);
+
+        Assert.Same(typeof(GameObject), first);
+        Assert.Same(first, second);
+        Assert.Null(Inspect.ResolvePersistentArgumentType("NonExistent.Namespace.MissingType, NonExistentAssembly"));
+        Assert.Null(Inspect.ResolvePersistentArgumentType("NonExistent.Namespace.MissingType, NonExistentAssembly"));
+        Assert.Null(Inspect.ResolvePersistentArgumentType("   "));
+    }
+
+    [Fact]
+    public void Audit_ZeroIssueSceneWithRendererAndMainCamera_ReportsZeroIssues()
+    {
+        using var scope = new UnityInspectTestScope();
+        var validShader = new Shader { name = "Standard" };
+        var validMat = new Material { name = "ValidMat", shader = validShader };
+
+        var camGo = new GameObject("Main Camera", typeof(Camera)) { tag = "MainCamera" };
+        var meshGo = new GameObject("MeshProp");
+        var renderer = meshGo.AddComponent<Renderer>();
+        renderer.sharedMaterials = new[] { validMat };
+
+        var scene = new Scene
+        {
+            name = "CleanScene",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { camGo, meshGo }
+        };
+        SceneManager.Scenes.Add(scene);
+
+        string result = Inspect.Audit();
+        Assert.Contains("0 issues found (2 GameObject(s) scanned)", result);
+    }
+
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)
     {
         var eventProp = new SerializedProperty

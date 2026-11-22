@@ -388,6 +388,15 @@ namespace UnityEngine
             get => sharedMaterials != null && sharedMaterials.Length > 0 ? sharedMaterials[0] : null;
             set => sharedMaterials = value != null ? new[] { value } : Array.Empty<Material>();
         }
+
+        public void GetSharedMaterials(List<Material> m)
+        {
+            m.Clear();
+            if (sharedMaterials != null)
+            {
+                m.AddRange(sharedMaterials);
+            }
+        }
     }
     public class AudioSource : Behaviour { }
     public class AudioListener : Behaviour { }
@@ -526,6 +535,7 @@ namespace UnityEngine
             }
         }
         public string tag { get; set; } = "Untagged";
+        public bool CompareTag(string tag) => string.Equals(this.tag, tag, StringComparison.Ordinal);
         public int layer { get; set; } = 0;
         public UnityEngine.SceneManagement.Scene scene { get; set; }
         public Transform transform { get; internal set; }
@@ -614,6 +624,25 @@ namespace UnityEngine
                 }
             }
             return result.ToArray();
+        }
+
+        public void GetComponents<T>(List<T> results) where T : class
+        {
+            results.Clear();
+            foreach (var c in _components)
+            {
+                if (c == null)
+                {
+                    if (typeof(T) == typeof(Component) || typeof(T) == typeof(object))
+                    {
+                        results.Add(null!);
+                    }
+                }
+                else if (c is T t)
+                {
+                    results.Add(t);
+                }
+            }
         }
 
         public T[] GetComponentsInChildren<T>(bool includeInactive = false) where T : class

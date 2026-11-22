@@ -306,10 +306,14 @@ public class UnityInspectConsoleTests
         Assert.DoesNotContain("Entry 1", result);
         Assert.DoesNotContain("Entry 2", result);
         Assert.DoesNotContain("Entry 3", result);
+        int headerIdx = result.IndexOf("Console entries (2 shown, 5 unique matched of 5 total; 0 error, 0 warning, 5 log):", StringComparison.Ordinal);
+        int markerIdx = result.IndexOf(Inspect.ItemTruncationMarker, StringComparison.Ordinal);
         int idx4 = result.IndexOf("[Log] Entry 4", StringComparison.Ordinal);
         int idx5 = result.IndexOf("[Log] Entry 5", StringComparison.Ordinal);
-        Assert.True(idx4 >= 0 && idx5 > idx4);
-        Assert.Contains(Inspect.ItemTruncationMarker, result);
+        Assert.True(headerIdx >= 0);
+        Assert.True(markerIdx > headerIdx, "Truncation marker should appear after the header.");
+        Assert.True(idx4 > markerIdx, "Truncation marker should appear at the top before the first shown entry.");
+        Assert.True(idx5 > idx4);
     }
 
     [Fact]
@@ -511,5 +515,46 @@ public class UnityInspectConsoleTests
         Assert.Contains("[Error] Critical failure A (Assets/Scripts/Game.cs:42)", result);
         Assert.Contains("[Error] Critical failure B (Assets/Scripts/Game.cs:84)", result);
         Assert.DoesNotContain("Noise log", result);
+    }
+
+    [Fact]
+    public void LooksLikeStackTraceLine_RequiresParenthesisForAtPrefix()
+    {
+        Assert.False(Inspect.LooksLikeStackTraceLine("at the start of frame"));
+        Assert.False(Inspect.LooksLikeStackTraceLine("  at runtime without parens"));
+        Assert.True(Inspect.LooksLikeStackTraceLine("  at MyNamespace.MyType.Tick() in Assets/Scripts/MyType.cs:line 12"));
+        Assert.True(Inspect.LooksLikeStackTraceLine("at MyType.Run () [0x00000] in <filename unknown>:0"));
+    }
+
+    [Fact]
+    public void Console_MultilineProseStartingWithAt_IsNotSplitIntoStackTrace()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.Add(new LogEntries.StubEntry
+        {
+            Message = "Physics warning\nat the start of frame\nMySystem:Tick () (at Assets/Scripts/MySystem.cs:20)",
+            File = "Assets/Scripts/MySystem.cs",
+            Line = 20,
+            Mode = ModeScriptingWarning
+        });
+
+        string compact = Inspect.Console(includeStackTrace: false);
+        Assert.Contains("Physics warning\\nat the start of frame", compact);
+
+        string detailed = Inspect.Console(includeStackTrace: true);
+        Assert.Contains("Physics warning\\nat the start of frame", detailed);
+        Assert.Contains("  MySystem:Tick () (at Assets/Scripts/MySystem.cs:20)", detailed);
+    }
+
+    [Fact]
+    public void BuildConsoleFilterRegex_UsesCultureInvariantAndMatchTimeout()
+    {
+        var regex = Inspect.BuildConsoleFilterRegex("*texture*");
+        Assert.NotNull(regex);
+        Assert.True(regex.Options.HasFlag(System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+        Assert.True(regex.Options.HasFlag(System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+        Assert.True(regex.Options.HasFlag(System.Text.RegularExpressions.RegexOptions.Singleline));
+        Assert.Equal(Inspect.DefaultWildcardRegexTimeout, regex.MatchTimeout);
+        Assert.Null(Inspect.BuildConsoleFilterRegex("plainSubstring"));
     }
 }

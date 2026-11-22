@@ -5,8 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Reflection;
-using System.Text;
 using System.Threading;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -21,10 +19,41 @@ namespace UnityLeanMcp
         public const int DefaultAuditMaxIssuesPerCategory = DefaultMaxItems;
         private const int AuditUnloadUnusedAssetsBatchSize = 50;
 
-        private static readonly Dictionary<Type, PropertyInfo> s_SharedMaterialPropCache = new Dictionary<Type, PropertyInfo>();
-        private static readonly Dictionary<Type, PropertyInfo> s_GraphicMaterialPropCache = new Dictionary<Type, PropertyInfo>();
-        private static readonly Dictionary<Type, PropertyInfo> s_FontSharedMaterialPropCache = new Dictionary<Type, PropertyInfo>();
-        private static readonly Dictionary<Type, PropertyInfo> s_FontSharedMaterialsPropCache = new Dictionary<Type, PropertyInfo>();
+        private struct LazyAuditTarget
+        {
+            private readonly GameObject _go;
+            private readonly Transform _transform;
+            private string _name;
+            private string _path;
+
+            public LazyAuditTarget(GameObject go, Transform transform)
+            {
+                _go = go;
+                _transform = transform;
+                _name = null;
+                _path = null;
+            }
+
+            public string GetName()
+            {
+                if (_name == null)
+                {
+                    string name = "Unnamed";
+                    try { name = _go.name; } catch { }
+                    _name = name ?? "Unnamed";
+                }
+                return _name;
+            }
+
+            public string GetPath()
+            {
+                if (_path == null)
+                {
+                    _path = GetHierarchyPath(_transform);
+                }
+                return _path;
+            }
+        }
 
         #region Scene & Prefab Integrity Audit
 
@@ -417,6 +446,9 @@ namespace UnityLeanMcp
 
             if (rootObjects != null && rootObjects.Length > 0)
             {
+                var reusableComponents = new List<Component>();
+                var reusableMaterials = new List<Material>();
+
                 TraverseRootGameObjectsBfs(rootObjects, (current, go) =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -426,28 +458,36 @@ namespace UnityLeanMcp
                     }
 
                     report.GameObjectsScanned++;
-                    string hierarchyPath = GetHierarchyPath(current);
-                    string goName = "Unnamed";
-                    try { goName = go.name; } catch { }
 
                     bool isMainCameraTagged = false;
-                    try { isMainCameraTagged = string.Equals(go.tag, "MainCamera", StringComparison.Ordinal); } catch { }
+                    try { isMainCameraTagged = go.CompareTag("MainCamera"); } catch { }
                     if (isMainCameraTagged)
                     {
                         mainCameraTagCount++;
                     }
 
-                    Component[] components = null;
-                    try { components = go.GetComponents<Component>(); } catch { }
-                    if (components == null) return SceneBfsDecision.Continue;
-
-                    var missingIndices = new List<int>();
-
-                    for (int c = 0; c < components.Length; c++)
+                    reusableComponents.Clear();
+                    bool gotComponents = false;
+                    try
                     {
-                        var comp = components[c];
+                        go.GetComponents(reusableComponents);
+                        gotComponents = true;
+                    }
+                    catch { }
+                    if (!gotComponents) return SceneBfsDecision.Continue;
+
+                    var target = new LazyAuditTarget(go, current);
+                    List<int> missingIndices = null;
+
+                    for (int c = 0; c < reusableComponents.Count; c++)
+                    {
+                        var comp = reusableComponents[c];
                         if (ReferenceEquals(comp, null) || comp == null)
                         {
+                            if (missingIndices == null)
+                            {
+                                missingIndices = new List<int>();
+                            }
                             missingIndices.Add(c);
                             continue;
                         }
@@ -463,24 +503,24 @@ namespace UnityLeanMcp
 
                         if (IsComponentOfTypeName(compType, "AudioListener") && IsComponentActiveAndEnabled(comp))
                         {
-                            audioListenerPaths.Add(hierarchyPath);
+                            audioListenerPaths.Add(target.GetPath());
                         }
 
                         if (IsComponentOfTypeName(compType, "EventSystem") && IsComponentActiveAndEnabled(comp))
                         {
-                            eventSystemPaths.Add(hierarchyPath);
+                            eventSystemPaths.Add(target.GetPath());
                         }
 
-                        AuditComponentMaterialsAndShaders(comp, compType, goName, hierarchyPath, containerLabel, report);
-                        AuditComponentSerializedProperties(comp, compType, goName, hierarchyPath, containerLabel, report);
+                        AuditComponentMaterialsAndShaders(comp, compType, ref target, containerLabel, report, reusableMaterials);
+                        AuditComponentSerializedProperties(comp, compType, ref target, containerLabel, report);
                     }
 
-                    if (missingIndices.Count > 0)
+                    if (missingIndices != null && missingIndices.Count > 0)
                     {
                         string indicesStr = string.Join(", ", missingIndices.ConvertAll(idx => idx.ToString(CultureInfo.InvariantCulture)));
                         string scriptWord = missingIndices.Count == 1 ? "missing script" : "missing scripts";
                         report.TryAddMissingScript(
-                            FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]"));
+                            FormattableString.Invariant($"  • {target.GetName()} (path: \"{target.GetPath()}\", {containerLabel}): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]"));
                     }
 
                     return report.IsReportFull ? SceneBfsDecision.Stop : SceneBfsDecision.Continue;
@@ -508,544 +548,6 @@ namespace UnityLeanMcp
                     : "no Camera components present";
                 report.TryAddSceneHygieneIssue(
                     $"  • Missing \"MainCamera\" tag in {containerLabel} ({camDetail})");
-            }
-        }
-
-        private static void AuditComponentMaterialsAndShaders(
-            Component comp,
-            Type compType,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report)
-        {
-            if (comp is Renderer renderer)
-            {
-                Material[] sharedMats = null;
-                try { sharedMats = renderer.sharedMaterials; } catch { }
-                if (sharedMats != null)
-                {
-                    for (int m = 0; m < sharedMats.Length; m++)
-                    {
-                        var mat = sharedMats[m];
-                        if (ReferenceEquals(mat, null) || mat == null) continue;
-                        AuditMaterialShader(mat, FormattableString.Invariant($"{compType.Name}.sharedMaterials[{m}]"), goName, hierarchyPath, containerLabel, report);
-                    }
-                }
-                return;
-            }
-
-            HashSet<Material> auditedMaterials = null;
-
-            // Safely inspect sharedMaterial on non-Renderer components that expose it without touching arbitrary .material
-            AuditSingleMaterialProperty(comp, compType, s_SharedMaterialPropCache, "sharedMaterial", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
-
-            // TMP_Text inherits from Graphic; inspect fontSharedMaterial/fontSharedMaterials first so they take precedence over Graphic.material during deduplication
-            if (IsComponentOfFullTypeName(compType, "TMPro.TMP_Text"))
-            {
-                AuditSingleMaterialProperty(comp, compType, s_FontSharedMaterialPropCache, "fontSharedMaterial", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
-                AuditMaterialArrayProperty(comp, compType, s_FontSharedMaterialsPropCache, "fontSharedMaterials", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
-            }
-
-            // UnityEngine.UI.Graphic.material is a non-instantiating getter (unlike Renderer.material or Collider.material)
-            if (IsComponentOfFullTypeName(compType, "UnityEngine.UI.Graphic"))
-            {
-                AuditSingleMaterialProperty(comp, compType, s_GraphicMaterialPropCache, "material", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
-            }
-        }
-
-        private static void AuditSingleMaterialProperty(
-            Component comp,
-            Type compType,
-            Dictionary<Type, PropertyInfo> propCache,
-            string propertyName,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report,
-            ref HashSet<Material> auditedMaterials)
-        {
-            PropertyInfo prop = GetCachedProperty(propCache, compType, propertyName, typeof(Material));
-            if (prop == null) return;
-
-            Material mat = null;
-            try { mat = prop.GetValue(comp, null) as Material; } catch { }
-            if (!TryMarkMaterialAudited(mat, ref auditedMaterials)) return;
-
-            AuditMaterialShader(mat, $"{compType.Name}.{propertyName}", goName, hierarchyPath, containerLabel, report);
-        }
-
-        private static void AuditMaterialArrayProperty(
-            Component comp,
-            Type compType,
-            Dictionary<Type, PropertyInfo> propCache,
-            string propertyName,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report,
-            ref HashSet<Material> auditedMaterials)
-        {
-            PropertyInfo prop = GetCachedProperty(propCache, compType, propertyName, typeof(Material[]));
-            if (prop == null) return;
-
-            Material[] mats = null;
-            try { mats = prop.GetValue(comp, null) as Material[]; } catch { }
-            if (mats == null) return;
-
-            for (int m = 0; m < mats.Length; m++)
-            {
-                var mat = mats[m];
-                if (!TryMarkMaterialAudited(mat, ref auditedMaterials)) continue;
-
-                AuditMaterialShader(mat, FormattableString.Invariant($"{compType.Name}.{propertyName}[{m}]"), goName, hierarchyPath, containerLabel, report);
-            }
-        }
-
-        private static bool TryMarkMaterialAudited(Material mat, ref HashSet<Material> auditedMaterials)
-        {
-            if (ReferenceEquals(mat, null) || mat == null) return false;
-            if (auditedMaterials == null)
-            {
-                auditedMaterials = new HashSet<Material>();
-            }
-            return auditedMaterials.Add(mat);
-        }
-
-        private static void AuditMaterialShader(
-            Material mat,
-            string accessorPath,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report)
-        {
-            string matName = "Unnamed";
-            try { matName = !string.IsNullOrEmpty(mat.name) ? mat.name : "Unnamed"; } catch { }
-
-            Shader shader = null;
-            try { shader = mat.shader; } catch { }
-
-            if (ReferenceEquals(shader, null) || shader == null)
-            {
-                report.TryAddMaterialAndShaderIssue(
-                    $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {accessorPath} (\"{matName}\") has missing/null Shader");
-                return;
-            }
-
-            string shaderName = string.Empty;
-            try { shaderName = shader.name ?? string.Empty; } catch { }
-
-            if (string.Equals(shaderName, "Hidden/InternalErrorShader", StringComparison.OrdinalIgnoreCase))
-            {
-                report.TryAddMaterialAndShaderIssue(
-                    $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {accessorPath} (\"{matName}\") uses error shader \"Hidden/InternalErrorShader\"");
-                return;
-            }
-
-            bool hasShaderError = false;
-            try { hasShaderError = ShaderUtil.ShaderHasError(shader); } catch { }
-            if (hasShaderError)
-            {
-                report.TryAddMaterialAndShaderIssue(
-                    $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {accessorPath} (\"{matName}\") shader \"{shaderName}\" has compilation errors");
-            }
-        }
-
-        private static void AuditComponentSerializedProperties(
-            Component comp,
-            Type compType,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report)
-        {
-            if (comp is Transform)
-            {
-                return;
-            }
-
-            try
-            {
-                using (var so = new SerializedObject(comp))
-                {
-                    var sp = so.GetIterator();
-                    bool enterChildren = true;
-
-                    while (sp.NextVisible(enterChildren))
-                    {
-                        enterChildren = true;
-                        string propPath = sp.propertyPath;
-                        if (string.IsNullOrEmpty(propPath) || propPath == "m_Script")
-                        {
-                            enterChildren = false;
-                            continue;
-                        }
-
-                        if (sp.propertyType == SerializedPropertyType.String)
-                        {
-                            enterChildren = false;
-                            continue;
-                        }
-
-                        if (sp.isArray)
-                        {
-                            if (sp.arraySize == 0)
-                            {
-                                enterChildren = false;
-                                continue;
-                            }
-
-                            SerializedProperty elem0 = null;
-                            try { elem0 = sp.GetArrayElementAtIndex(0); } catch { }
-                            if (elem0 == null ||
-                                (elem0.propertyType != SerializedPropertyType.ObjectReference &&
-                                 elem0.propertyType != SerializedPropertyType.Generic &&
-                                 elem0.propertyType != SerializedPropertyType.ManagedReference &&
-                                 elem0.propertyType != SerializedPropertyType.ExposedReference))
-                            {
-                                enterChildren = false;
-                            }
-                            continue;
-                        }
-
-                        // Check if this property is a UnityEvent (contains m_PersistentCalls.m_Calls)
-                        if (sp.propertyType == SerializedPropertyType.Generic && !sp.isArray)
-                        {
-                            var callsProp = sp.FindPropertyRelative("m_PersistentCalls.m_Calls");
-                            if (callsProp == null)
-                            {
-                                var persistentCallsProp = sp.FindPropertyRelative("m_PersistentCalls");
-                                if (persistentCallsProp != null)
-                                {
-                                    callsProp = persistentCallsProp.FindPropertyRelative("m_Calls");
-                                }
-                            }
-
-                            if (callsProp != null && callsProp.isArray)
-                            {
-                                AuditUnityEventCalls(callsProp, compType.Name, propPath, goName, hierarchyPath, containerLabel, report);
-                                enterChildren = false;
-                                continue;
-                            }
-
-                            continue;
-                        }
-
-                        if (sp.propertyType == SerializedPropertyType.ObjectReference)
-                        {
-                            UnityEngine.Object refVal = null;
-                            int instanceId = 0;
-                            try { refVal = sp.objectReferenceValue; } catch { }
-                            try { instanceId = sp.objectReferenceInstanceIDValue; } catch { }
-
-                            if (refVal == null && instanceId != 0)
-                            {
-                                report.TryAddBrokenReference(
-                                    FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compType.Name}.{propPath} is Missing (instanceID: {instanceId})"));
-                            }
-                            enterChildren = false;
-                            continue;
-                        }
-
-                        if (sp.propertyType != SerializedPropertyType.ManagedReference &&
-                            sp.propertyType != SerializedPropertyType.ExposedReference)
-                        {
-                            enterChildren = false;
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                // SerializedObject creation or traversal may not be supported on unusual/stubbed components
-            }
-        }
-
-        private static void AuditUnityEventCalls(
-            SerializedProperty callsProp,
-            string compTypeName,
-            string eventPropertyPath,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report)
-        {
-            int callCount = 0;
-            try { callCount = callsProp.arraySize; } catch { }
-
-            for (int i = 0; i < callCount; i++)
-            {
-                SerializedProperty callElement = null;
-                try { callElement = callsProp.GetArrayElementAtIndex(i); } catch { }
-                if (callElement == null) continue;
-
-                var modeProp = callElement.FindPropertyRelative("m_Mode");
-                if (modeProp != null && modeProp.intValue == 0) // PersistentListenerMode.EventDefined / Off
-                {
-                    var targetCheck = callElement.FindPropertyRelative("m_Target");
-                    var methodCheck = callElement.FindPropertyRelative("m_MethodName");
-                    bool hasTargetRef = targetCheck != null && (targetCheck.objectReferenceValue != null || targetCheck.objectReferenceInstanceIDValue != 0);
-                    bool hasMethod = methodCheck != null && !string.IsNullOrEmpty(methodCheck.stringValue);
-                    if (!hasTargetRef && !hasMethod)
-                    {
-                        continue;
-                    }
-                }
-
-                var targetProp = callElement.FindPropertyRelative("m_Target");
-                var methodNameProp = callElement.FindPropertyRelative("m_MethodName");
-                var argumentsProp = callElement.FindPropertyRelative("m_Arguments");
-
-                UnityEngine.Object targetObj = null;
-                int targetInstanceId = 0;
-                if (targetProp != null)
-                {
-                    try { targetObj = targetProp.objectReferenceValue; } catch { }
-                    try { targetInstanceId = targetProp.objectReferenceInstanceIDValue; } catch { }
-                }
-
-                string methodName = methodNameProp != null ? (methodNameProp.stringValue ?? string.Empty) : string.Empty;
-
-                if (targetObj == null)
-                {
-                    string reason = targetInstanceId != 0
-                        ? FormattableString.Invariant($"missing target object (instanceID: {targetInstanceId})")
-                        : "null target object";
-                    string methodDetail = !string.IsNullOrEmpty(methodName) ? $" (method: \"{methodName}\")" : "";
-                    report.TryAddBrokenUnityEvent(
-                        FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] has {reason}{methodDetail}"));
-                    continue;
-                }
-
-                if (string.IsNullOrEmpty(methodName))
-                {
-                    report.TryAddBrokenUnityEvent(
-                        FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] on target \"{targetObj.name}\" ({targetObj.GetType().Name}) has no method assigned"));
-                    continue;
-                }
-
-                Type targetType = targetObj.GetType();
-                if (!HasMatchingPersistentListenerMethod(targetType, methodName, modeProp, argumentsProp))
-                {
-                    report.TryAddBrokenUnityEvent(
-                        FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] method \"{targetType.Name}.{methodName}\" not found on target \"{targetObj.name}\""));
-                }
-
-                if (modeProp != null && modeProp.intValue == 2) // PersistentListenerMode.Object
-                {
-                    AuditUnityEventObjectArgument(
-                        callElement,
-                        argumentsProp,
-                        compTypeName,
-                        eventPropertyPath,
-                        i,
-                        methodName,
-                        goName,
-                        hierarchyPath,
-                        containerLabel,
-                        report);
-                }
-            }
-        }
-
-        private static void AuditUnityEventObjectArgument(
-            SerializedProperty callElement,
-            SerializedProperty argumentsProp,
-            string compTypeName,
-            string eventPropertyPath,
-            int callIndex,
-            string methodName,
-            string goName,
-            string hierarchyPath,
-            string containerLabel,
-            AuditReport report)
-        {
-            SerializedProperty objectArgProp = null;
-            if (argumentsProp != null)
-            {
-                objectArgProp = argumentsProp.FindPropertyRelative("m_ObjectArgument");
-            }
-            if (objectArgProp == null)
-            {
-                objectArgProp = callElement.FindPropertyRelative("m_Arguments.m_ObjectArgument");
-            }
-            if (objectArgProp == null)
-            {
-                return;
-            }
-
-            UnityEngine.Object objArg = null;
-            int objArgInstanceId = 0;
-            try { objArg = objectArgProp.objectReferenceValue; } catch { }
-            try { objArgInstanceId = objectArgProp.objectReferenceInstanceIDValue; } catch { }
-
-            if (objArg == null && objArgInstanceId != 0)
-            {
-                string methodDetail = !string.IsNullOrEmpty(methodName) ? $" (method: \"{methodName}\")" : "";
-                report.TryAddBrokenUnityEvent(
-                    FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{callIndex}] has missing object argument (instanceID: {objArgInstanceId}){methodDetail}"));
-            }
-        }
-
-        private static bool HasMatchingPersistentListenerMethod(
-            Type targetType,
-            string methodName,
-            SerializedProperty modeProp,
-            SerializedProperty argumentsProp)
-        {
-            if (targetType == null || string.IsNullOrEmpty(methodName)) return false;
-
-            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-
-            int? mode = modeProp != null ? modeProp.intValue : (int?)null;
-            string objectArgTypeName = null;
-            if (argumentsProp != null)
-            {
-                var typeNameProp = argumentsProp.FindPropertyRelative("m_ObjectArgumentAssemblyTypeName");
-                if (typeNameProp != null)
-                {
-                    objectArgTypeName = typeNameProp.stringValue;
-                }
-            }
-
-            for (Type current = targetType; current != null && current != typeof(object); current = current.BaseType)
-            {
-                MethodInfo[] methods = null;
-                try { methods = current.GetMethods(flags | BindingFlags.DeclaredOnly); } catch { }
-                if (methods == null) continue;
-
-                for (int i = 0; i < methods.Length; i++)
-                {
-                    var m = methods[i];
-                    if (!string.Equals(m.Name, methodName, StringComparison.Ordinal)) continue;
-                    if (m.ReturnType != typeof(void)) continue;
-
-                    var parameters = m.GetParameters();
-                    if (IsMethodCompatibleWithPersistentMode(parameters, mode, objectArgTypeName))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
-        }
-
-        private static bool IsMethodCompatibleWithPersistentMode(
-            ParameterInfo[] parameters,
-            int? mode,
-            string objectArgTypeName)
-        {
-            if (parameters == null) return false;
-
-            // PersistentListenerMode:
-            // 0 = EventDefined (1 or more parameters, or any void method)
-            // 1 = Void (0 parameters)
-            // 2 = Object (1 parameter assignable from UnityEngine.Object / specified type)
-            // 3 = Int (1 int parameter)
-            // 4 = Float (1 float parameter)
-            // 5 = String (1 string parameter)
-            // 6 = Bool (1 bool parameter)
-            if (!mode.HasValue || mode.Value == 0)
-            {
-                return true;
-            }
-
-            switch (mode.Value)
-            {
-                case 1: // Void
-                    return parameters.Length == 0;
-                case 2: // Object
-                    if (parameters.Length != 1) return false;
-                    Type paramType = parameters[0].ParameterType;
-                    if (!typeof(UnityEngine.Object).IsAssignableFrom(paramType)) return false;
-                    if (!string.IsNullOrEmpty(objectArgTypeName))
-                    {
-                        Type expectedType = ResolvePersistentArgumentType(objectArgTypeName);
-                        if (expectedType != null && !paramType.IsAssignableFrom(expectedType) && !expectedType.IsAssignableFrom(paramType))
-                        {
-                            return false;
-                        }
-                    }
-                    return true;
-                case 3: // Int
-                    return parameters.Length == 1 && (parameters[0].ParameterType == typeof(int) || parameters[0].ParameterType.IsEnum);
-                case 4: // Float
-                    return parameters.Length == 1 && parameters[0].ParameterType == typeof(float);
-                case 5: // String
-                    return parameters.Length == 1 && parameters[0].ParameterType == typeof(string);
-                case 6: // Bool
-                    return parameters.Length == 1 && parameters[0].ParameterType == typeof(bool);
-                default:
-                    return true;
-            }
-        }
-
-        private static Type ResolvePersistentArgumentType(string assemblyQualifiedTypeName)
-        {
-            if (string.IsNullOrWhiteSpace(assemblyQualifiedTypeName)) return null;
-            try
-            {
-                Type resolved = Type.GetType(assemblyQualifiedTypeName, throwOnError: false);
-                if (resolved != null) return resolved;
-
-                int commaIdx = assemblyQualifiedTypeName.IndexOf(',');
-                string fullTypeName = commaIdx > 0 ? assemblyQualifiedTypeName.Substring(0, commaIdx).Trim() : assemblyQualifiedTypeName.Trim();
-
-                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-                for (int i = 0; i < assemblies.Length; i++)
-                {
-                    try
-                    {
-                        resolved = assemblies[i].GetType(fullTypeName, throwOnError: false);
-                        if (resolved != null) return resolved;
-                    }
-                    catch { }
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        private static bool IsComponentOfTypeName(Type compType, string shortTypeName)
-        {
-            for (Type cur = compType; cur != null && cur != typeof(UnityEngine.Object) && cur != typeof(object); cur = cur.BaseType)
-            {
-                if (string.Equals(cur.Name, shortTypeName, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static bool IsComponentOfFullTypeName(Type compType, string fullTypeName)
-        {
-            for (Type cur = compType; cur != null && cur != typeof(UnityEngine.Object) && cur != typeof(object); cur = cur.BaseType)
-            {
-                if (string.Equals(cur.FullName, fullTypeName, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static bool IsComponentActiveAndEnabled(Component comp)
-        {
-            if (comp == null) return false;
-            if (comp is Behaviour beh)
-            {
-                try { return beh.isActiveAndEnabled; } catch { }
-            }
-            try
-            {
-                return comp.gameObject == null || comp.gameObject.activeInHierarchy;
-            }
-            catch
-            {
-                return true;
             }
         }
 
@@ -1234,387 +736,6 @@ namespace UnityLeanMcp
 
             error = $"(Audit target \"{rawInput}\" was not found as a loaded scene, active Prefab Stage, folder, or prefab asset)";
             return false;
-        }
-
-        private struct AuditSection
-        {
-            public string Title;
-            public List<string> Items;
-            public int CollectionSuppressed;
-            public int ShownCount;
-            public int TotalOmitted;
-            public int FullLength;
-            public int Budget;
-        }
-
-        private static string FormatAuditReport(AuditReport report)
-        {
-            if (report.TotalIssues == 0 && report.TotalSuppressed == 0)
-            {
-                var emptySb = new StringBuilder();
-                emptySb.AppendLine(FormattableString.Invariant($"Audit of {report.ScopeDescription}: 0 issues found ({report.GameObjectsScanned} GameObject(s) scanned)."));
-                if (!string.IsNullOrEmpty(report.TruncationNote))
-                {
-                    emptySb.AppendLine();
-                    emptySb.AppendLine(report.TruncationNote);
-                }
-                return LimitOutput(emptySb.ToString().TrimEnd());
-            }
-
-            int nlLen = Environment.NewLine.Length;
-            var sections = new[]
-            {
-                new AuditSection { Title = "Missing Scripts", Items = report.MissingScripts, CollectionSuppressed = report.MissingScriptsSuppressed },
-                new AuditSection { Title = "Broken Object References", Items = report.BrokenReferences, CollectionSuppressed = report.BrokenReferencesSuppressed },
-                new AuditSection { Title = "Broken UnityEvent Listeners", Items = report.BrokenUnityEvents, CollectionSuppressed = report.BrokenUnityEventsSuppressed },
-                new AuditSection { Title = "Material & Shader Errors", Items = report.MaterialAndShaderIssues, CollectionSuppressed = report.MaterialAndShaderIssuesSuppressed },
-                new AuditSection { Title = "Scene Hygiene Issues", Items = report.SceneHygieneIssues, CollectionSuppressed = report.SceneHygieneIssuesSuppressed }
-            };
-
-            int activeCount = 0;
-            int totalFullLength = 0;
-            for (int i = 0; i < sections.Length; i++)
-            {
-                int itemCount = sections[i].Items != null ? sections[i].Items.Count : 0;
-                int suppressed = sections[i].CollectionSuppressed;
-                if (itemCount == 0 && suppressed == 0)
-                {
-                    continue;
-                }
-
-                activeCount++;
-                string fullCountText = suppressed > 0
-                    ? FormattableString.Invariant($"{itemCount}+, {suppressed} omitted")
-                    : itemCount.ToString(CultureInfo.InvariantCulture);
-                int len = nlLen + $"{sections[i].Title} ({fullCountText}):".Length + nlLen;
-                for (int j = 0; j < itemCount; j++)
-                {
-                    len += (sections[i].Items[j] != null ? sections[i].Items[j].Length : 0) + nlLen;
-                }
-
-                if (suppressed > 0)
-                {
-                    len += GetSectionTruncationMarker(suppressed, report.MaxIssuesPerCategory, outputBudgetReached: false).Length + nlLen;
-                }
-
-                sections[i].FullLength = len;
-                totalFullLength += len;
-            }
-
-            int headerReserve =
-                FormattableString.Invariant($"Audit of {report.ScopeDescription}: 999999 issue(s) reported (999999 additional omitted) ({report.GameObjectsScanned} GameObject(s) scanned):").Length + nlLen +
-                "Category counts: Missing Scripts: 999999+ (999999 omitted), Broken Object References: 999999+ (999999 omitted), Broken UnityEvent Listeners: 999999+ (999999 omitted), Material & Shader Errors: 999999+ (999999 omitted), Scene Hygiene Issues: 999999+ (999999 omitted)".Length + nlLen +
-                (string.IsNullOrEmpty(report.TruncationNote) ? 0 : nlLen + report.TruncationNote.Length + nlLen) +
-                nlLen + OutputTruncationMarker.Length;
-
-            int sectionsBudget = Math.Max(0, DefaultMaxOutputCharacters - headerReserve);
-            bool anyOmittedByFormat = false;
-
-            if (totalFullLength <= sectionsBudget)
-            {
-                for (int i = 0; i < sections.Length; i++)
-                {
-                    if (sections[i].FullLength == 0) continue;
-                    sections[i].ShownCount = sections[i].Items.Count;
-                    sections[i].TotalOmitted = sections[i].CollectionSuppressed;
-                }
-            }
-            else
-            {
-                anyOmittedByFormat = true;
-                AllocateSectionBudgets(sections, activeCount, sectionsBudget);
-
-                for (int i = 0; i < sections.Length; i++)
-                {
-                    if (sections[i].FullLength == 0) continue;
-
-                    int itemCount = sections[i].Items.Count;
-                    if (sections[i].FullLength <= sections[i].Budget)
-                    {
-                        sections[i].ShownCount = itemCount;
-                        sections[i].TotalOmitted = sections[i].CollectionSuppressed;
-                        continue;
-                    }
-
-                    int maxPossibleOmitted = itemCount + sections[i].CollectionSuppressed;
-                    int worstHeaderLen = FormattableString.Invariant($"{sections[i].Title} ({itemCount}+, {maxPossibleOmitted} omitted):").Length + nlLen;
-                    int worstMarkerLen = GetSectionTruncationMarker(maxPossibleOmitted, report.MaxIssuesPerCategory, outputBudgetReached: true).Length + nlLen;
-                    int used = nlLen + worstHeaderLen + worstMarkerLen;
-
-                    int shown = 0;
-                    for (int j = 0; j < itemCount; j++)
-                    {
-                        int lineLen = (sections[i].Items[j] != null ? sections[i].Items[j].Length : 0) + nlLen;
-                        if (used + lineLen <= sections[i].Budget)
-                        {
-                            used += lineLen;
-                            shown++;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-
-                    sections[i].ShownCount = shown;
-                    sections[i].TotalOmitted = sections[i].CollectionSuppressed + (itemCount - shown);
-                }
-            }
-
-            int totalShown = 0;
-            int totalOmitted = 0;
-            for (int i = 0; i < sections.Length; i++)
-            {
-                totalShown += sections[i].ShownCount;
-                totalOmitted += sections[i].TotalOmitted;
-            }
-
-            var sb = new StringBuilder();
-            string issueSummary = totalOmitted > 0
-                ? FormattableString.Invariant($"{totalShown} issue(s) reported ({totalOmitted} additional omitted)")
-                : FormattableString.Invariant($"{totalShown} issue(s) found");
-            sb.AppendLine(FormattableString.Invariant($"Audit of {report.ScopeDescription}: {issueSummary} ({report.GameObjectsScanned} GameObject(s) scanned):"));
-            sb.AppendLine($"Category counts: {FormatCategorySummary(sections)}");
-
-            for (int i = 0; i < sections.Length; i++)
-            {
-                if (sections[i].FullLength == 0) continue;
-
-                bool truncatedByBudget = sections[i].ShownCount < sections[i].Items.Count ||
-                    (sections[i].CollectionSuppressed > 0 && report.IsOutputBudgetReached && sections[i].ShownCount < report.MaxIssuesPerCategory);
-                AppendAuditSection(
-                    sb,
-                    sections[i].Title,
-                    sections[i].Items,
-                    sections[i].ShownCount,
-                    sections[i].TotalOmitted,
-                    report.MaxIssuesPerCategory,
-                    truncatedByBudget);
-            }
-
-            if (!string.IsNullOrEmpty(report.TruncationNote))
-            {
-                sb.AppendLine();
-                sb.AppendLine(report.TruncationNote);
-            }
-
-            if (anyOmittedByFormat || report.IsOutputBudgetReached)
-            {
-                sb.AppendLine();
-                sb.Append(OutputTruncationMarker);
-            }
-
-            return LimitOutput(sb.ToString().TrimEnd());
-        }
-
-        private static void AllocateSectionBudgets(AuditSection[] sections, int activeCount, int sectionsBudget)
-        {
-            if (activeCount <= 0) return;
-
-            var activeIndices = new int[activeCount];
-            int idx = 0;
-            for (int i = 0; i < sections.Length; i++)
-            {
-                if (sections[i].FullLength > 0)
-                {
-                    activeIndices[idx++] = i;
-                }
-            }
-
-            Array.Sort(activeIndices, (a, b) => sections[a].FullLength.CompareTo(sections[b].FullLength));
-
-            int remBudget = sectionsBudget;
-            int remCount = activeCount;
-            for (int i = 0; i < activeCount; i++)
-            {
-                int secIdx = activeIndices[i];
-                int fairShare = remBudget / remCount;
-                int allocated = Math.Min(sections[secIdx].FullLength, fairShare);
-                sections[secIdx].Budget = allocated;
-                remBudget -= allocated;
-                remCount--;
-            }
-        }
-
-        private static string FormatCategorySummary(AuditSection[] sections)
-        {
-            var sb = new StringBuilder();
-            for (int i = 0; i < sections.Length; i++)
-            {
-                if (i > 0) sb.Append(", ");
-                sb.Append(sections[i].Title);
-                sb.Append(": ");
-                if (sections[i].TotalOmitted > 0)
-                {
-                    sb.Append(FormattableString.Invariant($"{sections[i].ShownCount}+ ({sections[i].TotalOmitted} omitted)"));
-                }
-                else
-                {
-                    sb.Append(sections[i].ShownCount.ToString(CultureInfo.InvariantCulture));
-                }
-            }
-            return sb.ToString();
-        }
-
-        private static string GetSectionTruncationMarker(int omittedCount, int maxIssuesPerCategory, bool outputBudgetReached)
-        {
-            return outputBudgetReached
-                ? FormattableString.Invariant($"  ... ({omittedCount} more omitted; output budget reached)")
-                : FormattableString.Invariant($"  ... ({omittedCount} more omitted; maxIssuesPerCategory={maxIssuesPerCategory})");
-        }
-
-        private static void AppendAuditSection(
-            StringBuilder sb,
-            string title,
-            List<string> items,
-            int shownCount,
-            int omittedCount,
-            int maxIssuesPerCategory,
-            bool outputBudgetReached)
-        {
-            if ((items == null || items.Count == 0) && omittedCount == 0) return;
-
-            sb.AppendLine();
-            string countText = omittedCount > 0
-                ? FormattableString.Invariant($"{shownCount}+, {omittedCount} omitted")
-                : shownCount.ToString(CultureInfo.InvariantCulture);
-            sb.AppendLine($"{title} ({countText}):");
-            for (int i = 0; i < shownCount; i++)
-            {
-                sb.AppendLine(items[i]);
-            }
-
-            if (omittedCount > 0)
-            {
-                sb.AppendLine(GetSectionTruncationMarker(omittedCount, maxIssuesPerCategory, outputBudgetReached));
-            }
-        }
-
-        private sealed class AuditReport
-        {
-            private const int PerCategoryReservedCharacters = 4096;
-
-            public string ScopeDescription { get; set; }
-            public int MaxIssuesPerCategory { get; }
-            public int GameObjectsScanned { get; set; }
-            public int EstimatedCharacterCount { get; private set; }
-            public string TruncationNote { get; set; }
-
-            public List<string> MissingScripts { get; } = new List<string>();
-            public List<string> BrokenReferences { get; } = new List<string>();
-            public List<string> BrokenUnityEvents { get; } = new List<string>();
-            public List<string> MaterialAndShaderIssues { get; } = new List<string>();
-            public List<string> SceneHygieneIssues { get; } = new List<string>();
-
-            private int _missingScriptsChars;
-            private int _brokenReferencesChars;
-            private int _brokenUnityEventsChars;
-            private int _materialAndShaderIssuesChars;
-            private int _sceneHygieneIssuesChars;
-
-            public int MissingScriptsSuppressed { get; private set; }
-            public int BrokenReferencesSuppressed { get; private set; }
-            public int BrokenUnityEventsSuppressed { get; private set; }
-            public int MaterialAndShaderIssuesSuppressed { get; private set; }
-            public int SceneHygieneIssuesSuppressed { get; private set; }
-
-            public int TotalIssues =>
-                MissingScripts.Count +
-                BrokenReferences.Count +
-                BrokenUnityEvents.Count +
-                MaterialAndShaderIssues.Count +
-                SceneHygieneIssues.Count;
-
-            public int TotalSuppressed =>
-                MissingScriptsSuppressed +
-                BrokenReferencesSuppressed +
-                BrokenUnityEventsSuppressed +
-                MaterialAndShaderIssuesSuppressed +
-                SceneHygieneIssuesSuppressed;
-
-            public bool IsOutputBudgetReached => EstimatedCharacterCount >= DefaultMaxOutputCharacters;
-
-            public bool AreAllCategoriesCapped =>
-                MissingScripts.Count >= MaxIssuesPerCategory &&
-                BrokenReferences.Count >= MaxIssuesPerCategory &&
-                BrokenUnityEvents.Count >= MaxIssuesPerCategory &&
-                MaterialAndShaderIssues.Count >= MaxIssuesPerCategory &&
-                SceneHygieneIssues.Count >= MaxIssuesPerCategory;
-
-            public bool IsReportFull => IsOutputBudgetReached || AreAllCategoriesCapped;
-
-            public AuditReport(string scopeDescription, int maxIssuesPerCategory)
-            {
-                ScopeDescription = scopeDescription;
-                MaxIssuesPerCategory = Math.Max(1, maxIssuesPerCategory);
-            }
-
-            public bool TryAddMissingScript(string message)
-            {
-                int suppressed = MissingScriptsSuppressed;
-                bool added = TryAddToCategory(MissingScripts, ref _missingScriptsChars, ref suppressed, message);
-                MissingScriptsSuppressed = suppressed;
-                return added;
-            }
-
-            public bool TryAddBrokenReference(string message)
-            {
-                int suppressed = BrokenReferencesSuppressed;
-                bool added = TryAddToCategory(BrokenReferences, ref _brokenReferencesChars, ref suppressed, message);
-                BrokenReferencesSuppressed = suppressed;
-                return added;
-            }
-
-            public bool TryAddBrokenUnityEvent(string message)
-            {
-                int suppressed = BrokenUnityEventsSuppressed;
-                bool added = TryAddToCategory(BrokenUnityEvents, ref _brokenUnityEventsChars, ref suppressed, message);
-                BrokenUnityEventsSuppressed = suppressed;
-                return added;
-            }
-
-            public bool TryAddMaterialAndShaderIssue(string message)
-            {
-                int suppressed = MaterialAndShaderIssuesSuppressed;
-                bool added = TryAddToCategory(MaterialAndShaderIssues, ref _materialAndShaderIssuesChars, ref suppressed, message);
-                MaterialAndShaderIssuesSuppressed = suppressed;
-                return added;
-            }
-
-            public bool TryAddSceneHygieneIssue(string message)
-            {
-                int suppressed = SceneHygieneIssuesSuppressed;
-                bool added = TryAddToCategory(SceneHygieneIssues, ref _sceneHygieneIssuesChars, ref suppressed, message);
-                SceneHygieneIssuesSuppressed = suppressed;
-                return added;
-            }
-
-            private bool TryAddToCategory(List<string> list, ref int categoryChars, ref int suppressedCount, string message)
-            {
-                if (list.Count >= MaxIssuesPerCategory)
-                {
-                    suppressedCount++;
-                    return false;
-                }
-
-                if (IsOutputBudgetReached && list.Count > 0 && categoryChars >= PerCategoryReservedCharacters)
-                {
-                    suppressedCount++;
-                    return false;
-                }
-
-                if (list.Count > 0 && categoryChars >= DefaultMaxOutputCharacters)
-                {
-                    suppressedCount++;
-                    return false;
-                }
-
-                int itemCost = (message != null ? message.Length : 0) + 2;
-                list.Add(message);
-                categoryChars += itemCost;
-                EstimatedCharacterCount += itemCost;
-                return true;
-            }
         }
 
         #endregion

@@ -137,7 +137,9 @@ namespace UnityLeanMcp
             return "/" + string.Join("/", segments);
         }
 
-        private static Regex BuildWildcardRegex(string pattern)
+        internal static readonly TimeSpan DefaultWildcardRegexTimeout = TimeSpan.FromSeconds(1);
+
+        internal static Regex BuildWildcardRegex(string pattern, RegexOptions extraOptions = RegexOptions.None)
         {
             if (string.IsNullOrEmpty(pattern) || (!pattern.Contains('*') && !pattern.Contains('?')))
             {
@@ -145,16 +147,29 @@ namespace UnityLeanMcp
             }
 
             string regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
-            return new Regex(regexPattern, RegexOptions.IgnoreCase);
+            return new Regex(
+                regexPattern,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | extraOptions,
+                DefaultWildcardRegexTimeout);
         }
 
         private static bool MatchesWildcardOrSubstring(string candidate, string pattern, Regex wildcardRegex)
         {
             if (string.IsNullOrEmpty(pattern) || pattern == "*") return true;
             if (string.IsNullOrEmpty(candidate)) return false;
-            return wildcardRegex != null
-                ? wildcardRegex.IsMatch(candidate)
-                : candidate.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (wildcardRegex == null)
+            {
+                return candidate.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            try
+            {
+                return wildcardRegex.IsMatch(candidate);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return false;
+            }
         }
 
         private static void ClampHierarchyLimits(ref int maxDepth, ref int maxItems)
