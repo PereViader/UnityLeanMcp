@@ -256,6 +256,57 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
     }
 
     [Fact]
+    public void PrefabStage_WithMaxDepthZero_PrintsRootWithPrefixAndTruncatesChildren()
+    {
+        var rootGo = new GameObject("Hero");
+        var childGo = new GameObject("Shield");
+        rootGo.transform.AddChild(childGo.transform);
+
+        var stage = new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/Hero.prefab",
+            mode = PrefabStage.Mode.InIsolation,
+            prefabContentsRoot = rootGo,
+            scene = new Scene { isDirty = false },
+            autoSave = true
+        };
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+        string result = Inspect.PrefabStage(maxDepth: 0);
+
+        Assert.Contains("  Hero [active] [Transform]", result);
+        Assert.Contains("    ... (truncated: maximum depth reached)", result);
+        Assert.DoesNotContain("Shield", result);
+    }
+
+    [Fact]
+    public void PrefabStage_WithChildDepthLimit_PrintsThroughMaxDepthAndTruncatesDeeper()
+    {
+        var rootGo = new GameObject("Hero");
+        var childGo = new GameObject("Shield");
+        var grandchildGo = new GameObject("Emblem");
+        rootGo.transform.AddChild(childGo.transform);
+        childGo.transform.AddChild(grandchildGo.transform);
+
+        var stage = new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/Hero.prefab",
+            mode = PrefabStage.Mode.InIsolation,
+            prefabContentsRoot = rootGo,
+            scene = new Scene { isDirty = false },
+            autoSave = true
+        };
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => stage;
+
+        string result = Inspect.PrefabStage(maxDepth: 1);
+
+        Assert.Contains("  Hero [active] [Transform]", result);
+        Assert.Contains("    Shield [active] [Transform]", result);
+        Assert.Contains("      ... (truncated: maximum depth reached)", result);
+        Assert.DoesNotContain("Emblem", result);
+    }
+
+    [Fact]
     public void SceneState_WhenPrefabStageOpen_IncludesPrefabStageSectionAndScenes()
     {
         var rootGo = new GameObject("Hero");

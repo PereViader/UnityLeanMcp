@@ -280,11 +280,12 @@ namespace UnityLeanMcp
             ref bool itemLimitReached,
             HashSet<Transform> visited,
             StringBuilder sb,
-            bool includeUiDetails = false)
+            bool includeUiDetails = false,
+            string prefix = "")
         {
             if (current == null) return;
 
-            string indent = new string(' ', depth * 2);
+            string indent = prefix + new string(' ', depth * 2);
             if (depth > maxDepth)
             {
                 sb.AppendLine($"{indent}{DepthTruncationMarker}");
@@ -351,7 +352,7 @@ namespace UnityLeanMcp
                     try { child = current.GetChild(i); } catch { }
                     if (child != null)
                     {
-                        TraverseHierarchy(child, depth + 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails);
+                        TraverseHierarchy(child, depth + 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, includeUiDetails, prefix);
                     }
                 }
             }
@@ -767,7 +768,7 @@ namespace UnityLeanMcp
                 int itemCount = 0;
                 bool itemLimitReached = false;
                 var visited = new HashSet<Transform>(ReferenceIdentityComparer<Transform>.Instance);
-                TraverseHierarchy(rootGo.transform, 1, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb);
+                TraverseHierarchy(rootGo.transform, 0, maxDepth, maxItems, ref itemCount, ref itemLimitReached, visited, sb, prefix: "  ");
             }
             else
             {
