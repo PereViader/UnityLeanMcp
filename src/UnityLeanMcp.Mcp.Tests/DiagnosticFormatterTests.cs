@@ -919,6 +919,31 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.Equal(message, formatted);
     }
 
+    [Fact]
+    public void FormatEvalException_SyntheticLocationInMessageText_LeavesMessageUnchangedAndRewritesOnlyStackFrames()
+    {
+        string message = string.Join("\n", new[]
+        {
+            "System.InvalidOperationException: Failed near eval:12 and snippet:line 34",
+            "Details: check eval:line 56 or snippet:78 before retrying",
+            " ---> System.ArgumentException: Inner error at eval:90 and snippet:11",
+            "  at InnerService.DoWork () in Assets/Scripts/InnerService.cs:12",
+            "   --- End of inner exception stack trace ---",
+            "  at __UnityLeanMcpEvalRunner.Helper () [0x00001] in eval:4",
+            "  at __UnityLeanMcpEvalRunner.Run () [0x00005] in eval:line 3",
+            "  at UnityLeanMcp.EvalHandler.Execute (System.String code) [0x00050] in Packages/com.pereviader.unityleanmcp/Editor/EvalHandler.cs:120"
+        });
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Contains("System.InvalidOperationException: Failed near eval:12 and snippet:line 34", formatted);
+        Assert.Contains("Details: check eval:line 56 or snippet:78 before retrying", formatted);
+        Assert.Contains("---> System.ArgumentException: Inner error at eval:90 and snippet:11", formatted);
+        Assert.Contains("at __UnityLeanMcpEvalRunner.Helper () [0x00001] in snippet line 4", formatted);
+        Assert.Contains("at __UnityLeanMcpEvalRunner.Run () [0x00005] in snippet line 3", formatted);
+        Assert.DoesNotContain("UnityLeanMcp.EvalHandler", formatted);
+    }
+
     [Theory]
     [InlineData(@"  at GameService.Process () in C:\Projects\Game\Assets\Scripts\GameService.cs:line 42")]
     [InlineData(@"  at GameService.Process () in /Users/dev/Game/Assets/Scripts/GameService.cs:42")]

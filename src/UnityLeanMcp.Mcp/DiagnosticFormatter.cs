@@ -208,10 +208,11 @@ public class DiagnosticFormatter : IDiagnosticFormatter
 
             if (segmentEnd >= segmentStart)
             {
-                int trimmedEnd = FindTrimmedEvalEndIndex(lines, segmentStart, segmentEnd, requireFramePrefix: true);
+                int trimmedEnd = FindTrimmedEvalEndIndex(lines, segmentStart, segmentEnd);
                 for (int i = segmentStart; i <= trimmedEnd; i++)
                 {
-                    result.Add(FormatSyntheticEvalLocation(lines[i]));
+                    string line = lines[i];
+                    result.Add(IsStackFrameLine(line.TrimStart()) ? FormatSyntheticEvalLocation(line) : line);
                 }
             }
 
@@ -274,14 +275,13 @@ public class DiagnosticFormatter : IDiagnosticFormatter
     private static int FindTrimmedEvalEndIndex(
         string[] lines,
         int startIndex,
-        int endIndexInclusive,
-        bool requireFramePrefix)
+        int endIndexInclusive)
     {
         int markerIndex = -1;
         for (int i = startIndex; i <= endIndexInclusive; i++)
         {
             string trimmed = lines[i].TrimStart();
-            if ((!requireFramePrefix || IsStackFrameLine(trimmed)) && IsEvalHarnessMarker(trimmed))
+            if (IsStackFrameLine(trimmed) && IsEvalHarnessMarker(trimmed))
             {
                 markerIndex = i;
                 break;
@@ -293,7 +293,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         {
             string trimmed = lines[endIndex].TrimStart();
             bool isPlumbing = IsAsyncLocationBoundary(trimmed) ||
-                              ((!requireFramePrefix || IsStackFrameLine(trimmed)) && IsEvalDispatchPlumbing(trimmed));
+                              (IsStackFrameLine(trimmed) && IsEvalDispatchPlumbing(trimmed));
             if (!isPlumbing)
             {
                 break;
