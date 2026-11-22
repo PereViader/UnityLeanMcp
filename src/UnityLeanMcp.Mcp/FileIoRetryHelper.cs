@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace UnityLeanMcp.Mcp;
 
@@ -30,6 +31,37 @@ internal static class FileIoRetryHelper
         return RetryIo(() => reader(path, fromOffset), maxRetries, delayMs);
     }
 
+    internal static Task<string> ReadFileWithRetryAsync(
+        string path,
+        int maxRetries = 5,
+        int delayMs = 100,
+        long fromOffset = 0,
+        CancellationToken cancellationToken = default)
+    {
+        return ReadFileWithRetryAsync(
+            path,
+            maxRetries,
+            delayMs,
+            fromOffset,
+            ReadFileFromOffsetAsync,
+            cancellationToken);
+    }
+
+    internal static Task<string> ReadFileWithRetryAsync(
+        string path,
+        int maxRetries,
+        int delayMs,
+        long fromOffset,
+        Func<string, long, CancellationToken, Task<string>> reader,
+        CancellationToken cancellationToken = default)
+    {
+        return RetryIoAsync(
+            ct => reader(path, fromOffset, ct),
+            maxRetries,
+            delayMs,
+            cancellationToken);
+    }
+
     internal static (string Text, long NextOffset) ReadFileDeltaWithRetry(
         string path,
         long fromOffset = 0,
@@ -39,55 +71,167 @@ internal static class FileIoRetryHelper
         return RetryIo(() => ReadFileDeltaFromOffset(path, fromOffset), maxRetries, delayMs);
     }
 
+    internal static Task<(string Text, long NextOffset)> ReadFileDeltaWithRetryAsync(
+        string path,
+        long fromOffset = 0,
+        int maxRetries = 5,
+        int delayMs = 100,
+        CancellationToken cancellationToken = default)
+    {
+        return ReadFileDeltaWithRetryAsync(
+            path,
+            fromOffset,
+            maxRetries,
+            delayMs,
+            ReadFileDeltaFromOffsetAsync,
+            cancellationToken);
+    }
+
+    internal static Task<(string Text, long NextOffset)> ReadFileDeltaWithRetryAsync(
+        string path,
+        long fromOffset,
+        int maxRetries,
+        int delayMs,
+        Func<string, long, CancellationToken, Task<(string Text, long NextOffset)>> reader,
+        CancellationToken cancellationToken = default)
+    {
+        return RetryIoAsync(
+            ct => reader(path, fromOffset, ct),
+            maxRetries,
+            delayMs,
+            cancellationToken);
+    }
+
     private static T RetryIo<T>(Func<T> action, int maxRetries, int delayMs)
+    {
+        ValueTask<T> task = RetryIoCore(
+            _ => new ValueTask<T>(action()),
+            _ =>
+            {
+                Thread.Sleep(delayMs);
+                return ValueTask.CompletedTask;
+            },
+            maxRetries,
+            CancellationToken.None);
+        return task.GetAwaiter().GetResult();
+    }
+
+    private static Task<T> RetryIoAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        int maxRetries,
+        int delayMs,
+        CancellationToken cancellationToken)
+    {
+        return RetryIoCore(
+            ct => new ValueTask<T>(action(ct)),
+            ct => new ValueTask(Task.Delay(delayMs, ct)),
+            maxRetries,
+            cancellationToken).AsTask();
+    }
+
+    private static async ValueTask<T> RetryIoCore<T>(
+        Func<CancellationToken, ValueTask<T>> action,
+        Func<CancellationToken, ValueTask> delay,
+        int maxRetries,
+        CancellationToken cancellationToken)
     {
         for (int i = 0; i < maxRetries; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return action();
+                return await action(cancellationToken).ConfigureAwait(false);
             }
             catch (IOException) when (i < maxRetries - 1)
             {
-                Thread.Sleep(delayMs);
+                await delay(cancellationToken).ConfigureAwait(false);
             }
             catch (UnauthorizedAccessException) when (i < maxRetries - 1)
             {
-                Thread.Sleep(delayMs);
+                await delay(cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return action();
+        cancellationToken.ThrowIfCancellationRequested();
+        return await action(cancellationToken).ConfigureAwait(false);
     }
 
     internal static string ReadFileFromOffset(string path, long fromOffset = 0)
     {
-        using var fs = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        if (fromOffset > 0)
-        {
-            fs.Seek(fs.Length < fromOffset ? 0 : fromOffset, SeekOrigin.Begin);
-        }
+        using var fs = OpenReadStream(path, useAsync: false);
+        SeekFromOffset(fs, fromOffset);
 
         using var reader = new StreamReader(fs, Encoding.UTF8);
         return reader.ReadToEnd();
     }
 
+    internal static async Task<string> ReadFileFromOffsetAsync(
+        string path,
+        long fromOffset = 0,
+        CancellationToken cancellationToken = default)
+    {
+        using var fs = OpenReadStream(path, useAsync: true);
+        SeekFromOffset(fs, fromOffset);
+
+        using var reader = new StreamReader(fs, Encoding.UTF8);
+        return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     internal static (string Text, long NextOffset) ReadFileDeltaFromOffset(string path, long fromOffset = 0)
     {
-        using var fs = new FileStream(
+        using var fs = OpenReadStream(path, useAsync: false);
+        if (!TryPrepareDeltaRead(fs, fromOffset, out long effectiveOffset))
+        {
+            return (string.Empty, effectiveOffset);
+        }
+
+        using var reader = new StreamReader(fs, Encoding.UTF8);
+        string text = reader.ReadToEnd();
+        return (text, fs.Position);
+    }
+
+    internal static async Task<(string Text, long NextOffset)> ReadFileDeltaFromOffsetAsync(
+        string path,
+        long fromOffset = 0,
+        CancellationToken cancellationToken = default)
+    {
+        using var fs = OpenReadStream(path, useAsync: true);
+        if (!TryPrepareDeltaRead(fs, fromOffset, out long effectiveOffset))
+        {
+            return (string.Empty, effectiveOffset);
+        }
+
+        using var reader = new StreamReader(fs, Encoding.UTF8);
+        string text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        return (text, fs.Position);
+    }
+
+    private static FileStream OpenReadStream(string path, bool useAsync)
+    {
+        return new FileStream(
             path,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            useAsync: useAsync);
+    }
+
+    private static void SeekFromOffset(FileStream fs, long fromOffset)
+    {
+        if (fromOffset > 0)
+        {
+            fs.Seek(fs.Length < fromOffset ? 0 : fromOffset, SeekOrigin.Begin);
+        }
+    }
+
+    private static bool TryPrepareDeltaRead(FileStream fs, long fromOffset, out long effectiveOffset)
+    {
         long length = fs.Length;
-        long effectiveOffset = fromOffset > 0 && length >= fromOffset ? fromOffset : 0;
+        effectiveOffset = fromOffset > 0 && length >= fromOffset ? fromOffset : 0;
         if (effectiveOffset == length)
         {
-            return (string.Empty, effectiveOffset);
+            return false;
         }
 
         if (effectiveOffset > 0)
@@ -95,9 +239,7 @@ internal static class FileIoRetryHelper
             fs.Seek(effectiveOffset, SeekOrigin.Begin);
         }
 
-        using var reader = new StreamReader(fs, Encoding.UTF8);
-        string text = reader.ReadToEnd();
-        return (text, fs.Position);
+        return true;
     }
 
     internal static void WriteTextAtomically(string path, string content)

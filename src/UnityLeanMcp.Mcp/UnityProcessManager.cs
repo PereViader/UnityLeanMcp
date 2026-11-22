@@ -803,7 +803,7 @@ public class UnityProcessManager : IUnityProcessManager
             {
                 if (startedProcess.HasExited)
                 {
-                    ThrowIfNewStartupCompilationErrors(initialLogOffset);
+                    await ThrowIfNewStartupCompilationErrorsAsync(initialLogOffset, cancellationToken);
 
                     string logSnippet = GetLogSnippet(initialLogOffset);
                     throw new InvalidOperationException(
@@ -828,7 +828,7 @@ public class UnityProcessManager : IUnityProcessManager
             if (startedProcess != null)
             {
                 long previousOffset = startupLogOffset;
-                (startupLogOffset, string delta, bool readSucceeded) = TryReadStartupLogDelta(startupLogOffset);
+                (startupLogOffset, string delta, bool readSucceeded) = await TryReadStartupLogDeltaAsync(startupLogOffset, cancellationToken);
                 if (startupLogOffset < previousOffset)
                 {
                     lastMilestone = null;
@@ -844,7 +844,7 @@ public class UnityProcessManager : IUnityProcessManager
 
                     if (_logScanner.HasCompilationErrors(startupScanText))
                     {
-                        ThrowStartupCompilationErrorsFromOffset(initialLogOffset, startupScanText);
+                        await ThrowStartupCompilationErrorsFromOffsetAsync(initialLogOffset, startupScanText, cancellationToken);
                     }
                 }
             }
@@ -892,7 +892,9 @@ public class UnityProcessManager : IUnityProcessManager
         }
     }
 
-    private (long NextOffset, string Delta, bool ReadSucceeded) TryReadStartupLogDelta(long currentOffset)
+    private async Task<(long NextOffset, string Delta, bool ReadSucceeded)> TryReadStartupLogDeltaAsync(
+        long currentOffset,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(_pathResolver.LogFile))
         {
@@ -903,12 +905,16 @@ public class UnityProcessManager : IUnityProcessManager
         {
             if (StartupLogReader != null)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 string text = StartupLogReader(_pathResolver.LogFile, currentOffset);
                 long nextOffset = currentOffset + System.Text.Encoding.UTF8.GetByteCount(text);
                 return (nextOffset, text, true);
             }
 
-            (string delta, long nextOffsetFromFile) = FileIoRetryHelper.ReadFileDeltaWithRetry(_pathResolver.LogFile, currentOffset);
+            (string delta, long nextOffsetFromFile) = await FileIoRetryHelper.ReadFileDeltaWithRetryAsync(
+                _pathResolver.LogFile,
+                currentOffset,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             return (nextOffsetFromFile, delta, true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -935,17 +941,29 @@ public class UnityProcessManager : IUnityProcessManager
             : text[(lastNewline + 1)..];
     }
 
-    private string ReadStartupLogFromOffset(long offset) =>
-        StartupLogReader != null
-            ? StartupLogReader(_pathResolver.LogFile, offset)
-            : FileIoRetryHelper.ReadFileWithRetry(_pathResolver.LogFile, fromOffset: offset);
+    private Task<string> ReadStartupLogFromOffsetAsync(long offset, CancellationToken cancellationToken)
+    {
+        if (StartupLogReader != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(StartupLogReader(_pathResolver.LogFile, offset));
+        }
 
-    private void ThrowStartupCompilationErrorsFromOffset(long initialLogOffset, string fallbackLogText)
+        return FileIoRetryHelper.ReadFileWithRetryAsync(
+            _pathResolver.LogFile,
+            fromOffset: offset,
+            cancellationToken: cancellationToken);
+    }
+
+    private async Task ThrowStartupCompilationErrorsFromOffsetAsync(
+        long initialLogOffset,
+        string fallbackLogText,
+        CancellationToken cancellationToken)
     {
         string logText;
         try
         {
-            logText = ReadStartupLogFromOffset(initialLogOffset);
+            logText = await ReadStartupLogFromOffsetAsync(initialLogOffset, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -966,7 +984,9 @@ public class UnityProcessManager : IUnityProcessManager
         PublishAndThrowStartupCompilationErrors(errorLines);
     }
 
-    private void ThrowIfNewStartupCompilationErrors(long initialLogOffset)
+    private async Task ThrowIfNewStartupCompilationErrorsAsync(
+        long initialLogOffset,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(_pathResolver.LogFile))
         {
@@ -976,7 +996,7 @@ public class UnityProcessManager : IUnityProcessManager
         string logText;
         try
         {
-            logText = ReadStartupLogFromOffset(initialLogOffset);
+            logText = await ReadStartupLogFromOffsetAsync(initialLogOffset, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

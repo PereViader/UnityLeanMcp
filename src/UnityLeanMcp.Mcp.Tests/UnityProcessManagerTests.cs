@@ -241,6 +241,201 @@ public class UnityProcessManagerTests
     }
 
     [Fact]
+    public async Task ReadFileWithRetryAsync_WithFromOffsetAndTruncation_ReadsExpectedContent()
+    {
+        string tempFile = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(tempFile, "Historical line 1\nHistorical line 2\n", Encoding.UTF8);
+            long offset = new FileInfo(tempFile).Length;
+
+            Assert.Equal(string.Empty, await FileIoRetryHelper.ReadFileWithRetryAsync(tempFile, fromOffset: offset));
+
+            await File.AppendAllTextAsync(tempFile, "New line 3\n", Encoding.UTF8);
+            Assert.Equal("New line 3\n", await FileIoRetryHelper.ReadFileWithRetryAsync(tempFile, fromOffset: offset));
+
+            await File.WriteAllTextAsync(tempFile, "Truncated\n", Encoding.UTF8);
+            Assert.Equal("Truncated\n", await FileIoRetryHelper.ReadFileWithRetryAsync(tempFile, fromOffset: offset));
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ReadFileWithRetryAsync_WhenTransientContention_RetriesAndSucceeds()
+    {
+        int attempts = 0;
+        string result = await FileIoRetryHelper.ReadFileWithRetryAsync(
+            "dummy_path.txt",
+            maxRetries: 5,
+            delayMs: 1,
+            fromOffset: 0,
+            reader: (_, _, _) =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new UnauthorizedAccessException("Attempt 1: Access denied");
+                }
+                if (attempts == 2)
+                {
+                    throw new IOException("Attempt 2: Sharing violation");
+                }
+                return Task.FromResult("Recovered async content");
+            });
+
+        Assert.Equal("Recovered async content", result);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task ReadFileWithRetryAsync_WhenExceedsMaxRetries_ThrowsException()
+    {
+        int attempts = 0;
+        var ex = await Assert.ThrowsAsync<IOException>(() =>
+            FileIoRetryHelper.ReadFileWithRetryAsync(
+                "dummy_path.txt",
+                maxRetries: 3,
+                delayMs: 1,
+                fromOffset: 0,
+                reader: (_, _, _) =>
+                {
+                    attempts++;
+                    throw new IOException("Persistent sharing violation");
+                }));
+
+        Assert.Contains("Persistent sharing violation", ex.Message);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task ReadFileWithRetryAsync_WhenCancelledBeforeFirstAttempt_ThrowsWithoutInvokingReader()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        int attempts = 0;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            FileIoRetryHelper.ReadFileWithRetryAsync(
+                "dummy_path.txt",
+                maxRetries: 3,
+                delayMs: 30_000,
+                fromOffset: 0,
+                reader: (_, _, _) =>
+                {
+                    attempts++;
+                    return Task.FromResult("Should not run");
+                },
+                cancellationToken: cts.Token));
+
+        Assert.Equal(0, attempts);
+    }
+
+    [Fact]
+    public async Task ReadFileWithRetryAsync_WhenCancelledDuringRetryDelay_CancelsPromptly()
+    {
+        using var cts = new CancellationTokenSource();
+        int attempts = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            FileIoRetryHelper.ReadFileWithRetryAsync(
+                "dummy_path.txt",
+                maxRetries: 5,
+                delayMs: 30_000,
+                fromOffset: 0,
+                reader: (_, _, _) =>
+                {
+                    attempts++;
+                    cts.Cancel();
+                    throw new IOException("Simulated sharing violation");
+                },
+                cancellationToken: cts.Token));
+
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public async Task ReadFileDeltaWithRetryAsync_ReadsDeltaAndHandlesTruncation()
+    {
+        string tempFile = Path.GetTempFileName();
+        var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        try
+        {
+            await File.WriteAllTextAsync(tempFile, "Line 1\n", utf8NoBom);
+            (string delta1, long offset1) = await FileIoRetryHelper.ReadFileDeltaWithRetryAsync(tempFile, fromOffset: 0);
+            Assert.Equal("Line 1\n", delta1);
+            Assert.Equal(utf8NoBom.GetByteCount("Line 1\n"), offset1);
+
+            (string emptyDelta, long offsetSame) = await FileIoRetryHelper.ReadFileDeltaWithRetryAsync(tempFile, fromOffset: offset1);
+            Assert.Equal(string.Empty, emptyDelta);
+            Assert.Equal(offset1, offsetSame);
+
+            await File.AppendAllTextAsync(tempFile, "Line 2\n", utf8NoBom);
+            (string delta2, long offset2) = await FileIoRetryHelper.ReadFileDeltaWithRetryAsync(tempFile, fromOffset: offset1);
+            Assert.Equal("Line 2\n", delta2);
+            Assert.Equal(offset1 + utf8NoBom.GetByteCount("Line 2\n"), offset2);
+
+            await File.WriteAllTextAsync(tempFile, "New\n", utf8NoBom);
+            (string deltaTruncated, long offsetTruncated) = await FileIoRetryHelper.ReadFileDeltaWithRetryAsync(tempFile, fromOffset: offset2);
+            Assert.Equal("New\n", deltaTruncated);
+            Assert.Equal(utf8NoBom.GetByteCount("New\n"), offsetTruncated);
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ReadFileDeltaWithRetryAsync_WhenTransientContention_RetriesAndSucceeds()
+    {
+        int attempts = 0;
+        (string text, long nextOffset) = await FileIoRetryHelper.ReadFileDeltaWithRetryAsync(
+            "dummy_path.txt",
+            fromOffset: 10,
+            maxRetries: 4,
+            delayMs: 1,
+            reader: (_, offset, _) =>
+            {
+                attempts++;
+                if (attempts < 3)
+                {
+                    throw new IOException("Simulated lock");
+                }
+                return Task.FromResult(("Delta", offset + 5));
+            });
+
+        Assert.Equal("Delta", text);
+        Assert.Equal(15, nextOffset);
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task ReadFileDeltaWithRetryAsync_WhenCancelledDuringRetryDelay_CancelsPromptly()
+    {
+        using var cts = new CancellationTokenSource();
+        int attempts = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            FileIoRetryHelper.ReadFileDeltaWithRetryAsync(
+                "dummy_path.txt",
+                fromOffset: 0,
+                maxRetries: 5,
+                delayMs: 30_000,
+                reader: (_, _, _) =>
+                {
+                    attempts++;
+                    cts.Cancel();
+                    throw new UnauthorizedAccessException("Simulated access denied");
+                },
+                cancellationToken: cts.Token));
+
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
     public async Task EnsureUnityRunningAsync_WhenProjectPortRespondsPong_DoesNotRequireProcessDiscoveryOrStartUnity()
     {
         string projectRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_live_socket_" + Guid.NewGuid().ToString("N"));
@@ -2997,6 +3192,77 @@ public class UnityProcessManagerTests
             cts.Cancel();
             listener.Stop();
             try { await serverTask; } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenCancelledDuringStartupLogContention_ThrowsOperationCanceledException()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_log_cancel_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        using var proc = StartDummyProcess();
+        string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
+        await File.WriteAllTextAsync(logFile, "Initial startup line\n");
+
+        using var lockStream = new FileStream(logFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(50);
+
+        try
+        {
+            var logger = new RecordingLogger<UnityProcessManager>();
+            var transport = new ConfigurableSocketTransport(() => false);
+            var resolver = new UnityPathResolver(tempDir);
+            var procManager = new UnityProcessManager(resolver, logger, socketTransport: transport);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                procManager.WaitForSocketReadinessAsync(proc, cts.Token));
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            lockStream.Dispose();
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenStartupLogReaderThrowsOperationCanceledException_PropagatesCancellation()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_reader_cancel_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        using var proc = StartDummyProcess();
+        using var cts = new CancellationTokenSource();
+
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_background_log.txt"), "Initial\n");
+
+            var logger = new RecordingLogger<UnityProcessManager>();
+            var transport = new ConfigurableSocketTransport(() => false);
+            var resolver = new UnityPathResolver(tempDir);
+            var procManager = new UnityProcessManager(resolver, logger, socketTransport: transport)
+            {
+                StartupLogReader = (_, _) =>
+                {
+                    cts.Cancel();
+                    throw new OperationCanceledException(cts.Token);
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                procManager.WaitForSocketReadinessAsync(proc, cts.Token));
+
+            Assert.DoesNotContain(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
             try { Directory.Delete(tempDir, true); } catch { }
         }
     }
