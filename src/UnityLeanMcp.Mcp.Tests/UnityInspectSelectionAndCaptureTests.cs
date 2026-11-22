@@ -1239,7 +1239,15 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         Assert.Equal("(No GameObjects found matching 'PlayerWeaponSlot' in Prefab Stage or loaded scenes)", activeOnly);
     }
 
-    private sealed class TestPlayerController : MonoBehaviour, ITestDamageable
+    private class TestPlayerController : MonoBehaviour, ITestDamageable
+    {
+    }
+
+    private sealed class TestBossController : TestPlayerController
+    {
+    }
+
+    private sealed class TestEnemyController : MonoBehaviour, ITestDamageable
     {
     }
 
@@ -1370,5 +1378,93 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         string truncated = Inspect.FindByComponent("*Collider*", includeInactive: true, maxItems: 1);
         Assert.Contains("GameObjects with component '*Collider*' (1):", truncated);
         Assert.Contains("... (truncated: maximum item count reached)", truncated);
+    }
+
+    [Fact]
+    public void MatchesComponentType_MemoizesMatchAndNonMatchResultsPerCacheDictionary()
+    {
+        var memo = new Dictionary<Type, bool>();
+
+        Assert.False(Inspect.MatchesComponentType(null, "Collider", null, memo));
+        Assert.Empty(memo);
+
+        Assert.True(Inspect.MatchesComponentType(typeof(TestBossController), "ITestDamageable", null, memo));
+        Assert.True(memo.TryGetValue(typeof(TestBossController), out bool bossCached) && bossCached);
+
+        Assert.False(Inspect.MatchesComponentType(typeof(Collider), "ITestDamageable", null, memo));
+        Assert.True(memo.TryGetValue(typeof(Collider), out bool colliderCached) && !colliderCached);
+
+        // Pre-populated cache entries must be honored directly without re-walking base types/interfaces
+        var overrideMemo = new Dictionary<Type, bool>
+        {
+            [typeof(TestBossController)] = false,
+            [typeof(Collider)] = true
+        };
+        Assert.False(Inspect.MatchesComponentType(typeof(TestBossController), "ITestDamageable", null, overrideMemo));
+        Assert.True(Inspect.MatchesComponentType(typeof(Collider), "ITestDamageable", null, overrideMemo));
+    }
+
+    [Fact]
+    public void FindByComponent_SharedComponentTypesBaseTypesAndInterfacesAcrossMultipleObjects_IsolatesCachePerCall()
+    {
+        var player1 = new GameObject("PlayerOne");
+        player1.AddComponent<TestPlayerController>();
+        player1.AddComponent<Collider>();
+
+        var player2 = new GameObject("PlayerTwo");
+        player2.AddComponent<TestPlayerController>();
+        player2.AddComponent<Collider>();
+
+        var boss = new GameObject("Boss");
+        boss.AddComponent<TestBossController>();
+
+        var enemy = new GameObject("Enemy");
+        enemy.AddComponent<TestEnemyController>();
+
+        SceneManager.Scenes.Add(new Scene
+        {
+            name = "ArenaScene",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { player1, player2, boss, enemy }
+        });
+
+        var prefabBoss = new GameObject("PrefabBoss");
+        prefabBoss.AddComponent<TestBossController>();
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/Boss.prefab",
+            prefabContentsRoot = prefabBoss
+        };
+
+        string interfaceMatches = Inspect.FindByComponent("ITestDamageable");
+        Assert.Contains("GameObjects with component 'ITestDamageable' (5):", interfaceMatches);
+        Assert.Contains("PrefabBoss [TestBossController]", interfaceMatches);
+        Assert.Contains("PlayerOne [TestPlayerController]", interfaceMatches);
+        Assert.Contains("PlayerTwo [TestPlayerController]", interfaceMatches);
+        Assert.Contains("Boss [TestBossController]", interfaceMatches);
+        Assert.Contains("Enemy [TestEnemyController]", interfaceMatches);
+
+        // Subsequent call with a narrower base type must not reuse previous call's memoized results
+        string baseMatches = Inspect.FindByComponent("TestPlayerController");
+        Assert.Contains("GameObjects with component 'TestPlayerController' (4):", baseMatches);
+        Assert.Contains("PrefabBoss [TestBossController]", baseMatches);
+        Assert.Contains("PlayerOne [TestPlayerController]", baseMatches);
+        Assert.Contains("PlayerTwo [TestPlayerController]", baseMatches);
+        Assert.Contains("Boss [TestBossController]", baseMatches);
+        Assert.DoesNotContain("Enemy", baseMatches);
+
+        string derivedOnlyMatches = Inspect.FindByComponent("TestBossController");
+        Assert.Contains("GameObjects with component 'TestBossController' (2):", derivedOnlyMatches);
+        Assert.Contains("PrefabBoss [TestBossController]", derivedOnlyMatches);
+        Assert.Contains("Boss [TestBossController]", derivedOnlyMatches);
+        Assert.DoesNotContain("PlayerOne", derivedOnlyMatches);
+
+        string colliderMatches = Inspect.FindByComponent("Collider");
+        Assert.Contains("GameObjects with component 'Collider' (2):", colliderMatches);
+        Assert.Contains("PlayerOne [Collider]", colliderMatches);
+        Assert.Contains("PlayerTwo [Collider]", colliderMatches);
+
+        string noMatches = Inspect.FindByComponent("NonExistentComponent");
+        Assert.Contains("(No GameObjects with component 'NonExistentComponent' found", noMatches);
     }
 }

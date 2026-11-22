@@ -612,6 +612,7 @@ namespace UnityLeanMcp
             Regex wildcardRegex = BuildWildcardRegex(query);
             var matches = new List<string>();
             bool itemLimitReached = false;
+            var typeMatchCache = new Dictionary<Type, bool>();
 
             TraverseActiveHierarchiesBfs(stage, sceneCount, (containerName, isPrefabStage, current, go) =>
             {
@@ -630,7 +631,7 @@ namespace UnityLeanMcp
                     if (ReferenceEquals(comp, null) || comp == null) continue;
 
                     Type compType = comp.GetType();
-                    if (MatchesComponentType(compType, query, wildcardRegex))
+                    if (MatchesComponentType(compType, query, wildcardRegex, typeMatchCache))
                     {
                         matchedTypeNames ??= new List<string>();
                         matchedTypeNames.Add(compType.Name);
@@ -670,10 +671,18 @@ namespace UnityLeanMcp
             return LimitOutput(sb.ToString().TrimEnd());
         }
 
-        private static bool MatchesComponentType(Type compType, string query, Regex wildcardRegex)
+        internal static bool MatchesComponentType(Type compType, string query, Regex wildcardRegex, Dictionary<Type, bool> memo = null)
         {
             if (compType == null) return false;
+            if (memo != null && memo.TryGetValue(compType, out bool cached)) return cached;
 
+            bool matched = MatchesComponentTypeUncached(compType, query, wildcardRegex);
+            if (memo != null) memo[compType] = matched;
+            return matched;
+        }
+
+        private static bool MatchesComponentTypeUncached(Type compType, string query, Regex wildcardRegex)
+        {
             for (Type current = compType; current != null && current != typeof(UnityEngine.Object) && current != typeof(object); current = current.BaseType)
             {
                 if (MatchesTypeName(current, query, wildcardRegex)) return true;
