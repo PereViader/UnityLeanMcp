@@ -701,19 +701,27 @@ public class UnityProcessManager : IUnityProcessManager
             }
         }
 
-        string projectRootArg = _pathResolver.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string logFileArg = _pathResolver.LogFile.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string projectRootArg = ProjectCommandEnvelope.TrimTrailingSeparators(_pathResolver.ProjectRoot);
+        string logFileArg = ProjectCommandEnvelope.TrimTrailingSeparators(_pathResolver.LogFile);
 
         var psi = new ProcessStartInfo
         {
             FileName = unityExe,
-            Arguments = isBatchmode
-                ? $"-batchmode -nographics -projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\""
-                : $"-projectPath \"{projectRootArg}\" -logFile \"{logFileArg}\"",
             WorkingDirectory = projectRootArg,
             UseShellExecute = false,
             CreateNoWindow = isBatchmode
         };
+
+        if (isBatchmode)
+        {
+            psi.ArgumentList.Add("-batchmode");
+            psi.ArgumentList.Add("-nographics");
+        }
+
+        psi.ArgumentList.Add("-projectPath");
+        psi.ArgumentList.Add(projectRootArg);
+        psi.ArgumentList.Add("-logFile");
+        psi.ArgumentList.Add(logFileArg);
 
         Process proc;
         try

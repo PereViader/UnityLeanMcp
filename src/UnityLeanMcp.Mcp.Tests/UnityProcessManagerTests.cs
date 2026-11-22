@@ -344,10 +344,10 @@ public class UnityProcessManagerTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
 
             Assert.NotNull(capturedPsi);
-            Assert.DoesNotContain("-batchmode", capturedPsi!.Arguments, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("-nographics", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("-projectPath", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("-logFile", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.True(string.IsNullOrEmpty(capturedPsi!.Arguments));
+            Assert.Equal(
+                ["-projectPath", resolver.ProjectRoot, "-logFile", resolver.LogFile],
+                capturedPsi.ArgumentList);
             Assert.False(capturedPsi.CreateNoWindow);
 
             var store = new FileUnityProcessIdentityStore(resolver.PidFile);
@@ -399,10 +399,10 @@ public class UnityProcessManagerTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
 
             Assert.NotNull(capturedPsi);
-            Assert.Contains("-batchmode", capturedPsi!.Arguments, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("-nographics", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("-projectPath", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("-logFile", capturedPsi.Arguments, StringComparison.OrdinalIgnoreCase);
+            Assert.True(string.IsNullOrEmpty(capturedPsi!.Arguments));
+            Assert.Equal(
+                ["-batchmode", "-nographics", "-projectPath", resolver.ProjectRoot, "-logFile", resolver.LogFile],
+                capturedPsi.ArgumentList);
             Assert.True(capturedPsi.CreateNoWindow);
 
             var store = new FileUnityProcessIdentityStore(resolver.PidFile);
@@ -420,6 +420,133 @@ public class UnityProcessManagerTests
             catch { }
             try { Directory.Delete(projectRoot, true); } catch { }
         }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_PreservesFilesystemRootInWorkingDirectoryAndArgumentList()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "unity_pm_test_fsroot_" + Guid.NewGuid().ToString("N"));
+        string tempDir = Path.Combine(tempRoot, "Temp");
+        Directory.CreateDirectory(tempDir);
+        string rootProjectPath = OperatingSystem.IsWindows() ? @"C:\" : "/";
+        int dummyPid = 0;
+
+        try
+        {
+            var resolver = new CustomRootPathResolver(rootProjectPath, tempDir);
+            ProcessStartInfo? capturedPsi = null;
+            var dummyProc = StartDummyProcess();
+            dummyPid = dummyProc.Id;
+            using var cts = new CancellationTokenSource();
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: new DiscoverySocketTransport(isReady: false),
+                executableLocator: new FixedExecutableLocator())
+            {
+                LaunchMode = "GUI",
+                ProcessStarter = psi =>
+                {
+                    capturedPsi = psi;
+                    cts.Cancel();
+                    return dummyProc;
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
+
+            Assert.NotNull(capturedPsi);
+            Assert.True(string.IsNullOrEmpty(capturedPsi!.Arguments));
+            Assert.Equal(rootProjectPath, capturedPsi.WorkingDirectory);
+            Assert.Equal(
+                ["-projectPath", rootProjectPath, "-logFile", resolver.LogFile],
+                capturedPsi.ArgumentList);
+        }
+        finally
+        {
+            try
+            {
+                using var p = Process.GetProcessById(dummyPid);
+                if (!p.HasExited) p.Kill(true);
+            }
+            catch { }
+            try { Directory.Delete(tempRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EnsureUnityRunningAsync_UsesArgumentListForSpecialCharactersAndTrimsNonRootTrailingSeparators()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "unity pm test spaces_" + Guid.NewGuid().ToString("N"));
+        string tempDir = Path.Combine(tempRoot, "Temp");
+        Directory.CreateDirectory(tempDir);
+        string rawProjectRoot = OperatingSystem.IsWindows()
+            ? @"C:\My ""Project""\Sub\"
+            : "/tmp/my \"project\"/sub/";
+        string expectedProjectRoot = rawProjectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        int dummyPid = 0;
+
+        try
+        {
+            var resolver = new CustomRootPathResolver(rawProjectRoot, tempDir);
+            ProcessStartInfo? capturedPsi = null;
+            var dummyProc = StartDummyProcess();
+            dummyPid = dummyProc.Id;
+            using var cts = new CancellationTokenSource();
+            var manager = new UnityProcessManager(
+                resolver,
+                NullLogger<UnityProcessManager>.Instance,
+                socketTransport: new DiscoverySocketTransport(isReady: false),
+                executableLocator: new FixedExecutableLocator())
+            {
+                LaunchMode = "Batchmode",
+                ProcessStarter = psi =>
+                {
+                    capturedPsi = psi;
+                    cts.Cancel();
+                    return dummyProc;
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.EnsureUnityRunningAsync(cancellationToken: cts.Token));
+
+            Assert.NotNull(capturedPsi);
+            Assert.True(string.IsNullOrEmpty(capturedPsi!.Arguments));
+            Assert.Equal(expectedProjectRoot, capturedPsi.WorkingDirectory);
+            Assert.Equal(
+                ["-batchmode", "-nographics", "-projectPath", expectedProjectRoot, "-logFile", resolver.LogFile],
+                capturedPsi.ArgumentList);
+        }
+        finally
+        {
+            try
+            {
+                using var p = Process.GetProcessById(dummyPid);
+                if (!p.HasExited) p.Kill(true);
+            }
+            catch { }
+            try { Directory.Delete(tempRoot, true); } catch { }
+        }
+    }
+
+    private sealed class CustomRootPathResolver : IUnityPathResolver
+    {
+        public CustomRootPathResolver(string projectRoot, string tempDir)
+        {
+            ProjectRoot = projectRoot;
+            TempDir = tempDir;
+        }
+
+        public string ProjectRoot { get; }
+        public string TempDir { get; }
+        public string CompilationErrorsFile => Path.Combine(TempDir, "unity_compilation_errors.txt");
+        public string PortFile => Path.Combine(TempDir, "unity_lean_mcp_port.txt");
+        public string LogFile => Path.Combine(TempDir, "unity_background_log.txt");
+        public string PidFile => Path.Combine(TempDir, "unity_lean_mcp_process.pid");
+        public string StartupLockFile => Path.Combine(TempDir, "unity_lean_mcp_startup.lock");
+        public string TestRunningFile => Path.Combine(TempDir, "unity_test_running.txt");
+        public string GetResultFilePath(UnityOperationKind kind, string? operationId = null) =>
+            new UnityPathResolver(TempDir).GetResultFilePath(kind, operationId);
     }
 
     [Fact]

@@ -57,7 +57,7 @@ namespace UnityLeanMcp
             return TrimTrailingSeparators(full);
         }
 
-        private static string TrimTrailingSeparators(string path)
+        internal static string TrimTrailingSeparators(string path)
         {
             if (string.IsNullOrEmpty(path))
             {
