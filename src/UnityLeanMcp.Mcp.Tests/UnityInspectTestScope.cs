@@ -69,6 +69,10 @@ internal sealed class UnityInspectTestScope : IDisposable
         ShaderUtil.ShaderHasErrorFunc = null;
         EditorSettings.prefabModeAllowAutoSave = true;
         SerializedObject.CustomProperties.Clear();
+        SerializedObject.CreatedTargets.Clear();
+        SerializedObject.DisposeCount = 0;
+        SerializedProperty.FindPropertyRelativeCalls.Clear();
+        SerializedProperty.NextVisibleCalls.Clear();
         UnityEngine.UIElements.UIDocument.AllUIDocuments.Clear();
         LogEntries.Reset();
     }

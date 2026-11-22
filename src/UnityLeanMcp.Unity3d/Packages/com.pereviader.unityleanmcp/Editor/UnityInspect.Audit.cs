@@ -595,6 +595,11 @@ namespace UnityLeanMcp
             string containerLabel,
             AuditReport report)
         {
+            if (comp is Transform)
+            {
+                return;
+            }
+
             try
             {
                 using (var so = new SerializedObject(comp))
@@ -618,21 +623,47 @@ namespace UnityLeanMcp
                             continue;
                         }
 
-                        // Check if this property is a UnityEvent (contains m_PersistentCalls.m_Calls)
-                        var callsProp = sp.FindPropertyRelative("m_PersistentCalls.m_Calls");
-                        if (callsProp == null)
+                        if (sp.isArray)
                         {
-                            var persistentCallsProp = sp.FindPropertyRelative("m_PersistentCalls");
-                            if (persistentCallsProp != null)
+                            if (sp.arraySize == 0)
                             {
-                                callsProp = persistentCallsProp.FindPropertyRelative("m_Calls");
+                                enterChildren = false;
+                                continue;
                             }
+
+                            SerializedProperty elem0 = null;
+                            try { elem0 = sp.GetArrayElementAtIndex(0); } catch { }
+                            if (elem0 == null ||
+                                (elem0.propertyType != SerializedPropertyType.ObjectReference &&
+                                 elem0.propertyType != SerializedPropertyType.Generic &&
+                                 elem0.propertyType != SerializedPropertyType.ManagedReference &&
+                                 elem0.propertyType != SerializedPropertyType.ExposedReference))
+                            {
+                                enterChildren = false;
+                            }
+                            continue;
                         }
 
-                        if (callsProp != null && callsProp.isArray)
+                        // Check if this property is a UnityEvent (contains m_PersistentCalls.m_Calls)
+                        if (sp.propertyType == SerializedPropertyType.Generic && !sp.isArray)
                         {
-                            AuditUnityEventCalls(callsProp, compType.Name, propPath, goName, hierarchyPath, containerLabel, report);
-                            enterChildren = false;
+                            var callsProp = sp.FindPropertyRelative("m_PersistentCalls.m_Calls");
+                            if (callsProp == null)
+                            {
+                                var persistentCallsProp = sp.FindPropertyRelative("m_PersistentCalls");
+                                if (persistentCallsProp != null)
+                                {
+                                    callsProp = persistentCallsProp.FindPropertyRelative("m_Calls");
+                                }
+                            }
+
+                            if (callsProp != null && callsProp.isArray)
+                            {
+                                AuditUnityEventCalls(callsProp, compType.Name, propPath, goName, hierarchyPath, containerLabel, report);
+                                enterChildren = false;
+                                continue;
+                            }
+
                             continue;
                         }
 
@@ -648,6 +679,13 @@ namespace UnityLeanMcp
                                 report.TryAddBrokenReference(
                                     $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compType.Name}.{propPath} is Missing (instanceID: {instanceId})");
                             }
+                            enterChildren = false;
+                            continue;
+                        }
+
+                        if (sp.propertyType != SerializedPropertyType.ManagedReference &&
+                            sp.propertyType != SerializedPropertyType.ExposedReference)
+                        {
                             enterChildren = false;
                         }
                     }

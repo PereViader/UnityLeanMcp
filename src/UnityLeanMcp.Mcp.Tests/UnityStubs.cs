@@ -977,11 +977,14 @@ namespace UnityEditor
 
     public enum SerializedPropertyType
     {
-        Generic, Integer, Boolean, Float, String, Color, ObjectReference, LayerMask, Enum, Vector2, Vector3, Vector4, Rect, ArraySize, Character, AnimationCurve, Bounds, Gradient
+        Generic, Integer, Boolean, Float, String, Color, ObjectReference, LayerMask, Enum, Vector2, Vector3, Vector4, Rect, ArraySize, Character, AnimationCurve, Bounds, Gradient, Quaternion, ExposedReference, FixedBufferSize, Vector2Int, Vector3Int, RectInt, BoundsInt, ManagedReference, Hash128
     }
 
     public class SerializedProperty
     {
+        public static readonly List<(string PropertyPath, string RelativePath)> FindPropertyRelativeCalls = new();
+        public static readonly List<(string PropertyPath, bool EnterChildren)> NextVisibleCalls = new();
+
         public string name { get; set; } = string.Empty;
         public string displayName { get; set; } = string.Empty;
         public string propertyPath { get; set; } = string.Empty;
@@ -1011,6 +1014,7 @@ namespace UnityEditor
         private readonly Dictionary<string, SerializedProperty> _relativeProperties = new(StringComparer.Ordinal);
         private readonly List<SerializedProperty> _arrayElements = new();
         private int _currentIndex = -1;
+        private SerializedProperty? _currentProperty;
 
         public void AddChildProperty(SerializedProperty prop) => _visibleProperties.Add(prop);
 
@@ -1028,6 +1032,7 @@ namespace UnityEditor
 
         public SerializedProperty? FindPropertyRelative(string relativePropertyPath)
         {
+            FindPropertyRelativeCalls.Add((propertyPath, relativePropertyPath));
             return _relativeProperties.TryGetValue(relativePropertyPath, out var prop) ? prop : null;
         }
 
@@ -1038,10 +1043,20 @@ namespace UnityEditor
 
         public bool NextVisible(bool enterChildren)
         {
+            if (_currentProperty != null)
+            {
+                NextVisibleCalls.Add((_currentProperty.propertyPath, enterChildren));
+                if (enterChildren && _currentProperty._visibleProperties.Count > 0)
+                {
+                    _visibleProperties.InsertRange(_currentIndex + 1, _currentProperty._visibleProperties);
+                }
+            }
+
             _currentIndex++;
             if (_currentIndex < _visibleProperties.Count)
             {
                 var cur = _visibleProperties[_currentIndex];
+                _currentProperty = cur;
                 name = cur.name;
                 displayName = cur.displayName;
                 propertyPath = cur.propertyPath;
@@ -1070,6 +1085,7 @@ namespace UnityEditor
                 _arrayElements.AddRange(cur._arrayElements);
                 return true;
             }
+            _currentProperty = null;
             return false;
         }
     }
@@ -1077,6 +1093,7 @@ namespace UnityEditor
     public class SerializedObject : IDisposable
     {
         public static readonly Dictionary<UnityEngine.Object, List<SerializedProperty>> CustomProperties = new();
+        public static readonly List<UnityEngine.Object> CreatedTargets = new();
         public static int DisposeCount { get; set; }
         public UnityEngine.Object targetObject { get; }
         public bool IsDisposed { get; private set; }
@@ -1085,9 +1102,13 @@ namespace UnityEditor
         public SerializedObject(UnityEngine.Object target)
         {
             targetObject = target;
-            if (target != null && CustomProperties.TryGetValue(target, out var props))
+            if (target != null)
             {
-                Properties.AddRange(props);
+                CreatedTargets.Add(target);
+                if (CustomProperties.TryGetValue(target, out var props))
+                {
+                    Properties.AddRange(props);
+                }
             }
         }
 

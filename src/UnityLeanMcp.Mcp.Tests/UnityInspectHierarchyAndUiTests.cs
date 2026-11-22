@@ -1419,6 +1419,233 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         Assert.Equal(CancellationToken.None, OperationExecutionEngine.GetActiveOperationToken());
     }
 
+    [Fact]
+    public void Audit_SkipsTransformAndRectTransformSerializedObjectCreation()
+    {
+        var regularGo = new GameObject("Regular");
+        var uiGo = new GameObject("Panel", typeof(RectTransform));
+        regularGo.transform.AddChild(uiGo.transform);
+
+        var regularComp = regularGo.AddComponent<EventTargetComponent>();
+        var uiComp = uiGo.AddComponent<EventTargetComponent>();
+
+        // Even if custom properties are attached to Transform/RectTransform, they must not be inspected
+        SerializedObject.CustomProperties[regularGo.transform] = new List<SerializedProperty>
+        {
+            new SerializedProperty
+            {
+                name = "m_BogusRef",
+                propertyPath = "m_BogusRef",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 111
+            }
+        };
+        SerializedObject.CustomProperties[uiGo.transform] = new List<SerializedProperty>
+        {
+            new SerializedProperty
+            {
+                name = "m_BogusUiRef",
+                propertyPath = "m_BogusUiRef",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 222
+            }
+        };
+
+        string result = Inspect.Audit(regularGo);
+
+        Assert.Contains("0 issues found", result);
+        Assert.DoesNotContain(SerializedObject.CreatedTargets, t => t is Transform);
+        Assert.Contains(regularComp, SerializedObject.CreatedTargets);
+        Assert.Contains(uiComp, SerializedObject.CreatedTargets);
+    }
+
+    [Fact]
+    public void Audit_GuardsUnityEventLookupToNonArrayGenericPropertiesOnly()
+    {
+        var go = new GameObject("GuardTest");
+        var comp = go.AddComponent<EventTargetComponent>();
+
+        var arrayOfBytes = new SerializedProperty
+        {
+            name = "m_Bytes",
+            propertyPath = "m_Bytes",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        arrayOfBytes.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.Integer, intValue = 1 });
+
+        var genericStruct = new SerializedProperty
+        {
+            name = "m_Settings",
+            propertyPath = "m_Settings",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = false
+        };
+
+        var unityEvent = CreateUnityEventProperty(
+            "m_OnClick",
+            CreatePersistentCall(target: comp, targetInstanceId: 10, methodName: "ValidVoidAction", mode: 1));
+
+        SerializedObject.CustomProperties[comp] = new List<SerializedProperty>
+        {
+            new SerializedProperty { name = "m_Script", propertyPath = "m_Script", propertyType = SerializedPropertyType.ObjectReference },
+            new SerializedProperty { name = "m_Count", propertyPath = "m_Count", propertyType = SerializedPropertyType.Integer, intValue = 5 },
+            new SerializedProperty { name = "m_Speed", propertyPath = "m_Speed", propertyType = SerializedPropertyType.Float, floatValue = 1.5f },
+            new SerializedProperty { name = "m_EnabledFlag", propertyPath = "m_EnabledFlag", propertyType = SerializedPropertyType.Boolean, boolValue = true },
+            new SerializedProperty { name = "m_Label", propertyPath = "m_Label", propertyType = SerializedPropertyType.String, stringValue = "abc" },
+            new SerializedProperty { name = "m_Pos", propertyPath = "m_Pos", propertyType = SerializedPropertyType.Vector3 },
+            new SerializedProperty { name = "m_Color", propertyPath = "m_Color", propertyType = SerializedPropertyType.Color },
+            new SerializedProperty { name = "m_Mode", propertyPath = "m_Mode", propertyType = SerializedPropertyType.Enum },
+            new SerializedProperty { name = "m_TargetRef", propertyPath = "m_TargetRef", propertyType = SerializedPropertyType.ObjectReference, objectReferenceValue = comp },
+            arrayOfBytes,
+            genericStruct,
+            unityEvent
+        };
+
+        string result = Inspect.Audit(go);
+
+        Assert.Contains("0 issues found", result);
+
+        var lookupPaths = SerializedProperty.FindPropertyRelativeCalls
+            .Select(c => c.PropertyPath)
+            .Distinct()
+            .ToList();
+
+        Assert.DoesNotContain("m_Script", lookupPaths);
+        Assert.DoesNotContain("m_Count", lookupPaths);
+        Assert.DoesNotContain("m_Speed", lookupPaths);
+        Assert.DoesNotContain("m_EnabledFlag", lookupPaths);
+        Assert.DoesNotContain("m_Label", lookupPaths);
+        Assert.DoesNotContain("m_Pos", lookupPaths);
+        Assert.DoesNotContain("m_Color", lookupPaths);
+        Assert.DoesNotContain("m_Mode", lookupPaths);
+        Assert.DoesNotContain("m_TargetRef", lookupPaths);
+        Assert.DoesNotContain("m_Bytes", lookupPaths);
+        Assert.Contains("m_Settings", lookupPaths);
+        Assert.Contains("m_OnClick", lookupPaths);
+    }
+
+    [Fact]
+    public void Audit_SkipsPrimitiveAndEmptyArraysWhileAuditingObjectReferenceAndGenericArrays()
+    {
+        var go = new GameObject("ArrayAuditTest");
+        var comp = go.AddComponent<EventTargetComponent>();
+
+        // 1. Primitive array (byte[] / Integer): enterChildren must be false and child elements must not be visited
+        var byteArray = new SerializedProperty
+        {
+            name = "m_ByteData",
+            propertyPath = "m_ByteData",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        byteArray.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.Integer, intValue = 42 });
+        byteArray.AddChildProperty(new SerializedProperty
+        {
+            name = "data",
+            propertyPath = "m_ByteData.Array.data[0]",
+            propertyType = SerializedPropertyType.Integer,
+            intValue = 42
+        });
+
+        // 2. Value-type math array (Vector3[]): enterChildren must be false and child elements must not be visited
+        var vecArray = new SerializedProperty
+        {
+            name = "m_Points",
+            propertyPath = "m_Points",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        vecArray.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.Vector3 });
+        vecArray.AddChildProperty(new SerializedProperty
+        {
+            name = "data",
+            propertyPath = "m_Points.Array.data[0]",
+            propertyType = SerializedPropertyType.Vector3
+        });
+
+        // 3. Empty array: enterChildren must be false
+        var emptyArray = new SerializedProperty
+        {
+            name = "m_Empty",
+            propertyPath = "m_Empty",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true,
+            arraySize = 0
+        };
+
+        // 4. ObjectReference array: enterChildren must be true and broken element reference must be reported
+        var refArray = new SerializedProperty
+        {
+            name = "m_Targets",
+            propertyPath = "m_Targets",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        refArray.AddArrayElement(new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.ObjectReference,
+            objectReferenceValue = null,
+            objectReferenceInstanceIDValue = 777
+        });
+        refArray.AddChildProperty(new SerializedProperty
+        {
+            name = "data",
+            propertyPath = "m_Targets.Array.data[0]",
+            propertyType = SerializedPropertyType.ObjectReference,
+            objectReferenceValue = null,
+            objectReferenceInstanceIDValue = 777
+        });
+
+        // 5. Generic struct/UnityEvent array: enterChildren must be true and nested broken reference/event must be reported
+        var genericArray = new SerializedProperty
+        {
+            name = "m_Entries",
+            propertyPath = "m_Entries",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        genericArray.AddArrayElement(new SerializedProperty { propertyType = SerializedPropertyType.Generic });
+        genericArray.AddChildProperty(new SerializedProperty
+        {
+            name = "m_Ref",
+            propertyPath = "m_Entries.Array.data[0].m_Ref",
+            propertyType = SerializedPropertyType.ObjectReference,
+            objectReferenceValue = null,
+            objectReferenceInstanceIDValue = 888
+        });
+        genericArray.AddChildProperty(CreateUnityEventProperty(
+            "m_Entries.Array.data[0].m_OnTriggered",
+            CreatePersistentCall(target: null, targetInstanceId: 999, methodName: "MissingHandler", mode: 1)));
+
+        SerializedObject.CustomProperties[comp] = new List<SerializedProperty>
+        {
+            byteArray,
+            vecArray,
+            emptyArray,
+            refArray,
+            genericArray
+        };
+
+        string result = Inspect.Audit(go);
+
+        Assert.Contains("3 issue(s) found", result);
+        Assert.Contains("EventTargetComponent.m_Targets.Array.data[0] is Missing (instanceID: 777)", result);
+        Assert.Contains("EventTargetComponent.m_Entries.Array.data[0].m_Ref is Missing (instanceID: 888)", result);
+        Assert.Contains("EventTargetComponent.m_Entries.Array.data[0].m_OnTriggered[0] has missing target object (instanceID: 999)", result);
+
+        Assert.Contains(("m_ByteData", false), SerializedProperty.NextVisibleCalls);
+        Assert.Contains(("m_Points", false), SerializedProperty.NextVisibleCalls);
+        Assert.Contains(("m_Empty", false), SerializedProperty.NextVisibleCalls);
+        Assert.Contains(("m_Targets", true), SerializedProperty.NextVisibleCalls);
+        Assert.Contains(("m_Entries", true), SerializedProperty.NextVisibleCalls);
+
+        Assert.DoesNotContain(SerializedProperty.NextVisibleCalls, c => c.PropertyPath == "m_ByteData.Array.data[0]");
+        Assert.DoesNotContain(SerializedProperty.NextVisibleCalls, c => c.PropertyPath == "m_Points.Array.data[0]");
+    }
+
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)
     {
         var eventProp = new SerializedProperty
