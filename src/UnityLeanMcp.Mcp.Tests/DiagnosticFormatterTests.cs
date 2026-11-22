@@ -1033,6 +1033,8 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
 
         public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
         public string CompactTestStackTrace(string? stackTrace, int maxLines = 3) => stackTrace ?? string.Empty;
+        public string FormatEvalException(string? message)
+            => DiagnosticFormatter.Default.FormatEvalException(message);
 
         public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
         {
@@ -1078,6 +1080,8 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
             => (null, null, null);
         public string SanitizeTestStackTrace(string? stackTrace) => stackTrace ?? string.Empty;
         public string CompactTestStackTrace(string? stackTrace, int maxLines = 3) => stackTrace ?? string.Empty;
+        public string FormatEvalException(string? message)
+            => DiagnosticFormatter.Default.FormatEvalException(message);
         public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText) => [];
         public string FormatCompilerDiagnostics(
             string? diagnosticText,

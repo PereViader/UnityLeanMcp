@@ -174,6 +174,9 @@ internal sealed class CountingDiagnosticFormatter : IDiagnosticFormatter
     public string CompactTestStackTrace(string? stackTrace, int maxLines = 3)
         => _inner.CompactTestStackTrace(stackTrace, maxLines);
 
+    public string FormatEvalException(string? message)
+        => _inner.FormatEvalException(message);
+
     public List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText)
     {
         ParseCallCount++;

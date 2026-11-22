@@ -10,8 +10,7 @@ public interface IDiagnosticFormatter
 
     string CompactTestStackTrace(string? stackTrace, int maxLines = 3);
 
-    string FormatEvalException(string? message) =>
-        DiagnosticFormatter.Default.FormatEvalException(message);
+    string FormatEvalException(string? message);
 
     List<StructuredCompilerDiagnostic> ParseCompilerDiagnostics(string? diagnosticText);
 
