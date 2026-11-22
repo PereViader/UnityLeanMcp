@@ -22,6 +22,9 @@ namespace UnityLeanMcp
         private const int AuditUnloadUnusedAssetsBatchSize = 50;
 
         private static readonly Dictionary<Type, PropertyInfo> s_SharedMaterialPropCache = new Dictionary<Type, PropertyInfo>();
+        private static readonly Dictionary<Type, PropertyInfo> s_GraphicMaterialPropCache = new Dictionary<Type, PropertyInfo>();
+        private static readonly Dictionary<Type, PropertyInfo> s_FontSharedMaterialPropCache = new Dictionary<Type, PropertyInfo>();
+        private static readonly Dictionary<Type, PropertyInfo> s_FontSharedMaterialsPropCache = new Dictionary<Type, PropertyInfo>();
 
         #region Scene & Prefab Integrity Audit
 
@@ -29,7 +32,7 @@ namespace UnityLeanMcp
         /// Performs a comprehensive, non-destructive integrity audit of loaded scenes and the active Prefab Stage,
         /// or a specific loaded scene, prefab asset, or folder (recursively auditing prefabs within that folder).
         /// Reports missing scripts, broken serialized ObjectReference fields, broken UnityEvent persistent listeners,
-        /// error/missing shaders (via safe sharedMaterials/sharedMaterial inspection), and scene hygiene issues
+        /// error/missing shaders (via safe sharedMaterials/sharedMaterial, Graphic.material, and TMP_Text.fontSharedMaterial/fontSharedMaterials inspection), and scene hygiene issues
         /// (duplicate AudioListener or EventSystem instances, missing MainCamera tag).
         /// Bounded by <paramref name="maxPrefabs"/> (for folder scans), <paramref name="maxIssuesPerCategory"/>,
         /// and cooperative cancellation (linked with the active eval operation token).
@@ -532,17 +535,81 @@ namespace UnityLeanMcp
                 return;
             }
 
-            // Safely inspect sharedMaterial on non-Renderer components (e.g. Graphic / UI components) without touching .material
-            PropertyInfo sharedMatProp = GetCachedProperty(s_SharedMaterialPropCache, compType, "sharedMaterial", typeof(Material));
-            if (sharedMatProp != null)
+            HashSet<Material> auditedMaterials = null;
+
+            // Safely inspect sharedMaterial on non-Renderer components that expose it without touching arbitrary .material
+            AuditSingleMaterialProperty(comp, compType, s_SharedMaterialPropCache, "sharedMaterial", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
+
+            // TMP_Text inherits from Graphic; inspect fontSharedMaterial/fontSharedMaterials first so they take precedence over Graphic.material during deduplication
+            if (IsComponentOfFullTypeName(compType, "TMPro.TMP_Text"))
             {
-                Material sharedMat = null;
-                try { sharedMat = sharedMatProp.GetValue(comp, null) as Material; } catch { }
-                if (!ReferenceEquals(sharedMat, null) && sharedMat != null)
-                {
-                    AuditMaterialShader(sharedMat, $"{compType.Name}.sharedMaterial", goName, hierarchyPath, containerLabel, report);
-                }
+                AuditSingleMaterialProperty(comp, compType, s_FontSharedMaterialPropCache, "fontSharedMaterial", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
+                AuditMaterialArrayProperty(comp, compType, s_FontSharedMaterialsPropCache, "fontSharedMaterials", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
             }
+
+            // UnityEngine.UI.Graphic.material is a non-instantiating getter (unlike Renderer.material or Collider.material)
+            if (IsComponentOfFullTypeName(compType, "UnityEngine.UI.Graphic"))
+            {
+                AuditSingleMaterialProperty(comp, compType, s_GraphicMaterialPropCache, "material", goName, hierarchyPath, containerLabel, report, ref auditedMaterials);
+            }
+        }
+
+        private static void AuditSingleMaterialProperty(
+            Component comp,
+            Type compType,
+            Dictionary<Type, PropertyInfo> propCache,
+            string propertyName,
+            string goName,
+            string hierarchyPath,
+            string containerLabel,
+            AuditReport report,
+            ref HashSet<Material> auditedMaterials)
+        {
+            PropertyInfo prop = GetCachedProperty(propCache, compType, propertyName, typeof(Material));
+            if (prop == null) return;
+
+            Material mat = null;
+            try { mat = prop.GetValue(comp, null) as Material; } catch { }
+            if (!TryMarkMaterialAudited(mat, ref auditedMaterials)) return;
+
+            AuditMaterialShader(mat, $"{compType.Name}.{propertyName}", goName, hierarchyPath, containerLabel, report);
+        }
+
+        private static void AuditMaterialArrayProperty(
+            Component comp,
+            Type compType,
+            Dictionary<Type, PropertyInfo> propCache,
+            string propertyName,
+            string goName,
+            string hierarchyPath,
+            string containerLabel,
+            AuditReport report,
+            ref HashSet<Material> auditedMaterials)
+        {
+            PropertyInfo prop = GetCachedProperty(propCache, compType, propertyName, typeof(Material[]));
+            if (prop == null) return;
+
+            Material[] mats = null;
+            try { mats = prop.GetValue(comp, null) as Material[]; } catch { }
+            if (mats == null) return;
+
+            for (int m = 0; m < mats.Length; m++)
+            {
+                var mat = mats[m];
+                if (!TryMarkMaterialAudited(mat, ref auditedMaterials)) continue;
+
+                AuditMaterialShader(mat, FormattableString.Invariant($"{compType.Name}.{propertyName}[{m}]"), goName, hierarchyPath, containerLabel, report);
+            }
+        }
+
+        private static bool TryMarkMaterialAudited(Material mat, ref HashSet<Material> auditedMaterials)
+        {
+            if (ReferenceEquals(mat, null) || mat == null) return false;
+            if (auditedMaterials == null)
+            {
+                auditedMaterials = new HashSet<Material>();
+            }
+            return auditedMaterials.Add(mat);
         }
 
         private static void AuditMaterialShader(
@@ -946,6 +1013,18 @@ namespace UnityLeanMcp
             for (Type cur = compType; cur != null && cur != typeof(UnityEngine.Object) && cur != typeof(object); cur = cur.BaseType)
             {
                 if (string.Equals(cur.Name, shortTypeName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsComponentOfFullTypeName(Type compType, string fullTypeName)
+        {
+            for (Type cur = compType; cur != null && cur != typeof(UnityEngine.Object) && cur != typeof(object); cur = cur.BaseType)
+            {
+                if (string.Equals(cur.FullName, fullTypeName, StringComparison.Ordinal))
                 {
                     return true;
                 }

@@ -1693,3 +1693,36 @@ namespace UnityEngine.UIElements
         }
     }
 }
+
+namespace UnityEngine.UI
+{
+    public class Graphic : MonoBehaviour
+    {
+        public virtual Material? material { get; set; }
+        public virtual Material? defaultMaterial { get; set; }
+        public bool raycastTarget { get; set; } = true;
+    }
+
+    public class MaskableGraphic : Graphic { }
+
+    public class Image : MaskableGraphic { }
+
+    public class Text : MaskableGraphic
+    {
+        public string text { get; set; } = string.Empty;
+    }
+}
+
+namespace TMPro
+{
+    public class TMP_Text : UnityEngine.UI.MaskableGraphic
+    {
+        public string text { get; set; } = string.Empty;
+        public UnityEngine.Material? fontSharedMaterial { get; set; }
+        public UnityEngine.Material[]? fontSharedMaterials { get; set; }
+    }
+
+    public class TextMeshProUGUI : TMP_Text { }
+
+    public class TextMeshPro : TMP_Text { }
+}

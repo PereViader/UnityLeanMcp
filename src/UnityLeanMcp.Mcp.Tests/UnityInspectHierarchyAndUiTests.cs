@@ -2128,6 +2128,115 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         Assert.DoesNotContain("8888", result);
     }
 
+    public class NonGraphicComponentWithMaterial : Component
+    {
+        public bool MaterialGetterCalled { get; private set; }
+        public Material? material
+        {
+            get
+            {
+                MaterialGetterCalled = true;
+                return new Material { name = "InstantiatedMat", shader = new Shader { name = "Hidden/InternalErrorShader" } };
+            }
+        }
+    }
+
+    public class NonGraphicComponentWithSharedMaterial : Component
+    {
+        public Material? sharedMaterial { get; set; }
+    }
+
+    [Fact]
+    public void Audit_UiGraphicAndImage_DetectsErrorAndNullShadersViaGraphicMaterial()
+    {
+        var root = new GameObject("UICanvas");
+        var errorShader = new Shader { name = "Hidden/InternalErrorShader" };
+        var validShader = new Shader { name = "UI/Default" };
+
+        var imgGo = new GameObject("BrokenImage");
+        var image = imgGo.AddComponent<UnityEngine.UI.Image>();
+        image.material = new Material { name = "BrokenUiMat", shader = errorShader };
+        root.transform.AddChild(imgGo.transform);
+
+        var textGo = new GameObject("NullShaderText");
+        var uiText = textGo.AddComponent<UnityEngine.UI.Text>();
+        uiText.material = new Material { name = "NullShaderUiMat", shader = null };
+        root.transform.AddChild(textGo.transform);
+
+        var validGo = new GameObject("ValidImage");
+        var validImage = validGo.AddComponent<UnityEngine.UI.Image>();
+        validImage.material = new Material { name = "ValidUiMat", shader = validShader };
+        root.transform.AddChild(validGo.transform);
+
+        string result = Inspect.Audit(root);
+
+        Assert.Contains("Material & Shader Errors (2):", result);
+        Assert.Contains("BrokenImage (path: \"/UICanvas/BrokenImage\", hierarchy): Image.material (\"BrokenUiMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+        Assert.Contains("NullShaderText (path: \"/UICanvas/NullShaderText\", hierarchy): Text.material (\"NullShaderUiMat\") has missing/null Shader", result);
+        Assert.DoesNotContain("ValidUiMat", result);
+    }
+
+    [Fact]
+    public void Audit_TmpText_InspectsFontSharedMaterialsAndDeduplicatesWithGraphicMaterial()
+    {
+        var root = new GameObject("TMPRoot");
+        var errorShader = new Shader { name = "Hidden/InternalErrorShader" };
+        var validShader = new Shader { name = "TextMeshPro/Distance Field" };
+
+        var sharedBrokenMat = new Material { name = "BrokenFontMat", shader = errorShader };
+        var fallbackBrokenMat = new Material { name = "BrokenFallbackFontMat", shader = errorShader };
+        var validMat = new Material { name = "ValidFontMat", shader = validShader };
+
+        // Same material in fontSharedMaterial, fontSharedMaterials[0], and Graphic.material must be reported once,
+        // while distinct fallback materials in fontSharedMaterials[1] are still reported.
+        var tmpGo = new GameObject("TitleTMP");
+        var tmp = tmpGo.AddComponent<TMPro.TextMeshProUGUI>();
+        tmp.fontSharedMaterial = sharedBrokenMat;
+        tmp.fontSharedMaterials = new[] { sharedBrokenMat, fallbackBrokenMat, validMat };
+        tmp.material = sharedBrokenMat;
+        root.transform.AddChild(tmpGo.transform);
+
+        // If Graphic.material holds a distinct broken material from fontSharedMaterial, both are reported.
+        var distinctGo = new GameObject("DistinctTMP");
+        var distinctTmp = distinctGo.AddComponent<TMPro.TextMeshPro>();
+        distinctTmp.fontSharedMaterial = validMat;
+        distinctTmp.fontSharedMaterials = new[] { validMat };
+        distinctTmp.material = new Material { name = "DistinctBrokenGraphicMat", shader = errorShader };
+        root.transform.AddChild(distinctGo.transform);
+
+        string result = Inspect.Audit(root);
+
+        Assert.Contains("Material & Shader Errors (3):", result);
+        Assert.Contains("TitleTMP (path: \"/TMPRoot/TitleTMP\", hierarchy): TextMeshProUGUI.fontSharedMaterial (\"BrokenFontMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+        Assert.Contains("TitleTMP (path: \"/TMPRoot/TitleTMP\", hierarchy): TextMeshProUGUI.fontSharedMaterials[1] (\"BrokenFallbackFontMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+        Assert.Contains("DistinctTMP (path: \"/TMPRoot/DistinctTMP\", hierarchy): TextMeshPro.material (\"DistinctBrokenGraphicMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+        Assert.DoesNotContain("TextMeshProUGUI.fontSharedMaterials[0]", result);
+        Assert.DoesNotContain("TextMeshProUGUI.material", result);
+    }
+
+    [Fact]
+    public void Audit_NonGraphicComponent_DoesNotTouchMaterialGetterButStillInspectsSharedMaterial()
+    {
+        var root = new GameObject("NonGraphicRoot");
+        var errorShader = new Shader { name = "Hidden/InternalErrorShader" };
+
+        var unsafeGo = new GameObject("UnsafeMatComp");
+        var unsafeComp = unsafeGo.AddComponent<NonGraphicComponentWithMaterial>();
+        root.transform.AddChild(unsafeGo.transform);
+
+        var sharedGo = new GameObject("SharedMatComp");
+        var sharedComp = sharedGo.AddComponent<NonGraphicComponentWithSharedMaterial>();
+        sharedComp.sharedMaterial = new Material { name = "BrokenSharedMat", shader = errorShader };
+        root.transform.AddChild(sharedGo.transform);
+
+        string result = Inspect.Audit(root);
+
+        Assert.False(unsafeComp.MaterialGetterCalled);
+        Assert.Contains("Material & Shader Errors (1):", result);
+        Assert.Contains("SharedMatComp (path: \"/NonGraphicRoot/SharedMatComp\", hierarchy): NonGraphicComponentWithSharedMaterial.sharedMaterial (\"BrokenSharedMat\") uses error shader \"Hidden/InternalErrorShader\"", result);
+        Assert.DoesNotContain("InstantiatedMat", result);
+    }
+
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)
     {
         var eventProp = new SerializedProperty
