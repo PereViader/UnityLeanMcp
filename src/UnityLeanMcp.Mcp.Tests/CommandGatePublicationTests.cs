@@ -1636,6 +1636,98 @@ public sealed class CommandGatePublicationTests : IDisposable
         Assert.Equal("preparing", GetCoverageHandler.GetCoverageAttemptPhase(runId));
     }
 
+    [Theory]
+    [InlineData("eval", true, false, false)]
+    [InlineData("eval", false, true, false)]
+    [InlineData("eval", false, false, true)]
+    [InlineData("test", true, false, false)]
+    [InlineData("test", false, true, false)]
+    [InlineData("test", false, false, true)]
+    public void TryPreflightWorkerCommand_SameIdRetry_SkipsCompilationSettledCheck(
+        string kind,
+        bool isCompiling,
+        bool refreshPending,
+        bool refreshRequired)
+    {
+        const string opId = "active-op";
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(kind, opId, OperationStatus.Executing, out _));
+        UnityLeanMcpCompilationTracker.IsCompiling = isCompiling;
+        UnityLeanMcpCompilationTracker.RefreshPending = refreshPending;
+        UnityLeanMcpCompilationTracker.RefreshRequired = refreshRequired;
+        UnityLeanMcpServer.IsPlayModeActive = false;
+
+        ICommandHandler handler = kind == OperationKinds.Eval ? new EvalHandler() : new RunTestsHandler();
+        string payload = kind == OperationKinds.Eval ? $"{opId} return 1;" : $"{opId} {{\"mode\":\"editmode\"}}";
+
+        using var retryStream = new MemoryStream();
+        using var retryWriter = new StreamWriter(retryStream) { AutoFlush = true };
+        Assert.True(CommandHelper.TryPreflightWorkerCommand(handler, payload, kind, isExitHandler: false, retryWriter));
+        Assert.Equal(string.Empty, System.Text.Encoding.UTF8.GetString(retryStream.ToArray()));
+
+        string foreignPayload = kind == OperationKinds.Eval ? "foreign-op return 1;" : "foreign-op {\"mode\":\"editmode\"}";
+        using var foreignStream = new MemoryStream();
+        using var foreignWriter = new StreamWriter(foreignStream) { AutoFlush = true };
+        Assert.False(CommandHelper.TryPreflightWorkerCommand(handler, foreignPayload, kind, isExitHandler: false, foreignWriter));
+        Assert.Equal($"BUSY {kind} {opId}", System.Text.Encoding.UTF8.GetString(foreignStream.ToArray()).Trim());
+
+        UnityCommandGate.ForceReset();
+        using var idleCompileStream = new MemoryStream();
+        using var idleCompileWriter = new StreamWriter(idleCompileStream) { AutoFlush = true };
+        Assert.False(CommandHelper.TryPreflightWorkerCommand(handler, payload, kind, isExitHandler: false, idleCompileWriter));
+        Assert.Equal("BUSY compile", System.Text.Encoding.UTF8.GetString(idleCompileStream.ToArray()).Trim());
+    }
+
+    [Theory]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public void EvalHandler_SameIdRetryDuringCompilationOrFailedState_ReturnsRunning(
+        bool isCompiling,
+        bool refreshPending,
+        bool refreshRequired,
+        bool scriptCompilationFailed)
+    {
+        const string opId = "eval-retry";
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, opId, OperationStatus.Executing, out _));
+        UnityLeanMcpCompilationTracker.IsCompiling = isCompiling;
+        UnityLeanMcpCompilationTracker.RefreshPending = refreshPending;
+        UnityLeanMcpCompilationTracker.RefreshRequired = refreshRequired;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = scriptCompilationFailed;
+        UnityLeanMcpServer.IsPlayModeActive = false;
+
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+        new EvalHandler().Handle($"{opId} return 1;", writer);
+
+        Assert.Equal("RUNNING", System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim());
+    }
+
+    [Theory]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public void RunTestsHandler_SameIdRetryDuringCompilationOrFailedState_ReturnsRunning(
+        bool isCompiling,
+        bool refreshPending,
+        bool refreshRequired,
+        bool scriptCompilationFailed)
+    {
+        const string opId = "test-retry";
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, opId, OperationStatus.Running, out _));
+        UnityLeanMcpCompilationTracker.IsCompiling = isCompiling;
+        UnityLeanMcpCompilationTracker.RefreshPending = refreshPending;
+        UnityLeanMcpCompilationTracker.RefreshRequired = refreshRequired;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = scriptCompilationFailed;
+
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+        new RunTestsHandler().Handle($"{opId} {{\"mode\":\"editmode\"}}", writer);
+
+        Assert.Equal("RUNNING", System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim());
+    }
+
     public void Dispose()
     {
         UnityCommandGate.ForceReset();

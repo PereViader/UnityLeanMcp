@@ -124,6 +124,12 @@ namespace UnityLeanMcp
                 return;
             }
 
+            if (UnityCommandGate.IsOwnedBy(operationId, OperationKinds.Test))
+            {
+                TryAcknowledgeRunning(writer);
+                return;
+            }
+
             if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
             {
                 writer.WriteLine("FAILURE Compilation failed");

@@ -35,6 +35,66 @@ namespace UnityLeanMcp
                 || value.StartsWith("AssetImportWorker", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static string ExtractOperationId(string payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return null;
+            }
+
+            int spaceIndex = payload.IndexOf(' ');
+            return spaceIndex > 0 ? payload.Substring(0, spaceIndex).Trim() : payload.Trim();
+        }
+
+        internal static bool TryPreflightWorkerCommand(
+            ICommandHandler handler,
+            string payload,
+            string expectedKind,
+            bool isExitHandler,
+            StreamWriter writer)
+        {
+            bool isSameOperationRetry = false;
+            if (handler.IsMutating)
+            {
+                var activeOp = UnityCommandGate.ReadSnapshot();
+                if (activeOp != null)
+                {
+                    string requestOpId = ExtractOperationId(payload);
+                    if (string.IsNullOrEmpty(requestOpId) ||
+                        activeOp.OperationId != requestOpId ||
+                        (expectedKind != null && !string.Equals(activeOp.Kind, expectedKind, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
+                        return false;
+                    }
+
+                    isSameOperationRetry = true;
+                }
+            }
+            else if (handler.ExecutionTarget != CommandExecutionTarget.WorkerThread && !isExitHandler)
+            {
+                var activeOp = UnityCommandGate.ReadSnapshot();
+                if (activeOp != null)
+                {
+                    writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
+                    return false;
+                }
+            }
+
+            if (!isSameOperationRetry && handler.RequiresCompilationSettled)
+            {
+                if (UnityLeanMcpCompilationTracker.IsCompiling ||
+                    UnityLeanMcpCompilationTracker.RefreshPending ||
+                    (UnityLeanMcpCompilationTracker.RefreshRequired && !(UnityLeanMcpServer.IsPlayModeActive && handler is EvalHandler)))
+                {
+                    writer.WriteLine("BUSY compile");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         public static string ReadFileWithRetry(string path, int maxRetries = 5, int delayMs = 10)
         {
             return WorkerThreadSnapshots.ReadFileWithRetry(path, maxRetries, delayMs);

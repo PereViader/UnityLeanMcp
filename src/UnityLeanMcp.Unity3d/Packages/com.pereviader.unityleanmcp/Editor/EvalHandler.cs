@@ -60,6 +60,19 @@ namespace UnityLeanMcp
                 return;
             }
 
+            if (UnityCommandGate.IsOwnedBy(operationId, OperationKinds.Eval))
+            {
+                try
+                {
+                    writer.WriteLine("RUNNING");
+                    writer.Flush();
+                }
+                catch (Exception ex) when (ex is IOException || ex is SocketException)
+                {
+                }
+                return;
+            }
+
             if (UnityLeanMcpCompilationTracker.ScriptCompilationFailed)
             {
                 writer.WriteLine("FAILURE Compilation failed");

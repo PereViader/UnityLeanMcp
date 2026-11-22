@@ -550,8 +550,8 @@ namespace UnityLeanMcp
                 return;
             }
 
-            if (handler.IsMutating && UnityCommandGate.IsCancellationRequested(ExtractOperationId(payload)) &&
-                !UnityCommandGate.IsOwnedBy(ExtractOperationId(payload), GetHandlerOperationKind(handler)))
+            if (handler.IsMutating && UnityCommandGate.IsCancellationRequested(CommandHelper.ExtractOperationId(payload)) &&
+                !UnityCommandGate.IsOwnedBy(CommandHelper.ExtractOperationId(payload), GetHandlerOperationKind(handler)))
             {
                 writer.WriteLine("INTERRUPTION Operation was cancelled before admission.");
                 return;
@@ -565,7 +565,7 @@ namespace UnityLeanMcp
                 if (active != null)
                 {
                     string expectedKind = GetHandlerOperationKind(handler);
-                    if (active.OperationId == ExtractOperationId(payload) &&
+                    if (active.OperationId == CommandHelper.ExtractOperationId(payload) &&
                         (expectedKind == null || string.Equals(active.Kind, expectedKind, StringComparison.OrdinalIgnoreCase)))
                     {
                         handler.Handle(payload, writer);
@@ -649,41 +649,14 @@ namespace UnityLeanMcp
                     // Reject operations early on the worker thread if another operation is active,
                     // or if Unity is compiling. This prevents main thread deadlock and dispatcher queue pollution
                     // when an operation (e.g. eval) is executing synchronously on the main thread.
-                    if (handler.IsMutating)
+                    if (!CommandHelper.TryPreflightWorkerCommand(
+                        handler,
+                        payload,
+                        GetHandlerOperationKind(handler),
+                        handler is ExitHandler,
+                        writer))
                     {
-                        var activeOp = UnityCommandGate.ReadSnapshot();
-                        if (activeOp != null)
-                        {
-                            string requestOpId = ExtractOperationId(payload);
-                            string expectedKind = GetHandlerOperationKind(handler);
-                            if (string.IsNullOrEmpty(requestOpId) ||
-                                activeOp.OperationId != requestOpId ||
-                                (expectedKind != null && !string.Equals(activeOp.Kind, expectedKind, StringComparison.OrdinalIgnoreCase)))
-                            {
-                                writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
-                                return;
-                            }
-                        }
-                    }
-                    else if (handler.ExecutionTarget != CommandExecutionTarget.WorkerThread && !(handler is ExitHandler))
-                    {
-                        var activeOp = UnityCommandGate.ReadSnapshot();
-                        if (activeOp != null)
-                        {
-                            writer.WriteLine($"BUSY {activeOp.Kind} {activeOp.OperationId}");
-                            return;
-                        }
-                    }
-
-                    if (handler.RequiresCompilationSettled)
-                    {
-                        if (UnityLeanMcpCompilationTracker.IsCompiling ||
-                            UnityLeanMcpCompilationTracker.RefreshPending ||
-                            (UnityLeanMcpCompilationTracker.RefreshRequired && !(UnityLeanMcpServer.IsPlayModeActive && handler is EvalHandler)))
-                        {
-                            writer.WriteLine("BUSY compile");
-                            return;
-                        }
+                        return;
                     }
 
                     // Worker thread execution target (e.g. PING, POLL_REFRESH)
@@ -786,17 +759,6 @@ namespace UnityLeanMcp
                 try { client.Close(); } catch { }
                 s_ActiveClients.TryRemove(client, out _);
             }
-        }
-
-        private static string ExtractOperationId(string payload)
-        {
-            if (string.IsNullOrWhiteSpace(payload))
-            {
-                return null;
-            }
-
-            int spaceIndex = payload.IndexOf(' ');
-            return spaceIndex > 0 ? payload.Substring(0, spaceIndex).Trim() : payload.Trim();
         }
 
         private static bool IsShuttingDown()
