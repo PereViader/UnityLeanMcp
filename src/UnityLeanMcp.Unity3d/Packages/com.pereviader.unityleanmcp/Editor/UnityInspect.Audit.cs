@@ -764,6 +764,60 @@ namespace UnityLeanMcp
                     report.TryAddBrokenUnityEvent(
                         FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] method \"{targetType.Name}.{methodName}\" not found on target \"{targetObj.name}\""));
                 }
+
+                if (modeProp != null && modeProp.intValue == 2) // PersistentListenerMode.Object
+                {
+                    AuditUnityEventObjectArgument(
+                        callElement,
+                        argumentsProp,
+                        compTypeName,
+                        eventPropertyPath,
+                        i,
+                        methodName,
+                        goName,
+                        hierarchyPath,
+                        containerLabel,
+                        report);
+                }
+            }
+        }
+
+        private static void AuditUnityEventObjectArgument(
+            SerializedProperty callElement,
+            SerializedProperty argumentsProp,
+            string compTypeName,
+            string eventPropertyPath,
+            int callIndex,
+            string methodName,
+            string goName,
+            string hierarchyPath,
+            string containerLabel,
+            AuditReport report)
+        {
+            SerializedProperty objectArgProp = null;
+            if (argumentsProp != null)
+            {
+                objectArgProp = argumentsProp.FindPropertyRelative("m_ObjectArgument");
+            }
+            if (objectArgProp == null)
+            {
+                objectArgProp = callElement.FindPropertyRelative("m_Arguments.m_ObjectArgument");
+            }
+            if (objectArgProp == null)
+            {
+                return;
+            }
+
+            UnityEngine.Object objArg = null;
+            int objArgInstanceId = 0;
+            try { objArg = objectArgProp.objectReferenceValue; } catch { }
+            try { objArgInstanceId = objectArgProp.objectReferenceInstanceIDValue; } catch { }
+
+            if (objArg == null && objArgInstanceId != 0)
+            {
+                string methodDetail = !string.IsNullOrEmpty(methodName) ? $" (method: \"{methodName}\")" : "";
+                report.TryAddBrokenUnityEvent(
+                    FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{callIndex}] has missing object argument (instanceID: {objArgInstanceId}){methodDetail}"));
             }
         }
 

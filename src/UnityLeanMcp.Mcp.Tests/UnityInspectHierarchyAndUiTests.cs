@@ -2007,22 +2007,125 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
 
             var eventComp = root.AddComponent<EventTargetComponent>();
             var missingTargetCall = CreatePersistentCall(target: null, targetInstanceId: -9876, methodName: "OnTrigger", mode: 1);
-            var eventProp = CreateUnityEventProperty("m_OnClick", missingTargetCall);
+            var missingObjArgCall = CreatePersistentCall(
+                target: eventComp,
+                targetInstanceId: 100,
+                methodName: "ValidObjectAction",
+                mode: 2,
+                objectArg: null,
+                objectArgInstanceId: -54321,
+                includeArguments: true);
+            var eventProp = CreateUnityEventProperty("m_OnClick", missingTargetCall, missingObjArgCall);
             SerializedObject.CustomProperties[eventComp] = new List<SerializedProperty> { eventProp };
 
             string result = Inspect.Audit(root);
 
-            Assert.Contains("Audit of GameObject \"LocaleRoot\" (hierarchy): 3 issue(s) found (1 GameObject(s) scanned):", result);
+            Assert.Contains("Audit of GameObject \"LocaleRoot\" (hierarchy): 4 issue(s) found (1 GameObject(s) scanned):", result);
             Assert.Contains("(instanceID: -42137)", result);
             Assert.Contains("(instanceID: -9876)", result);
+            Assert.Contains("(instanceID: -54321)", result);
             Assert.DoesNotContain("\u221242137", result);
             Assert.DoesNotContain("\u22129876", result);
+            Assert.DoesNotContain("\u221254321", result);
         }
         finally
         {
             CultureInfo.CurrentCulture = originalCulture;
             CultureInfo.CurrentUICulture = originalUiCulture;
         }
+    }
+
+    [Fact]
+    public void Audit_UnityEventObjectArgument_DetectsBrokenMode2AndIgnoresValidOrNonObjectModes()
+    {
+        var root = new GameObject("EventRoot");
+        var targetComp = root.AddComponent<EventTargetComponent>();
+        var validArgGo = new GameObject("ValidArg");
+
+        // 1. mode == 2 with broken m_ObjectArgument (nested under m_Arguments) -> should report
+        var brokenNestedArgCall = CreatePersistentCall(
+            target: targetComp,
+            targetInstanceId: 100,
+            methodName: "ValidObjectAction",
+            mode: 2,
+            objectArg: null,
+            objectArgInstanceId: 5555,
+            includeArguments: true);
+
+        // 2. mode == 2 with broken m_ObjectArgument (via m_Arguments.m_ObjectArgument relative path) -> should report
+        var brokenDirectPathCall = CreatePersistentCall(
+            target: targetComp,
+            targetInstanceId: 100,
+            methodName: "ValidObjectAction",
+            mode: 2);
+        brokenDirectPathCall.SetRelativeProperty("m_Arguments.m_ObjectArgument", new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.ObjectReference,
+            objectReferenceValue = null,
+            objectReferenceInstanceIDValue = 6666
+        });
+
+        // 3. mode == 2 with valid non-null m_ObjectArgument -> should NOT report
+        var validArgCall = CreatePersistentCall(
+            target: targetComp,
+            targetInstanceId: 100,
+            methodName: "ValidObjectAction",
+            mode: 2,
+            objectArg: validArgGo,
+            objectArgInstanceId: 200,
+            includeArguments: true);
+
+        // 4. mode == 2 with intentional null (instanceID == 0) -> should NOT report
+        var intentionalNullArgCall = CreatePersistentCall(
+            target: targetComp,
+            targetInstanceId: 100,
+            methodName: "ValidObjectAction",
+            mode: 2,
+            objectArg: null,
+            objectArgInstanceId: 0,
+            includeArguments: true);
+
+        // 5. mode != 2 (Void and Int) with stale broken m_ObjectArgument -> should NOT report
+        var voidModeStaleArgCall = CreatePersistentCall(
+            target: targetComp,
+            targetInstanceId: 100,
+            methodName: "ValidVoidAction",
+            mode: 1,
+            objectArg: null,
+            objectArgInstanceId: 7777,
+            includeArguments: true);
+
+        var intModeStaleArgCall = CreatePersistentCall(
+            target: targetComp,
+            targetInstanceId: 100,
+            methodName: "ValidIntAction",
+            mode: 3,
+            objectArg: null,
+            objectArgInstanceId: 8888,
+            includeArguments: true);
+
+        var eventProp = CreateUnityEventProperty(
+            "m_OnClick",
+            brokenNestedArgCall,
+            brokenDirectPathCall,
+            validArgCall,
+            intentionalNullArgCall,
+            voidModeStaleArgCall,
+            intModeStaleArgCall);
+        SerializedObject.CustomProperties[targetComp] = new List<SerializedProperty> { eventProp };
+
+        string result = Inspect.Audit(root);
+
+        Assert.Contains("Audit of GameObject \"EventRoot\" (hierarchy): 2 issue(s) found (1 GameObject(s) scanned):", result);
+        Assert.Contains("Broken UnityEvent Listeners (2):", result);
+        Assert.Contains("EventRoot (path: \"/EventRoot\", hierarchy): EventTargetComponent.m_OnClick[0] has missing object argument (instanceID: 5555) (method: \"ValidObjectAction\")", result);
+        Assert.Contains("EventRoot (path: \"/EventRoot\", hierarchy): EventTargetComponent.m_OnClick[1] has missing object argument (instanceID: 6666) (method: \"ValidObjectAction\")", result);
+        Assert.DoesNotContain("m_OnClick[2]", result);
+        Assert.DoesNotContain("m_OnClick[3]", result);
+        Assert.DoesNotContain("m_OnClick[4]", result);
+        Assert.DoesNotContain("m_OnClick[5]", result);
+        Assert.DoesNotContain("7777", result);
+        Assert.DoesNotContain("8888", result);
     }
 
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)
@@ -2055,7 +2158,10 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         UnityEngine.Object? target,
         int targetInstanceId,
         string methodName,
-        int mode)
+        int mode,
+        UnityEngine.Object? objectArg = null,
+        int objectArgInstanceId = 0,
+        bool includeArguments = false)
     {
         var callProp = new SerializedProperty { propertyType = SerializedPropertyType.Generic };
         callProp.SetRelativeProperty("m_Target", new SerializedProperty
@@ -2074,6 +2180,17 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
             propertyType = SerializedPropertyType.Enum,
             intValue = mode
         });
+        if (includeArguments)
+        {
+            var argsProp = new SerializedProperty { propertyType = SerializedPropertyType.Generic };
+            argsProp.SetRelativeProperty("m_ObjectArgument", new SerializedProperty
+            {
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = objectArg,
+                objectReferenceInstanceIDValue = objectArgInstanceId
+            });
+            callProp.SetRelativeProperty("m_Arguments", argsProp);
+        }
         return callProp;
     }
 }
