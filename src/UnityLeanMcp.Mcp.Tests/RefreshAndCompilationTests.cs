@@ -617,5 +617,57 @@ namespace UnityLeanMcp.Mcp.Tests
                 UnityCommandGate.ForceReset();
             }
         }
+
+        [Theory]
+        [InlineData(OperationKinds.Eval, "BUSY eval")]
+        [InlineData(OperationKinds.Test, "BUSY test")]
+        public void PollRefreshHandler_WhenNonRefreshOperationSharesOperationId_ReturnsBusy(string activeKind, string expectedResponse)
+        {
+            const string sharedOpId = "shared-op-id-123";
+            UnityCommandGate.ForceReset();
+            try
+            {
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(activeKind, sharedOpId, OperationStatus.Running, out _));
+                var handler = new PollRefreshHandler();
+
+                using var stream = new MemoryStream();
+                using var writer = new StreamWriter(stream) { AutoFlush = true };
+                handler.Handle(sharedOpId, writer);
+                string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                Assert.Equal(expectedResponse, response);
+            }
+            finally
+            {
+                UnityCommandGate.ForceReset();
+            }
+        }
+
+        [Theory]
+        [InlineData("refresh")]
+        [InlineData("REFRESH")]
+        [InlineData("Refresh")]
+        [InlineData("recompile")]
+        [InlineData("RECOMPILE")]
+        [InlineData("Recompile")]
+        public void PollRefreshHandler_WhenRefreshOrRecompileSharesOperationIdCaseInsensitive_ReturnsCompiling(string activeKind)
+        {
+            const string refreshOpId = "refresh-op-id-456";
+            UnityCommandGate.ForceReset();
+            try
+            {
+                Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(activeKind, refreshOpId, OperationStatus.Refreshing, out _));
+                var handler = new PollRefreshHandler();
+
+                using var stream = new MemoryStream();
+                using var writer = new StreamWriter(stream) { AutoFlush = true };
+                handler.Handle(refreshOpId, writer);
+                string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+                Assert.Equal("COMPILING", response);
+            }
+            finally
+            {
+                UnityCommandGate.ForceReset();
+            }
+        }
     }
 }

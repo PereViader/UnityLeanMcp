@@ -36,7 +36,7 @@ namespace UnityLeanMcp
             {
                 if (isCorrelated)
                 {
-                    if (operation.OperationId == operationId)
+                    if (operation.OperationId == operationId && IsRefreshOrRecompile(operation.Kind))
                     {
                         if (operation.Status == OperationStatus.Interrupted)
                         {
@@ -49,7 +49,7 @@ namespace UnityLeanMcp
                 }
                 else
                 {
-                    if (operation.Kind == OperationKinds.Refresh || operation.Kind == OperationKinds.Recompile)
+                    if (IsRefreshOrRecompile(operation.Kind))
                     {
                         return "COMPILING";
                     }
@@ -108,6 +108,12 @@ namespace UnityLeanMcp
             }
 
             return "READY";
+        }
+
+        private static bool IsRefreshOrRecompile(string kind)
+        {
+            return string.Equals(kind, OperationKinds.Refresh, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(kind, OperationKinds.Recompile, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool FileExistsSafe(string path)
