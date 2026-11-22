@@ -126,9 +126,7 @@ internal sealed class BoundedTextBuilder
             return;
         }
 
-        int prefixLength = McpOutputLimits.GetSafePrefixLength(value, maxCharacters - marker.Length);
-        AppendCore(value, 0, prefixLength);
-        AppendCore(marker, 0, marker.Length);
+        AppendTruncatedWithMarker(value, maxCharacters, marker);
     }
 
     public void AppendTrimmedBounded(string? value, int maxCharacters, string marker)
@@ -136,6 +134,11 @@ internal sealed class BoundedTextBuilder
         if (string.IsNullOrEmpty(value))
         {
             return;
+        }
+
+        if (maxCharacters < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxCharacters));
         }
 
         int length = value.Length;
@@ -152,6 +155,17 @@ internal sealed class BoundedTextBuilder
         if (length <= maxCharacters)
         {
             AppendCore(value, 0, length);
+            return;
+        }
+
+        AppendTruncatedWithMarker(value, maxCharacters, marker);
+    }
+
+    private void AppendTruncatedWithMarker(string value, int maxCharacters, string marker)
+    {
+        if (marker.Length >= maxCharacters)
+        {
+            AppendCore(marker, 0, McpOutputLimits.GetSafePrefixLength(marker, maxCharacters));
             return;
         }
 
@@ -286,20 +300,11 @@ internal sealed class BoundedTextBuilder
 
         while (index < endIndex)
         {
-            int elementLength = 1;
-            if (char.IsHighSurrogate(value[index]))
-            {
-                if (index + 1 >= endIndex || !char.IsLowSurrogate(value[index + 1]))
-                {
-                    break;
-                }
-
-                elementLength = 2;
-            }
-            else if (char.IsLowSurrogate(value[index]))
-            {
-                break;
-            }
+            int elementLength = char.IsHighSurrogate(value[index]) &&
+                                index + 1 < endIndex &&
+                                char.IsLowSurrogate(value[index + 1])
+                ? 2
+                : 1;
 
             if (characters + elementLength > maxCharacters)
             {
