@@ -21,6 +21,7 @@ public class UnityInspectConsoleTests
     private const int ModeScriptCompileWarning = 1 << 12;
     private const int ModeScriptingException = 1 << 17;
     private const int ModeGraphCompileError = 1 << 20;
+    private const int ModeScriptingAssertion = 1 << 21;
 
     [Fact]
     public void Console_WhenEmpty_ReturnsEmptyMessageAndPairsStartEnd()
@@ -60,6 +61,7 @@ public class UnityInspectConsoleTests
             new LogEntries.StubEntry { Message = "m_compile_err", Mode = ModeScriptCompileError },
             new LogEntries.StubEntry { Message = "m_exception", Mode = ModeScriptingException },
             new LogEntries.StubEntry { Message = "m_graph_err", Mode = ModeGraphCompileError },
+            new LogEntries.StubEntry { Message = "m_script_assert", Mode = ModeScriptingAssertion },
             new LogEntries.StubEntry { Message = "m_import_warn", Mode = ModeAssetImportWarning },
             new LogEntries.StubEntry { Message = "m_script_warn", Mode = ModeScriptingWarning },
             new LogEntries.StubEntry { Message = "m_compile_warn", Mode = ModeScriptCompileWarning },
@@ -69,18 +71,39 @@ public class UnityInspectConsoleTests
         });
 
         string all = Inspect.Console();
-        Assert.Contains("Console entries (14 shown, 14 unique matched of 14 total; 8 error, 3 warning, 3 log):", all);
+        Assert.Contains("Console entries (15 shown, 15 unique matched of 15 total; 9 error, 3 warning, 3 log):", all);
         Assert.Contains("[Error] m_assert", all);
         Assert.Contains("[Error] m_exception", all);
         Assert.Contains("[Error] m_graph_err", all);
+        Assert.Contains("[Error] m_script_assert", all);
         Assert.Contains("[Warning] m_compile_warn", all);
         Assert.Contains("[Log] m_fallback", all);
 
         string errorsAndWarnings = Inspect.Console(severity: ConsoleSeverity.Error | ConsoleSeverity.Warning);
-        Assert.Contains("Console entries (11 shown, 11 unique matched of 14 total; 8 error, 3 warning, 3 log):", errorsAndWarnings);
+        Assert.Contains("Console entries (12 shown, 12 unique matched of 15 total; 9 error, 3 warning, 3 log):", errorsAndWarnings);
         Assert.DoesNotContain("[Log]", errorsAndWarnings);
         Assert.Contains("[Error] m_exception", errorsAndWarnings);
+        Assert.Contains("[Error] m_script_assert", errorsAndWarnings);
         Assert.Contains("[Warning] m_script_warn", errorsAndWarnings);
+    }
+
+    [Fact]
+    public void Console_ScriptingAssertionMode_IsClassifiedAsErrorAndReturnedByErrorFilter()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.AddRange(new[]
+        {
+            new LogEntries.StubEntry { Message = "Assertion failed", Mode = ModeScriptingAssertion },
+            new LogEntries.StubEntry { Message = "Normal log", Mode = ModeScriptingLog },
+            new LogEntries.StubEntry { Message = "Normal warning", Mode = ModeScriptingWarning }
+        });
+
+        string errorsOnly = Inspect.Console(ConsoleSeverity.Error);
+
+        Assert.Contains("Console entries (1 shown, 1 unique matched of 3 total; 1 error, 1 warning, 1 log):", errorsOnly);
+        Assert.Contains("[Error] Assertion failed", errorsOnly);
+        Assert.DoesNotContain("Normal log", errorsOnly);
+        Assert.DoesNotContain("Normal warning", errorsOnly);
     }
 
     [Fact]

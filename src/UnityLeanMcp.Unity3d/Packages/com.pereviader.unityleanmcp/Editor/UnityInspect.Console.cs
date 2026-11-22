@@ -40,7 +40,8 @@ namespace UnityLeanMcp
             (1 << 8) |  // ScriptingError
             (1 << 11) | // ScriptCompileError
             (1 << 17) | // ScriptingException
-            (1 << 20);  // GraphCompileError
+            (1 << 20) | // GraphCompileError
+            (1 << 21);  // ScriptingAssertion
 
         private const int ConsoleModeWarningMask =
             (1 << 7) |  // AssetImportWarning
