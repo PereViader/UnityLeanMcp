@@ -348,6 +348,50 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public void Selection_WithMaxItems_TruncatesMultiSelectionList()
+    {
+        var objects = new UnityEngine.Object[5];
+        for (int i = 0; i < objects.Length; i++)
+        {
+            objects[i] = new GameObject($"Item{i + 1}");
+        }
+
+        Selection.activeGameObject = (GameObject)objects[0];
+        Selection.activeObject = objects[0];
+        Selection.objects = objects;
+
+        string result = Inspect.Selection(maxItems: 2);
+
+        Assert.Contains("Total Selected Objects (5):", result);
+        Assert.Contains("- \"Item1\"", result);
+        Assert.Contains("- \"Item2\"", result);
+        Assert.DoesNotContain("- \"Item3\"", result);
+        Assert.DoesNotContain("- \"Item4\"", result);
+        Assert.DoesNotContain("- \"Item5\"", result);
+        Assert.Contains("  ... and 3 more", result);
+    }
+
+    [Fact]
+    public void Selection_WithNonPositiveMaxItems_ClampsToOne()
+    {
+        var go1 = new GameObject("Item1");
+        var go2 = new GameObject("Item2");
+        var go3 = new GameObject("Item3");
+
+        Selection.activeGameObject = go1;
+        Selection.activeObject = go1;
+        Selection.objects = new UnityEngine.Object[] { go1, go2, go3 };
+
+        string result = Inspect.Selection(maxItems: 0);
+
+        Assert.Contains("Total Selected Objects (3):", result);
+        Assert.Contains("- \"Item1\"", result);
+        Assert.DoesNotContain("- \"Item2\"", result);
+        Assert.DoesNotContain("- \"Item3\"", result);
+        Assert.Contains("  ... and 2 more", result);
+    }
+
+    [Fact]
     public void MainCamera_WhenNoCameraInScene_ReturnsCleanNotification()
     {
         Camera.main = null;

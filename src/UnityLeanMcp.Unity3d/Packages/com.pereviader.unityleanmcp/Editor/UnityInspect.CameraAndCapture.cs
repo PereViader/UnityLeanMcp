@@ -128,7 +128,7 @@ namespace UnityLeanMcp
             if (totalCount > 1)
             {
                 sb.AppendLine($"Total Selected Objects ({totalCount}):");
-                int limit = Math.Min(validObjects.Count, 10);
+                int limit = Math.Min(validObjects.Count, maxItems);
                 for (int i = 0; i < limit; i++)
                 {
                     var o = validObjects[i];
@@ -138,9 +138,9 @@ namespace UnityLeanMcp
                     try { oType = o.GetType().Name; } catch { }
                     sb.AppendLine($"  - \"{oName}\" ({oType})");
                 }
-                if (validObjects.Count > 10)
+                if (validObjects.Count > maxItems)
                 {
-                    sb.AppendLine($"  ... and {validObjects.Count - 10} more");
+                    sb.AppendLine($"  ... and {validObjects.Count - maxItems} more");
                 }
             }
 
