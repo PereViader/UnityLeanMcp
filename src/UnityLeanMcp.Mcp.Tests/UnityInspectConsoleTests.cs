@@ -438,4 +438,78 @@ public class UnityInspectConsoleTests
         Assert.Contains("Console entries (1 shown, 1 unique matched of 1 total; 0 error, 0 warning, 1 log):", result);
         Assert.DoesNotContain("Console UI filters hiding", result);
     }
+
+    [Fact]
+    public void Console_UsesCompiledDelegatesForLogEntriesApi()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.Add(new LogEntries.StubEntry { Message = "Hello", Mode = ModeScriptingLog });
+
+        string result = Inspect.Console();
+
+        Assert.Contains("[Log] Hello", result);
+        Assert.True(Inspect.AreLogEntriesDelegatesCompiledForTesting());
+    }
+
+    [Fact]
+    public void Console_SeverityFilteringCountsInternalLogsAcrossFilteredOutSeverities()
+    {
+        using var scope = new UnityInspectTestScope();
+        LogEntries.Entries.AddRange(new[]
+        {
+            new LogEntries.StubEntry { Message = "UnityLeanMcp: Internal error", Mode = ModeScriptingError },
+            new LogEntries.StubEntry { Message = "[12:00:00] UnityLeanMcp: Internal warning", Mode = ModeScriptingWarning, Count = 2 },
+            new LogEntries.StubEntry { Message = "UnityLeanMcp: Internal log", Mode = ModeScriptingLog, Count = 3 },
+            new LogEntries.StubEntry { Message = "User error", Mode = ModeScriptingError },
+            new LogEntries.StubEntry { Message = "User warning", Mode = ModeScriptingWarning },
+            new LogEntries.StubEntry { Message = "User log", Mode = ModeScriptingLog }
+        });
+
+        string result = Inspect.Console(severity: ConsoleSeverity.Error);
+
+        Assert.Contains("Console entries (1 shown, 1 unique matched of 3 total; 1 error, 1 warning, 1 log):", result);
+        Assert.Contains("[Error] User error", result);
+        Assert.DoesNotContain("UnityLeanMcp:", result);
+        Assert.DoesNotContain("User warning", result);
+        Assert.DoesNotContain("User log", result);
+        Assert.DoesNotContain("Console UI filters hiding", result);
+    }
+
+    [Fact]
+    public void Console_SeverityFilteringHandlesLargeEntryCountsCleanly()
+    {
+        using var scope = new UnityInspectTestScope();
+        for (int i = 0; i < 20000; i++)
+        {
+            LogEntries.Entries.Add(new LogEntries.StubEntry
+            {
+                Message = $"[12:00:00.000] Noise log {i}\nUnityEngine.Debug:Log (object)\nNoiseSystem:Tick () (at Assets/Scripts/Noise.cs:10)",
+                File = "Assets/Scripts/Noise.cs",
+                Line = 10,
+                Mode = ModeScriptingLog
+            });
+        }
+
+        LogEntries.Entries.Add(new LogEntries.StubEntry
+        {
+            Message = "Critical failure A\nGame:Run () (at Assets/Scripts/Game.cs:42)",
+            File = "Assets/Scripts/Game.cs",
+            Line = 42,
+            Mode = ModeScriptingError
+        });
+        LogEntries.Entries.Add(new LogEntries.StubEntry
+        {
+            Message = "Critical failure B\nGame:Run () (at Assets/Scripts/Game.cs:84)",
+            File = "Assets/Scripts/Game.cs",
+            Line = 84,
+            Mode = ModeScriptingException
+        });
+
+        string result = Inspect.Console(severity: ConsoleSeverity.Error);
+
+        Assert.Contains("Console entries (2 shown, 2 unique matched of 20002 total; 2 error, 0 warning, 20000 log):", result);
+        Assert.Contains("[Error] Critical failure A (Assets/Scripts/Game.cs:42)", result);
+        Assert.Contains("[Error] Critical failure B (Assets/Scripts/Game.cs:84)", result);
+        Assert.DoesNotContain("Noise log", result);
+    }
 }

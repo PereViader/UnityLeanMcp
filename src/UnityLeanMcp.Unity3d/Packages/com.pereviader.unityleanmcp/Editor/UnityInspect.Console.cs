@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -30,6 +31,7 @@ namespace UnityLeanMcp
         private const int DefaultConsoleMaxItems = 50;
         private const int MaxConsoleMessageLineCharacters = 500;
         private const int MaxConsoleStackTraceLines = 30;
+        private const string InternalHarnessLogPrefix = "UnityLeanMcp:";
 
         // UnityEditor.ConsoleWindow.Mode bit flags
         private const int ConsoleModeErrorMask =
@@ -60,20 +62,23 @@ namespace UnityLeanMcp
             @"\(at\s+([^():\r\n]+):(\d+)\)\s*$",
             RegexOptions.CultureInvariant);
 
+        private delegate void GetCountsByTypeDelegate(ref int errorCount, ref int warningCount, ref int logCount);
+
         private sealed class LogEntriesApi
         {
-            public readonly MethodInfo StartGettingEntries;
-            public readonly MethodInfo EndGettingEntries;
-            public readonly MethodInfo GetCount;
-            public readonly MethodInfo GetEntryInternal;
-            public readonly MethodInfo GetEntryCount;
-            public readonly MethodInfo GetCountsByType;
-            public readonly MethodInfo GetFilteringText;
+            public readonly Action StartGettingEntries;
+            public readonly Action EndGettingEntries;
+            public readonly Func<int> GetCount;
+            public readonly Func<int, object, bool> GetEntryInternal;
+            public readonly Func<int, int> GetEntryCount;
+            public readonly GetCountsByTypeDelegate GetCountsByType;
+            public readonly Func<string> GetFilteringText;
             public readonly Type LogEntryType;
-            public readonly MemberInfo MessageMember;
-            public readonly MemberInfo FileMember;
-            public readonly MemberInfo LineMember;
-            public readonly MemberInfo ModeMember;
+            public readonly Func<object, string> ReadMessage;
+            public readonly Func<object, string> ReadFile;
+            public readonly Func<object, int> ReadLine;
+            public readonly Func<object, int> ReadMode;
+            public readonly bool UsesCompiledDelegates;
 
             public bool IsValid =>
                 StartGettingEntries != null &&
@@ -81,22 +86,23 @@ namespace UnityLeanMcp
                 GetCount != null &&
                 GetEntryInternal != null &&
                 LogEntryType != null &&
-                MessageMember != null &&
-                ModeMember != null;
+                ReadMessage != null &&
+                ReadMode != null;
 
             public LogEntriesApi(
-                MethodInfo startGettingEntries,
-                MethodInfo endGettingEntries,
-                MethodInfo getCount,
-                MethodInfo getEntryInternal,
-                MethodInfo getEntryCount,
-                MethodInfo getCountsByType,
-                MethodInfo getFilteringText,
+                Action startGettingEntries,
+                Action endGettingEntries,
+                Func<int> getCount,
+                Func<int, object, bool> getEntryInternal,
+                Func<int, int> getEntryCount,
+                GetCountsByTypeDelegate getCountsByType,
+                Func<string> getFilteringText,
                 Type logEntryType,
-                MemberInfo messageMember,
-                MemberInfo fileMember,
-                MemberInfo lineMember,
-                MemberInfo modeMember)
+                Func<object, string> readMessage,
+                Func<object, string> readFile,
+                Func<object, int> readLine,
+                Func<object, int> readMode,
+                bool usesCompiledDelegates)
             {
                 StartGettingEntries = startGettingEntries;
                 EndGettingEntries = endGettingEntries;
@@ -106,10 +112,11 @@ namespace UnityLeanMcp
                 GetCountsByType = getCountsByType;
                 GetFilteringText = getFilteringText;
                 LogEntryType = logEntryType;
-                MessageMember = messageMember;
-                FileMember = fileMember;
-                LineMember = lineMember;
-                ModeMember = modeMember;
+                ReadMessage = readMessage;
+                ReadFile = readFile;
+                ReadLine = readLine;
+                ReadMode = readMode;
+                UsesCompiledDelegates = usesCompiledDelegates;
             }
         }
 
@@ -236,43 +243,27 @@ namespace UnityLeanMcp
             bool started = false;
             try
             {
-                api.StartGettingEntries.Invoke(null, null);
+                api.StartGettingEntries();
                 started = true;
 
-                int rawCount = Convert.ToInt32(api.GetCount.Invoke(null, null), CultureInfo.InvariantCulture);
+                int rawCount = api.GetCount();
                 if (rawCount > 0)
                 {
                     object entryInstance = Activator.CreateInstance(api.LogEntryType);
-                    object[] getEntryArgs = new object[2];
-                    object[] getCountArgs = api.GetEntryCount != null ? new object[1] : null;
 
                     for (int i = 0; i < rawCount; i++)
                     {
-                        getEntryArgs[0] = i;
-                        getEntryArgs[1] = entryInstance;
-                        object gotEntryObj = api.GetEntryInternal.Invoke(null, getEntryArgs);
-                        if (gotEntryObj is bool gotEntry && !gotEntry)
+                        if (!api.GetEntryInternal(i, entryInstance))
                         {
                             continue;
                         }
 
-                        // Refresh reference in case LogEntry is a value type or ref-like wrapper
-                        object currentEntry = getEntryArgs[1] ?? entryInstance;
-                        string rawMessage = ReadStringMember(api.MessageMember, currentEntry);
-                        string rawFile = ReadStringMember(api.FileMember, currentEntry);
-                        int line = ReadIntMember(api.LineMember, currentEntry);
-                        int mode = ReadIntMember(api.ModeMember, currentEntry);
-
-                        ExtractTimestampAndSplitMessage(
-                            rawMessage,
-                            out string timestamp,
-                            out string primaryMessage,
-                            out string stackTrace);
-
-                        int count = ReadEntryCount(api, getCountArgs, i);
+                        int mode = api.ReadMode(entryInstance);
                         ConsoleSeverity entrySeverity = MapModeToSeverity(mode);
+                        int count = ReadEntryCount(api, i);
+                        string rawMessage = api.ReadMessage(entryInstance);
 
-                        if (IsInternalHarnessLog(rawMessage, primaryMessage))
+                        if (IsInternalHarnessLog(rawMessage))
                         {
                             switch (entrySeverity)
                             {
@@ -307,6 +298,15 @@ namespace UnityLeanMcp
                         {
                             continue;
                         }
+
+                        string rawFile = api.ReadFile(entryInstance);
+                        int line = api.ReadLine(entryInstance);
+
+                        ExtractTimestampAndSplitMessage(
+                            rawMessage,
+                            out string timestamp,
+                            out string primaryMessage,
+                            out string stackTrace);
 
                         string normalizedFile = NormalizeConsoleFilePath(rawFile);
                         if (string.IsNullOrEmpty(normalizedFile) && !string.IsNullOrEmpty(stackTrace))
@@ -365,7 +365,7 @@ namespace UnityLeanMcp
                 {
                     try
                     {
-                        api.EndGettingEntries.Invoke(null, null);
+                        api.EndGettingEntries();
                     }
                     catch
                     {
@@ -499,23 +499,46 @@ namespace UnityLeanMcp
                     MemberInfo lineMember = FindFieldOrProperty(logEntryType, "line", instanceFlags);
                     MemberInfo modeMember = FindFieldOrProperty(logEntryType, "mode", instanceFlags);
 
-                    var candidate = new LogEntriesApi(
-                        startGettingEntries,
-                        endGettingEntries,
-                        getCount,
-                        getEntryInternal,
-                        getEntryCount,
-                        getCountsByType,
-                        getFilteringText,
-                        logEntryType,
-                        messageMember,
-                        fileMember,
-                        lineMember,
-                        modeMember);
-
-                    if (candidate.IsValid)
+                    if (startGettingEntries != null &&
+                        endGettingEntries != null &&
+                        getCount != null &&
+                        getEntryInternal != null &&
+                        messageMember != null &&
+                        modeMember != null)
                     {
-                        s_LogEntriesApi = candidate;
+                        bool allCompiled = true;
+
+                        Action startAction = CompileVoidCall(startGettingEntries, ref allCompiled);
+                        Action endAction = CompileVoidCall(endGettingEntries, ref allCompiled);
+                        Func<int> getCountFunc = CompileIntCall(getCount, ref allCompiled);
+                        Func<int, object, bool> getEntryFunc = CompileGetEntryInternal(getEntryInternal, logEntryType, ref allCompiled);
+                        Func<int, int> getEntryCountFunc = CompileIntByIntCall(getEntryCount, ref allCompiled);
+                        GetCountsByTypeDelegate getCountsByTypeDel = CompileGetCountsByType(getCountsByType, ref allCompiled);
+                        Func<string> getFilteringTextFunc = CompileStringCall(getFilteringText, ref allCompiled);
+                        Func<object, string> readMessageFunc = CompileStringMemberReader(messageMember, logEntryType, ref allCompiled);
+                        Func<object, string> readFileFunc = CompileStringMemberReader(fileMember, logEntryType, ref allCompiled);
+                        Func<object, int> readLineFunc = CompileIntMemberReader(lineMember, logEntryType, ref allCompiled);
+                        Func<object, int> readModeFunc = CompileIntMemberReader(modeMember, logEntryType, ref allCompiled);
+
+                        var candidate = new LogEntriesApi(
+                            startAction,
+                            endAction,
+                            getCountFunc,
+                            getEntryFunc,
+                            getEntryCountFunc,
+                            getCountsByTypeDel,
+                            getFilteringTextFunc,
+                            logEntryType,
+                            readMessageFunc,
+                            readFileFunc,
+                            readLineFunc,
+                            readModeFunc,
+                            allCompiled);
+
+                        if (candidate.IsValid)
+                        {
+                            s_LogEntriesApi = candidate;
+                        }
                     }
                 }
 
@@ -524,24 +547,25 @@ namespace UnityLeanMcp
             }
         }
 
-        private static int ReadEntryCount(LogEntriesApi api, object[] getCountArgs, int row)
+        internal static bool AreLogEntriesDelegatesCompiledForTesting()
         {
-            if (api.GetEntryCount == null || getCountArgs == null)
+            LogEntriesApi api = ResolveLogEntriesApi();
+            return api != null && api.IsValid && api.UsesCompiledDelegates;
+        }
+
+        private static int ReadEntryCount(LogEntriesApi api, int row)
+        {
+            if (api.GetEntryCount == null)
             {
                 return 1;
             }
 
             try
             {
-                getCountArgs[0] = row;
-                object countObj = api.GetEntryCount.Invoke(null, getCountArgs);
-                if (countObj != null)
+                int nativeCount = api.GetEntryCount(row);
+                if (nativeCount >= 1)
                 {
-                    int nativeCount = Convert.ToInt32(countObj, CultureInfo.InvariantCulture);
-                    if (nativeCount >= 1)
-                    {
-                        return nativeCount;
-                    }
+                    return nativeCount;
                 }
             }
             catch
@@ -567,11 +591,7 @@ namespace UnityLeanMcp
 
             try
             {
-                object[] args = new object[] { 0, 0, 0 };
-                api.GetCountsByType.Invoke(null, args);
-                errorCount = Convert.ToInt32(args[0], CultureInfo.InvariantCulture);
-                warningCount = Convert.ToInt32(args[1], CultureInfo.InvariantCulture);
-                logCount = Convert.ToInt32(args[2], CultureInfo.InvariantCulture);
+                api.GetCountsByType(ref errorCount, ref warningCount, ref logCount);
                 return true;
             }
             catch
@@ -592,7 +612,7 @@ namespace UnityLeanMcp
 
             try
             {
-                return api.GetFilteringText.Invoke(null, null) as string;
+                return api.GetFilteringText();
             }
             catch
             {
@@ -677,6 +697,321 @@ namespace UnityLeanMcp
             return singleLine;
         }
 
+        private static Action CompileVoidCall(MethodInfo method, ref bool allCompiled)
+        {
+            if (method == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (method.GetParameters().Length == 0)
+                {
+                    MethodCallExpression call = Expression.Call(method);
+                    Expression body = method.ReturnType == typeof(void)
+                        ? (Expression)call
+                        : Expression.Block(call, Expression.Empty());
+                    return Expression.Lambda<Action>(body).Compile();
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return () => method.Invoke(null, null);
+        }
+
+        private static Func<int> CompileIntCall(MethodInfo method, ref bool allCompiled)
+        {
+            if (method == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (method.GetParameters().Length == 0)
+                {
+                    MethodCallExpression call = Expression.Call(method);
+                    if (method.ReturnType == typeof(int))
+                    {
+                        return Expression.Lambda<Func<int>>(call).Compile();
+                    }
+
+                    if (IsConvertibleToInt(method.ReturnType))
+                    {
+                        return Expression.Lambda<Func<int>>(Expression.Convert(call, typeof(int))).Compile();
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return () => Convert.ToInt32(method.Invoke(null, null), CultureInfo.InvariantCulture);
+        }
+
+        private static Func<int, object, bool> CompileGetEntryInternal(
+            MethodInfo method,
+            Type logEntryType,
+            ref bool allCompiled)
+        {
+            if (method == null || logEntryType == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (!logEntryType.IsValueType &&
+                    parameters.Length == 2 &&
+                    parameters[0].ParameterType == typeof(int) &&
+                    parameters[1].ParameterType == logEntryType)
+                {
+                    ParameterExpression rowParam = Expression.Parameter(typeof(int), "row");
+                    ParameterExpression entryParam = Expression.Parameter(typeof(object), "entry");
+                    MethodCallExpression call = Expression.Call(
+                        method,
+                        rowParam,
+                        Expression.Convert(entryParam, logEntryType));
+
+                    if (method.ReturnType == typeof(bool))
+                    {
+                        return Expression.Lambda<Func<int, object, bool>>(call, rowParam, entryParam).Compile();
+                    }
+
+                    if (method.ReturnType == typeof(void))
+                    {
+                        BlockExpression block = Expression.Block(call, Expression.Constant(true));
+                        return Expression.Lambda<Func<int, object, bool>>(block, rowParam, entryParam).Compile();
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return (row, entry) =>
+            {
+                object result = method.Invoke(null, new object[] { row, entry });
+                return !(result is bool gotEntry && !gotEntry);
+            };
+        }
+
+        private static Func<int, int> CompileIntByIntCall(MethodInfo method, ref bool allCompiled)
+        {
+            if (method == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (parameters.Length == 1 && parameters[0].ParameterType == typeof(int))
+                {
+                    ParameterExpression rowParam = Expression.Parameter(typeof(int), "row");
+                    MethodCallExpression call = Expression.Call(method, rowParam);
+                    if (method.ReturnType == typeof(int))
+                    {
+                        return Expression.Lambda<Func<int, int>>(call, rowParam).Compile();
+                    }
+
+                    if (IsConvertibleToInt(method.ReturnType))
+                    {
+                        return Expression.Lambda<Func<int, int>>(Expression.Convert(call, typeof(int)), rowParam).Compile();
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return row =>
+            {
+                object countObj = method.Invoke(null, new object[] { row });
+                return countObj != null ? Convert.ToInt32(countObj, CultureInfo.InvariantCulture) : 1;
+            };
+        }
+
+        private static GetCountsByTypeDelegate CompileGetCountsByType(MethodInfo method, ref bool allCompiled)
+        {
+            if (method == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                Type intByRef = typeof(int).MakeByRefType();
+                if (parameters.Length == 3 &&
+                    parameters[0].ParameterType == intByRef &&
+                    parameters[1].ParameterType == intByRef &&
+                    parameters[2].ParameterType == intByRef &&
+                    method.ReturnType == typeof(void))
+                {
+                    ParameterExpression errParam = Expression.Parameter(intByRef, "errorCount");
+                    ParameterExpression warnParam = Expression.Parameter(intByRef, "warningCount");
+                    ParameterExpression logParam = Expression.Parameter(intByRef, "logCount");
+                    MethodCallExpression call = Expression.Call(method, errParam, warnParam, logParam);
+                    return Expression.Lambda<GetCountsByTypeDelegate>(call, errParam, warnParam, logParam).Compile();
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return (ref int errorCount, ref int warningCount, ref int logCount) =>
+            {
+                object[] args = new object[] { 0, 0, 0 };
+                method.Invoke(null, args);
+                errorCount = Convert.ToInt32(args[0], CultureInfo.InvariantCulture);
+                warningCount = Convert.ToInt32(args[1], CultureInfo.InvariantCulture);
+                logCount = Convert.ToInt32(args[2], CultureInfo.InvariantCulture);
+            };
+        }
+
+        private static Func<string> CompileStringCall(MethodInfo method, ref bool allCompiled)
+        {
+            if (method == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (method.GetParameters().Length == 0 && method.ReturnType == typeof(string))
+                {
+                    return Expression.Lambda<Func<string>>(Expression.Call(method)).Compile();
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return () => method.Invoke(null, null) as string;
+        }
+
+        private static Func<object, string> CompileStringMemberReader(
+            MemberInfo member,
+            Type instanceType,
+            ref bool allCompiled)
+        {
+            if (member == null)
+            {
+                return _ => string.Empty;
+            }
+
+            try
+            {
+                ParameterExpression instanceParam = Expression.Parameter(typeof(object), "instance");
+                Expression typedInstance = instanceType.IsValueType
+                    ? (Expression)Expression.Unbox(instanceParam, instanceType)
+                    : Expression.Convert(instanceParam, instanceType);
+                Expression memberAccess = CreateMemberAccess(typedInstance, member);
+                if (memberAccess != null && memberAccess.Type == typeof(string))
+                {
+                    Expression body = Expression.Condition(
+                        Expression.Equal(instanceParam, Expression.Constant(null, typeof(object))),
+                        Expression.Constant(string.Empty),
+                        Expression.Coalesce(memberAccess, Expression.Constant(string.Empty)));
+                    return Expression.Lambda<Func<object, string>>(body, instanceParam).Compile();
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return instance => ReadStringMember(member, instance);
+        }
+
+        private static Func<object, int> CompileIntMemberReader(
+            MemberInfo member,
+            Type instanceType,
+            ref bool allCompiled)
+        {
+            if (member == null)
+            {
+                return _ => 0;
+            }
+
+            try
+            {
+                ParameterExpression instanceParam = Expression.Parameter(typeof(object), "instance");
+                Expression typedInstance = instanceType.IsValueType
+                    ? (Expression)Expression.Unbox(instanceParam, instanceType)
+                    : Expression.Convert(instanceParam, instanceType);
+                Expression memberAccess = CreateMemberAccess(typedInstance, member);
+                if (memberAccess != null)
+                {
+                    Expression intExpr = null;
+                    if (memberAccess.Type == typeof(int))
+                    {
+                        intExpr = memberAccess;
+                    }
+                    else if (IsConvertibleToInt(memberAccess.Type))
+                    {
+                        intExpr = Expression.Convert(memberAccess, typeof(int));
+                    }
+
+                    if (intExpr != null)
+                    {
+                        Expression body = Expression.Condition(
+                            Expression.Equal(instanceParam, Expression.Constant(null, typeof(object))),
+                            Expression.Constant(0),
+                            intExpr);
+                        return Expression.Lambda<Func<object, int>>(body, instanceParam).Compile();
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            allCompiled = false;
+            return instance => ReadIntMember(member, instance);
+        }
+
+        private static Expression CreateMemberAccess(Expression instance, MemberInfo member)
+        {
+            if (member is FieldInfo field)
+            {
+                return Expression.Field(instance, field);
+            }
+
+            if (member is PropertyInfo property && property.GetIndexParameters().Length == 0)
+            {
+                MethodInfo getter = property.GetGetMethod(true);
+                if (getter != null)
+                {
+                    return Expression.Property(instance, property);
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsConvertibleToInt(Type type)
+        {
+            return type == typeof(int) ||
+                   type == typeof(uint) ||
+                   type == typeof(short) ||
+                   type == typeof(ushort) ||
+                   type == typeof(byte) ||
+                   type == typeof(sbyte) ||
+                   type.IsEnum;
+        }
+
         private static MemberInfo FindFieldOrProperty(Type type, string name, BindingFlags flags)
         {
             FieldInfo field = type.GetField(name, flags);
@@ -731,16 +1066,35 @@ namespace UnityLeanMcp
             return ConsoleSeverity.Log;
         }
 
-        private static bool IsInternalHarnessLog(string rawMessage, string primaryMessage)
+        private static bool IsInternalHarnessLog(string rawMessage)
         {
-            if (!string.IsNullOrEmpty(rawMessage) &&
-                rawMessage.StartsWith("UnityLeanMcp:", StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(rawMessage))
+            {
+                return false;
+            }
+
+            if (rawMessage.StartsWith(InternalHarnessLogPrefix, StringComparison.Ordinal))
             {
                 return true;
             }
 
-            return !string.IsNullOrEmpty(primaryMessage) &&
-                   primaryMessage.StartsWith("UnityLeanMcp:", StringComparison.Ordinal);
+            if (rawMessage[0] == '[')
+            {
+                Match tsMatch = ConsoleTimestampRegex.Match(rawMessage);
+                if (tsMatch.Success &&
+                    rawMessage.Length >= tsMatch.Length + InternalHarnessLogPrefix.Length &&
+                    string.CompareOrdinal(
+                        rawMessage,
+                        tsMatch.Length,
+                        InternalHarnessLogPrefix,
+                        0,
+                        InternalHarnessLogPrefix.Length) == 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void ExtractTimestampAndSplitMessage(
