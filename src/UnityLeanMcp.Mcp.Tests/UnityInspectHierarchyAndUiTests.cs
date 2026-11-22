@@ -1646,6 +1646,115 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         Assert.DoesNotContain(SerializedProperty.NextVisibleCalls, c => c.PropertyPath == "m_Points.Array.data[0]");
     }
 
+    [Fact]
+    public void Audit_ExplicitPrefabPath_DoesNotMatchDifferentPrefabStageByBareFilename()
+    {
+        var stageRoot = new GameObject("Button");
+        stageRoot.AddRawComponent(null);
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/UI/Button.prefab",
+            prefabContentsRoot = stageRoot,
+            scene = new Scene { isDirty = false }
+        };
+
+        var worldButton = new GameObject("WorldButton");
+        AssetDatabase.LoadMainAssetAtPathFunc = path => path == "Assets/Prefabs/World/Button.prefab" ? worldButton : null;
+        AssetDatabase.AssetPathToGUIDFunc = path => path == "Assets/Prefabs/World/Button.prefab" ? "guid-world-button" : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path => path == "Assets/Prefabs/World/Button.prefab" ? worldButton : null;
+        PrefabUtility.UnloadPrefabContentsAction = _ => { };
+
+        string worldAudit = Inspect.Audit("Assets/Prefabs/World/Button.prefab");
+        Assert.Contains("Audit of Prefab Asset \"Assets/Prefabs/World/Button.prefab\": 0 issues found", worldAudit);
+        Assert.DoesNotContain("Prefab Stage", worldAudit);
+
+        string worldBackslashAudit = Inspect.Audit("Assets\\Prefabs\\World\\Button.prefab");
+        Assert.Contains("Audit of Prefab Asset \"Assets/Prefabs/World/Button.prefab\": 0 issues found", worldBackslashAudit);
+
+        string nonMatchingExplicitPath = Inspect.Audit("Assets/Button");
+        Assert.Equal("(Audit target not found: \"Assets/Button\")", nonMatchingExplicitPath);
+
+        string exactStageAudit = Inspect.Audit("Assets/Prefabs/UI/Button.prefab");
+        Assert.Contains("Audit of Prefab Stage \"Assets/Prefabs/UI/Button.prefab\": 1 issue(s) found", exactStageAudit);
+
+        string bareNameAudit = Inspect.Audit("Button");
+        Assert.Contains("Audit of Prefab Stage \"Assets/Prefabs/UI/Button.prefab\": 1 issue(s) found", bareNameAudit);
+
+        string bareFileAudit = Inspect.Audit("Button.prefab");
+        Assert.Contains("Audit of Prefab Stage \"Assets/Prefabs/UI/Button.prefab\": 1 issue(s) found", bareFileAudit);
+    }
+
+    [Fact]
+    public void Audit_ExplicitFolderOrScenePath_DoesNotMatchLoadedSceneByBareFilename()
+    {
+        var sceneObj = new GameObject("SceneObj");
+        sceneObj.AddRawComponent(null);
+        SceneManager.Scenes.Add(new Scene
+        {
+            name = "Gameplay",
+            path = "Assets/Scenes/Gameplay.unity",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { sceneObj }
+        });
+
+        var enemyPrefab = new GameObject("Enemy");
+        AssetDatabase.IsValidFolderFunc = path => path == "Assets/Prefabs/Gameplay";
+        AssetDatabase.FindAssetsInFoldersFunc = (_, folders) =>
+            folders.Length == 1 && folders[0] == "Assets/Prefabs/Gameplay" ? new[] { "guid-enemy" } : Array.Empty<string>();
+        AssetDatabase.GUIDToAssetPathFunc = guid => guid == "guid-enemy" ? "Assets/Prefabs/Gameplay/Enemy.prefab" : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path => path == "Assets/Prefabs/Gameplay/Enemy.prefab" ? enemyPrefab : null;
+        PrefabUtility.UnloadPrefabContentsAction = _ => { };
+        AssetDatabase.LoadMainAssetAtPathFunc = _ => null;
+        AssetDatabase.AssetPathToGUIDFunc = _ => string.Empty;
+
+        string folderAudit = Inspect.Audit("Assets/Prefabs/Gameplay");
+        Assert.Contains("Audit of Folder \"Assets/Prefabs/Gameplay\" (1 prefab(s)): 0 issues found", folderAudit);
+        Assert.DoesNotContain("Audit of Scene \"Gameplay\"", folderAudit);
+
+        string wrongScenePathAudit = Inspect.Audit("Assets/Scenes/Other/Gameplay.unity");
+        Assert.Equal("(Audit target not found: \"Assets/Scenes/Other/Gameplay.unity\")", wrongScenePathAudit);
+
+        string exactScenePathAudit = Inspect.Audit("Assets/Scenes/Gameplay.unity");
+        Assert.Contains("Audit of Scene \"Gameplay\":", exactScenePathAudit);
+
+        string bareSceneNameAudit = Inspect.Audit("Gameplay");
+        Assert.Contains("Audit of Scene \"Gameplay\":", bareSceneNameAudit);
+
+        string bareSceneFileAudit = Inspect.Audit("Gameplay.unity");
+        Assert.Contains("Audit of Scene \"Gameplay\":", bareSceneFileAudit);
+    }
+
+    [Fact]
+    public void Hierarchy_ExplicitPath_DoesNotMatchPrefabStageOrLoadedSceneByBareFilename()
+    {
+        var stageRoot = new GameObject("Button");
+        PrefabStageUtility.GetCurrentPrefabStageFunc = () => new PrefabStage
+        {
+            assetPath = "Assets/Prefabs/UI/Button.prefab",
+            prefabContentsRoot = stageRoot,
+            scene = new Scene { isDirty = false }
+        };
+
+        var sceneRoot = new GameObject("GameplayRoot");
+        SceneManager.Scenes.Add(new Scene
+        {
+            name = "Gameplay",
+            path = "Assets/Scenes/Gameplay.unity",
+            isLoaded = true,
+            RootObjects = new List<GameObject> { sceneRoot }
+        });
+
+        Assert.Equal("(Scene \"Assets/Prefabs/World/Button.prefab\" is not currently loaded)", Inspect.Hierarchy("Assets/Prefabs/World/Button.prefab"));
+        Assert.Equal("(Scene \"Assets/Button\" is not currently loaded)", Inspect.Hierarchy("Assets/Button"));
+        Assert.Contains("=== Prefab Stage: \"Button\" (Asset: \"Assets/Prefabs/UI/Button.prefab\") ===", Inspect.Hierarchy("Assets/Prefabs/UI/Button.prefab"));
+        Assert.Contains("=== Prefab Stage: \"Button\" (Asset: \"Assets/Prefabs/UI/Button.prefab\") ===", Inspect.Hierarchy("Button"));
+
+        Assert.Equal("(Scene \"Assets/Scenes/Other/Gameplay.unity\" is not currently loaded)", Inspect.Hierarchy("Assets/Scenes/Other/Gameplay.unity"));
+        Assert.Equal("(Scene \"Assets/Prefabs/Gameplay\" is not currently loaded)", Inspect.Hierarchy("Assets/Prefabs/Gameplay"));
+        Assert.Contains("GameplayRoot", Inspect.Hierarchy("Assets/Scenes/Gameplay.unity"));
+        Assert.Contains("GameplayRoot", Inspect.Hierarchy("Gameplay"));
+    }
+
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)
     {
         var eventProp = new SerializedProperty

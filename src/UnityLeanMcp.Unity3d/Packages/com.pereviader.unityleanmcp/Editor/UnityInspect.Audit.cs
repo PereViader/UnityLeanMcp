@@ -82,10 +82,7 @@ namespace UnityLeanMcp
                     try { s = SceneManager.GetSceneAt(i); }
                     catch { continue; }
 
-                    if (string.Equals(s.name, clean, StringComparison.OrdinalIgnoreCase) ||
-                        (!clean.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) &&
-                         string.Equals(s.name, cleanNameWithoutExt, StringComparison.OrdinalIgnoreCase)) ||
-                        (!string.IsNullOrEmpty(s.path) && string.Equals(s.path.Replace('\\', '/'), clean, StringComparison.OrdinalIgnoreCase)))
+                    if (MatchesLoadedSceneQuery(s, clean, cleanNameWithoutExt))
                     {
                         if (!s.isLoaded)
                         {

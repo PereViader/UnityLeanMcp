@@ -94,9 +94,7 @@ namespace UnityLeanMcp
                 try { s = SceneManager.GetSceneAt(i); }
                 catch { continue; }
 
-                if (string.Equals(s.name, cleanQuery, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(s.name, cleanNameWithoutExt, StringComparison.OrdinalIgnoreCase) ||
-                    (!string.IsNullOrEmpty(s.path) && string.Equals(s.path.Replace('\\', '/'), cleanQuery, StringComparison.OrdinalIgnoreCase)))
+                if (MatchesLoadedSceneQuery(s, cleanQuery, cleanNameWithoutExt))
                 {
                     return InspectScene(s, maxDepth, maxItems, includeUiDetails);
                 }
@@ -176,6 +174,11 @@ namespace UnityLeanMcp
         private static bool MatchesPrefabStageQuery(PrefabStage stage, string cleanQuery, string cleanNameWithoutExt)
         {
             string stageAssetPath = GetPrefabStageAssetPath(stage).Replace('\\', '/');
+            if (cleanQuery.IndexOf('/') >= 0)
+            {
+                return string.Equals(cleanQuery, stageAssetPath, StringComparison.OrdinalIgnoreCase);
+            }
+
             string stageFileNameWithoutExt = Path.GetFileNameWithoutExtension(stageAssetPath);
             string rootName = stage.prefabContentsRoot != null ? stage.prefabContentsRoot.name : null;
 
@@ -185,6 +188,24 @@ namespace UnityLeanMcp
                 string.Equals(cleanQuery, stageAssetPath, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(cleanNameWithoutExt, stageFileNameWithoutExt, StringComparison.OrdinalIgnoreCase) ||
                 (!string.IsNullOrEmpty(rootName) && string.Equals(cleanQuery, rootName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool MatchesLoadedSceneQuery(Scene scene, string cleanQuery, string cleanNameWithoutExt)
+        {
+            if (!string.IsNullOrEmpty(scene.path) &&
+                string.Equals(scene.path.Replace('\\', '/'), cleanQuery, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (cleanQuery.IndexOf('/') >= 0)
+            {
+                return false;
+            }
+
+            return string.Equals(scene.name, cleanQuery, StringComparison.OrdinalIgnoreCase) ||
+                (!cleanQuery.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) &&
+                 string.Equals(scene.name, cleanNameWithoutExt, StringComparison.OrdinalIgnoreCase));
         }
 
         private static string InspectScene(Scene scene, int maxDepth, int maxItems, bool includeUiDetails = false)
