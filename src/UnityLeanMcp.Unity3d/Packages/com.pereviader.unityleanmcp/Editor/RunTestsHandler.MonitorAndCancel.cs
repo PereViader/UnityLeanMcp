@@ -356,8 +356,7 @@ namespace UnityLeanMcp
                 return true;
 
             var state = ReadRunningState();
-            return (state != null && state.runId == runId && state.status == OperationStatus.Cancelling) ||
-                WorkerThreadSnapshots.TryReadTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId);
+            return state != null && state.runId == runId && state.status == OperationStatus.Cancelling;
         }
 
         private static void BeginCancellationMonitoring(string runId)
@@ -439,13 +438,6 @@ namespace UnityLeanMcp
         {
             if (IsCancellationRequested(runId) && TryGetTestRunnerActiveState(out bool isActive) && !isActive)
                 WriteCancelledResult(runId);
-        }
-
-        internal static void ClearCancellationRequest(string runId)
-        {
-            if (string.IsNullOrEmpty(runId) || !WorkerThreadSnapshots.TryReadTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId))
-                return;
-            try { File.Delete(UnityLeanMcpPaths.TestCancellationFile); } catch { }
         }
 
         internal static void StopCancellationMonitoring(string runId)

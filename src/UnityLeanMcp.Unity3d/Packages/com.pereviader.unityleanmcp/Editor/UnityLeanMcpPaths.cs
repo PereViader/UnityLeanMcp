@@ -14,7 +14,6 @@ namespace UnityLeanMcp
         private static string s_DiagnosticsFile;
         private static string s_RefreshResultFile;
         private static string s_TestRunningFile;
-        private static string s_TestCancellationFile;
         private static string s_TestResultsFile;
         private static string s_EvalResultFile;
         private static string s_WorkerLogFile;
@@ -73,14 +72,6 @@ namespace UnityLeanMcp
             {
                 if (!s_Initialized) EnsureInitialized();
                 return s_TestRunningFile;
-            }
-        }
-        public static string TestCancellationFile
-        {
-            get
-            {
-                if (!s_Initialized) EnsureInitialized();
-                return s_TestCancellationFile;
             }
         }
         public static string TestResultsFile
@@ -177,7 +168,6 @@ namespace UnityLeanMcp
             s_DiagnosticsFile = Path.Combine(tempDir, "unity_compilation_errors.txt");
             s_RefreshResultFile = Path.Combine(tempDir, "unity_refresh_result.json");
             s_TestRunningFile = Path.Combine(tempDir, "unity_test_running.txt");
-            s_TestCancellationFile = Path.Combine(tempDir, "unity_test_cancellation.txt");
             s_TestResultsFile = Path.Combine(tempDir, "unity_test_results.json");
             s_EvalResultFile = Path.Combine(tempDir, "unity_eval_result.json");
             s_WorkerLogFile = Path.Combine(tempDir, "unity_lean_mcp_worker.log");

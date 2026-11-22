@@ -427,7 +427,7 @@ namespace UnityLeanMcp.Mcp.Tests
         [Fact]
         public void CompilationTracker_StateLatching_TransitionsCleanly()
         {
-            UnityLeanMcpCompilationTracker.CompilationRequested = false;
+            UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
             Assert.False(UnityLeanMcpCompilationTracker.AwaitingCompilationStart);
             Assert.False(UnityLeanMcpCompilationTracker.CompilationInProgress);
             Assert.False(UnityLeanMcpCompilationTracker.CompilationFinished);

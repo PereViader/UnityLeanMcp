@@ -204,74 +204,6 @@ namespace UnityLeanMcp
             return FileReadStatus.Unavailable;
         }
 
-        internal static bool TryReadTestCancellationRequest(string path, string runId)
-        {
-            if (!IsValidToken(runId) || string.IsNullOrEmpty(path) || !File.Exists(path))
-            {
-                return false;
-            }
-
-            string requestedRunId = ReadFileWithRetry(path);
-            return string.Equals(requestedRunId?.Trim(), runId, StringComparison.Ordinal);
-        }
-
-        internal static bool TryWriteTestCancellationRequest(string path, string runId)
-        {
-            if (!IsValidToken(runId) || string.IsNullOrEmpty(path))
-            {
-                return false;
-            }
-
-            try
-            {
-                string directory = Path.GetDirectoryName(path);
-                if (string.IsNullOrEmpty(directory))
-                {
-                    return false;
-                }
-
-                Directory.CreateDirectory(directory);
-                if (TryReadTestCancellationRequest(path, runId))
-                {
-                    return true;
-                }
-
-                string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                try
-                {
-                    File.WriteAllText(tempPath, runId, new UTF8Encoding(false));
-                    try
-                    {
-                        UnityLeanMcpStaticHistoryWriter.MoveWithOverwrite(tempPath, path);
-                        return true;
-                    }
-                    catch (IOException)
-                    {
-                        return TryReadTestCancellationRequest(path, runId);
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        return TryReadTestCancellationRequest(path, runId);
-                    }
-                }
-                finally
-                {
-                    if (File.Exists(tempPath))
-                    {
-                        try { File.Delete(tempPath); } catch { }
-                    }
-                }
-            }
-            catch (IOException)
-            {
-                return TryReadTestCancellationRequest(path, runId);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return TryReadTestCancellationRequest(path, runId);
-            }
-        }
-
         private static bool TryReadObject(string path, out Dictionary<string, object> values)
         {
             values = null;
@@ -329,24 +261,6 @@ namespace UnityLeanMcp
             }
 
             return 0;
-        }
-
-        private static bool IsValidToken(string value)
-        {
-            if (string.IsNullOrEmpty(value) || value.Length > 128)
-            {
-                return false;
-            }
-
-            foreach (char c in value)
-            {
-                if (!(char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.'))
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
     }
 }

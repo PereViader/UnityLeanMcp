@@ -67,12 +67,6 @@ namespace UnityLeanMcp
             {
                 ClearCachedRunState();
                 try { CommandHelper.DeleteFileWithRetry(UnityLeanMcpPaths.TestRunningFile); } catch { }
-                try
-                {
-                    if (File.Exists(UnityLeanMcpPaths.TestCancellationFile))
-                        File.Delete(UnityLeanMcpPaths.TestCancellationFile);
-                }
-                catch { }
             }
         }
 
@@ -487,7 +481,6 @@ namespace UnityLeanMcp
 
         internal static void CleanupTestRun(string runId)
         {
-            ClearCancellationRequest(runId);
             StopCancellationMonitoring(runId);
             StopActiveRunMonitoring(runId);
             DeleteRunningStateIfOwned(runId);

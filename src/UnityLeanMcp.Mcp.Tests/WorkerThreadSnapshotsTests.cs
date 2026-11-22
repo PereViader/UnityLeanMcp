@@ -113,27 +113,6 @@ public class WorkerThreadSnapshotsTests
         }
     }
 
-    [Fact]
-    public void TestCancellationRequest_IsAtomicAndIdempotentForOneRun()
-    {
-        string directory = Path.Combine(Path.GetTempPath(), "unity_worker_cancel_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, "unity_test_cancellation.txt");
-        try
-        {
-            Assert.True(WorkerThreadSnapshots.TryWriteTestCancellationRequest(path, "run-1"));
-            Assert.True(WorkerThreadSnapshots.TryWriteTestCancellationRequest(path, "run-1"));
-            Assert.True(WorkerThreadSnapshots.TryReadTestCancellationRequest(path, "run-1"));
-            Assert.True(WorkerThreadSnapshots.TryWriteTestCancellationRequest(path, "run-2"));
-            Assert.True(WorkerThreadSnapshots.TryReadTestCancellationRequest(path, "run-2"));
-            Assert.False(WorkerThreadSnapshots.TryReadTestCancellationRequest(path, "run-1"));
-        }
-        finally
-        {
-            try { Directory.Delete(directory, true); } catch { }
-        }
-    }
-
     private static string CreateTempFile(string content)
     {
         string path = Path.Combine(Path.GetTempPath(), "unity_worker_snapshot_" + Guid.NewGuid().ToString("N") + ".json");

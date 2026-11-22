@@ -142,12 +142,6 @@ namespace UnityLeanMcp
             }
         }
 
-        public static bool CompilationRequested
-        {
-            get => s_AwaitingCompilationStart;
-            set => AwaitingCompilationStart = value;
-        }
-
         private static volatile bool s_Initialized;
         private static readonly object s_InitLock = new object();
 

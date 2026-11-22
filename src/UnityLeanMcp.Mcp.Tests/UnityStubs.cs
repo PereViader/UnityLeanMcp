@@ -1478,29 +1478,6 @@ namespace UnityLeanMcp
         }
     }
 
-    internal sealed class CancelledRunIdSet
-    {
-        public void Add(string id)
-        {
-            if (!string.IsNullOrEmpty(id))
-            {
-                WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, id);
-            }
-        }
-
-        public void Clear()
-        {
-            try
-            {
-                if (System.IO.File.Exists(UnityLeanMcpPaths.TestCancellationFile))
-                {
-                    System.IO.File.Delete(UnityLeanMcpPaths.TestCancellationFile);
-                }
-            }
-            catch { }
-        }
-    }
-
     internal partial class RunTestsHandler
     {
         public static bool ActiveStateKnown
@@ -1513,7 +1490,6 @@ namespace UnityLeanMcp
             get => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.Active;
             set => UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.Active = value;
         }
-        public static readonly CancelledRunIdSet CancelledRunIds = new();
     }
 }
 

@@ -20,7 +20,6 @@ public sealed class CommandGatePublicationTests : IDisposable
         SessionState.EraseString("UnityLeanMcp_PendingResult");
         RunTestsHandler.ActiveStateKnown = true;
         RunTestsHandler.Active = false;
-        RunTestsHandler.CancelledRunIds.Clear();
         CancelOperationHandler.CancelRouteHook = null;
         UnityCommandGate.WriteAtomicHook = null;
         UnityLeanMcpDispatcher.Clear();
@@ -560,12 +559,12 @@ public sealed class CommandGatePublicationTests : IDisposable
         string? published = null;
         UnityCommandGate.WriteAtomicHook = (_, json, _) => published = json;
         string initialStatus = viaCancellingStatus ? OperationStatus.Cancelling : OperationStatus.Running;
-        if (!viaCancellingStatus)
-        {
-            RunTestsHandler.CancelledRunIds.Add("cancelled-run");
-        }
 
         Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin("test", "cancelled-run", initialStatus, out _));
+        if (!viaCancellingStatus)
+        {
+            Assert.True(UnityCommandGate.TryRequestCancellation("cancelled-run", out _));
+        }
         UnityCommandGate.InitializeMainThread();
         Assert.Null(published);
 
@@ -1188,8 +1187,8 @@ public sealed class CommandGatePublicationTests : IDisposable
         File.WriteAllText(UnityLeanMcpPaths.TestRunningFile, UnityEngine.JsonUtility.ToJson(state));
         RunTestsHandler.ClearCachedRunState();
 
-        // Worker thread wrote the cancellation request file, but main thread has not updated runState.status yet
-        Assert.True(WorkerThreadSnapshots.TryWriteTestCancellationRequest(UnityLeanMcpPaths.TestCancellationFile, runId));
+        // Worker thread requested cancellation, but main thread has not updated runState.status yet
+        Assert.True(UnityCommandGate.TryRequestCancellation(runId, out _));
 
         var callbacks = new MyTestCallbacks();
         callbacks.BindRun(runId);
@@ -1890,7 +1889,6 @@ public sealed class CommandGatePublicationTests : IDisposable
         RunTestsHandler.ActiveStateKnown = true;
         RunTestsHandler.Active = false;
         RunTestsHandler.s_CurrentTestJobGuid = null!;
-        RunTestsHandler.CancelledRunIds.Clear();
         RunTestsHandler.ClearCachedRunState();
         UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnExecute = null;
         UnityEditor.TestTools.TestRunner.Api.TestRunnerApi.OnExecuteWithGuid = null;
@@ -1917,7 +1915,7 @@ public sealed class CommandGatePublicationTests : IDisposable
         UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
         UnityLeanMcpCompilationTracker.RefreshRequired = true;
         UnityLeanMcpCompilationTracker.RefreshPending = false;
-        UnityLeanMcpCompilationTracker.CompilationRequested = false;
+        UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
         UnityLeanMcpCompilationTracker.ClearCapturedDiagnostics();
         UnityLeanMcpPaths.ProjectRoot = _previousProjectRoot;
         Directory.Delete(_root, true);
