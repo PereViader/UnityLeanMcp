@@ -211,6 +211,86 @@ public sealed class OperationIdValidationTests : IDisposable
         Assert.True(UnityCommandGate.IsOwnedBy("valid-active-op", OperationKinds.Eval));
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("op-1", "op-1")]
+    [InlineData("  op-1  ", "op-1")]
+    [InlineData("op-1 1+1", "op-1")]
+    [InlineData("  op-1 1+1", "op-1")]
+    [InlineData("   op-1   1+1   ", "op-1")]
+    [InlineData("\top-1 1+1\t", "op-1")]
+    public void CommandHelper_ExtractOperationId_TrimsWhitespaceBeforeSplitting(string? payload, string? expected)
+    {
+        Assert.Equal(expected, CommandHelper.ExtractOperationId(payload!));
+    }
+
+    [Theory]
+    [InlineData("  eval-op-1 1+1")]
+    [InlineData("   eval-op-1   1+1   ")]
+    [InlineData("\teval-op-1 1+1\t")]
+    public void EvalHandler_Handle_TrimsLeadingAndTrailingWhitespaceBeforeSplitting(string payload)
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Eval, "eval-op-1", OperationStatus.Running, out _));
+        var handler = new EvalHandler();
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+        handler.Handle(payload, writer);
+
+        string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+        Assert.Equal("RUNNING", response);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("  eval-op-1   ")]
+    public void EvalHandler_Handle_RejectsMissingCodeSnippetAfterTrimming(string? payload)
+    {
+        var handler = new EvalHandler();
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+        handler.Handle(payload!, writer);
+
+        string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+        Assert.Equal("ERROR: Missing operation id or code snippet", response);
+    }
+
+    [Theory]
+    [InlineData("  test-op-1 {\"mode\":\"editmode\"}")]
+    [InlineData("   test-op-1   {\"mode\":\"editmode\"}   ")]
+    public void RunTestsHandler_Handle_TrimsLeadingAndTrailingWhitespaceBeforeSplitting(string payload)
+    {
+        Assert.Equal(BeginGateResult.Started, UnityCommandGate.TryBegin(OperationKinds.Test, "test-op-1", OperationStatus.Running, out _));
+        var handler = new RunTestsHandler();
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+        handler.Handle(payload, writer);
+
+        string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+        Assert.Equal("RUNNING", response);
+    }
+
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("  test-op-1   ")]
+    public void RunTestsHandler_Handle_RejectsMissingTestParametersAfterTrimming(string payload)
+    {
+        var handler = new RunTestsHandler();
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+        handler.Handle(payload, writer);
+
+        string response = Encoding.UTF8.GetString(stream.ToArray()).Trim();
+        Assert.Equal("ERROR: Missing operation id or test parameters", response);
+    }
+
     private sealed class CompilationProbe(string kind) : CompilationCommandHandlerBase
     {
         public int Executions { get; private set; }

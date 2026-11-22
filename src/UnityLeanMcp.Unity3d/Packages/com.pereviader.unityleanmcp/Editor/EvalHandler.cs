@@ -46,7 +46,7 @@ namespace UnityLeanMcp
 
         public void Handle(string payload, StreamWriter writer)
         {
-            string[] requestParts = (payload ?? "").Split(new[] { ' ' }, 2);
+            string[] requestParts = (payload ?? "").Trim().Split(new[] { ' ' }, 2);
             if (requestParts.Length < 2 || string.IsNullOrWhiteSpace(requestParts[1]))
             {
                 writer.WriteLine("ERROR: Missing operation id or code snippet");

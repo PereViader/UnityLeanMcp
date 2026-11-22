@@ -42,8 +42,9 @@ namespace UnityLeanMcp
                 return null;
             }
 
-            int spaceIndex = payload.IndexOf(' ');
-            return spaceIndex > 0 ? payload.Substring(0, spaceIndex).Trim() : payload.Trim();
+            string trimmed = payload.Trim();
+            int spaceIndex = trimmed.IndexOf(' ');
+            return spaceIndex > 0 ? trimmed.Substring(0, spaceIndex) : trimmed;
         }
 
         internal static bool TryPreflightWorkerCommand(
