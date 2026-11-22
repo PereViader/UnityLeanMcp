@@ -16,7 +16,7 @@ UnityLeanMcp provides 4 focused, token-optimized MCP tools:
 | :--- | :--- |
 | **`unity_refresh`** | Refreshes AssetDatabase and returns compiler and asset import diagnostics (including shader errors, import failures, and missing scripts). C# compiler errors persist across no-op refreshes. Normal refreshes are fast when unchanged; set `clean: true` only when a more expensive full script recompilation is needed to recover from a stale or corrupted compiler cache. |
 | **`unity_eval`** | Evaluates C# top-level statements in-memory against the active Unity Editor with top-level `await` and `return <value>;`. Pre-imports `System`, `System.Collections.Generic`, `System.Linq`, `UnityEngine`, `UnityEditor`, and `UnityLeanMcp` (`Inspect.*` helpers; read the `unity://inspect/help` MCP resource for the cheatsheet). |
-| **`unity_test`** | Runs EditMode/PlayMode tests with failure diagnostics. Automatically suggests near-matches and cross-mode hints if filters match 0 tests. Supports `coverage: true` to record in-memory code coverage without disk snapshots. |
+| **`unity_test`** | Runs EditMode/PlayMode tests with failure diagnostics. Supports `coverage: true` to record in-memory code coverage without disk snapshots. |
 | **`unity_coverage`** | Queries in-memory code coverage for specified files or directories (recursively evaluating all contained C# scripts) from the latest test run without re-running tests. Reports line coverage percentages sorted from lowest to highest coverage, lists uncovered line spans for each file, and supports `uncoveredOnly: true` to omit 100%-covered and 0-point files while preserving scope aggregate totals. |
 
 > **Auto-Start & Warm Instance**: If Unity is not running when an operation is requested, UnityLeanMcp automatically starts the Unity Editor in normal interactive mode first and keeps it running for subsequent commands.
@@ -49,7 +49,12 @@ Top-level statements evaluated with `unity_eval` automatically import `UnityLean
 | | `Inspect.FindPrefabs([filter], [maxItems])` | Finds prefabs in the project matching an optional filter. |
 | | `Inspect.Dependencies(assetPath, [recursive], [maxItems])` | Enumerates asset dependencies with normalized paths, type annotations, and truncation limits. |
 | | `Inspect.Referencers(targetAssetPath, [searchFolder], [maxItems])` | Queries project assets in a folder that reference or depend on the target asset. |
-| **Editor** | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
+| **Visual Capture** | `await Inspect.CaptureGameView([outputPath], [superSize], [cancellationToken])` | Captures what the player sees in the Game View (all composited cameras, `ScreenSpaceOverlay` Canvases, and UI Toolkit `UIDocument`s) to a PNG. |
+| | `Inspect.CaptureCamera([outputPath], [width], [height], [camera])` | Captures a frame from the specified `Camera` or `Camera.main` to a PNG. |
+| | `Inspect.CaptureSceneView([outputPath], [width], [height])` | Captures the active Editor `SceneView` camera to a PNG. |
+| | `Inspect.CaptureTarget(target, [outputPath], [width], [height], [viewDirection])` | Captures an auto-framed off-screen PNG of a scene/Prefab Stage `GameObject` or uninstantiated prefab asset without modifying scene cameras or dirty state. |
+| **Editor** | `Inspect.Console([severity], [filter], [maxItems], [includeStackTrace])` | Reads and formats Unity Console entries (collapsed with occurrence counts, optional severity/regex filter and stack traces) without mutating Console state. |
+| | `Inspect.Selection([maxItems])` | Inspects currently selected GameObjects, assets, or active object in the Editor. |
 | | `Inspect.MainCamera()` | Properties of `Camera.main` (transform, clear flags, culling mask, FOV, clipping planes). |
 
 Call these directly inside `unity_eval`:
