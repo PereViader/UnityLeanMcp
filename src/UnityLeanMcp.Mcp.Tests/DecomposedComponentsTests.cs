@@ -815,8 +815,44 @@ public class DecomposedComponentsTests
             var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
 
             Assert.False(result.Success);
+            Assert.True(result.Interrupted);
             Assert.Contains("exited unexpectedly", result.Message);
             Assert.True(pm.IsUnityRunningCallCount >= 1);
+        }
+        finally
+        {
+            try { Directory.Delete(projectRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task OperationPoller_WhenSocketFailsDuringTestRun_SetsInterruptedAndResultState()
+    {
+        string projectRoot = Path.Combine(Path.GetTempPath(), "unity_poller_test_fail_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var resolver = new UnityPathResolver(projectRoot);
+            var pm = new CountingProcessManager(resolver, isRunning: false);
+            var transport = new StubSocketTransport(null);
+            var poller = new OperationPoller(pm, resolver, transport);
+
+            var spec = new OperationPollingSpec<UnityTestRunResult>
+            {
+                OperationId = "op_test_exit",
+                OperationDisplayName = "test run",
+                PollCommand = "POLL op_test_exit",
+                ResultFilePath = Path.Combine(projectRoot, "result.json"),
+                IsMatch = r => r.OperationId == "op_test_exit",
+                PollIntervalMs = 50,
+                RequireDurableResult = true
+            };
+
+            var result = await poller.PollOperationUntilTerminalAsync(spec, CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.True(result.Interrupted);
+            Assert.Equal("Interrupted", result.ResultState);
+            Assert.Contains("exited unexpectedly", result.Message);
         }
         finally
         {

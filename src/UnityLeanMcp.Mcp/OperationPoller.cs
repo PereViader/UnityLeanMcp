@@ -189,6 +189,7 @@ public class OperationPoller : IOperationPoller
                         {
                             OperationId = spec.OperationId,
                             Success = false,
+                            Interrupted = true,
                             Message = $"Unity background process exited unexpectedly during {spec.OperationDisplayName}."
                         };
                     }
