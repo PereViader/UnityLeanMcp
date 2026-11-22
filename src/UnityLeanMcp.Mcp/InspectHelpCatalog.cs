@@ -12,8 +12,8 @@ internal static class InspectHelpCatalog
         "UnityLeanMcp Inspection Helpers (UnityLeanMcp.Inspect):\n" +
         "\n" +
         "Scene & Hierarchy:\n" +
-        "• string Audit(GameObject root)\n" +
-        "• string Audit(string targetOrAssetPath = null)\n" +
+        "• string Audit(GameObject root, int maxIssuesPerCategory = 100, CancellationToken cancellationToken = default)\n" +
+        "• string Audit(string targetOrAssetPath = null, int maxPrefabs = 200, int maxIssuesPerCategory = 100, CancellationToken cancellationToken = default)\n" +
         "• string Find(string namePattern, bool includeInactive = true, int maxItems = 100)\n" +
         "• string FindByComponent(string typeName, bool includeInactive = true, int maxItems = 100)\n" +
         "• string Hierarchy()\n" +
@@ -59,7 +59,7 @@ internal static class InspectHelpCatalog
         "• Pre-imported namespaces: `System`, `System.Collections.Generic`, `System.Linq`, `UnityEngine`, `UnityEditor`, and `UnityLeanMcp`. Add explicit `using` directives for other namespaces, and qualify or alias ambiguous names like `UnityEngine.Object` / `UnityEngine.Random`.\n" +
         "• Return values with `return Inspect.<Method>(...);` (e.g., `return Inspect.Hierarchy(maxDepth: 3);`).\n" +
         "• Visual capture guide: `await Inspect.CaptureGameView()` = player view (cameras + ScreenSpaceOverlay Canvas + UIDocument); `Inspect.CaptureCamera()` = single Camera; `Inspect.CaptureSceneView()` = Editor SceneView; `Inspect.CaptureTarget(go)` = auto-framed GameObject/prefab from its front (or pass `viewDirection`, e.g. `Vector3.up`, for custom world angles).\n" +
-        "• Integrity audit guide: `Inspect.Audit(...)` checks missing scripts, broken `ObjectReference` fields, broken `UnityEvent` listeners, error shaders, and scene hygiene (duplicate `AudioListener`/`EventSystem`, missing `MainCamera` tag). Accepts `null` (active Prefab Stage + loaded scenes), a `GameObject` root, a loaded scene name/path, a prefab asset path, or a folder path (audits all prefabs in that folder without an item cap). Note: `Inspect.Audit` is a costly operation—always run it on the smallest appropriate subset (a specific `GameObject`, prefab path, or narrow subfolder).\n" +
+        "• Integrity audit guide: `Inspect.Audit(...)` checks missing scripts, broken `ObjectReference` fields, broken `UnityEvent` listeners, error shaders, and scene hygiene (duplicate `AudioListener`/`EventSystem`, missing `MainCamera` tag). Accepts `null` (active Prefab Stage + loaded scenes), a `GameObject` root, a loaded scene name/path, a prefab asset path, or a folder path (bounded by `maxPrefabs = 200`, `maxIssuesPerCategory = 100`, cooperative cancellation, and periodic unused-asset cleanup). Note: `Inspect.Audit` is a costly operation—always run it on the smallest appropriate subset (a specific `GameObject`, prefab path, or narrow subfolder).\n" +
         "• Defaults: DefaultMaxDepth = 32, DefaultMaxItems = 100, DefaultMaxOutputCharacters = 65536 (64 KiB).";
 
     internal const string FullHelpText = SignatureReference + "\n\n" + UsageFooter;

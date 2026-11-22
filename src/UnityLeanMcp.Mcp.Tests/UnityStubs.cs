@@ -790,6 +790,8 @@ namespace UnityEditor
     public static class EditorUtility
     {
         public static bool scriptCompilationFailed;
+        public static Action? UnloadUnusedAssetsImmediateAction;
+        public static void UnloadUnusedAssetsImmediate() => UnloadUnusedAssetsImmediateAction?.Invoke();
         public static UnityEngine.GameObject CreateGameObjectWithHideFlags(string name, UnityEngine.HideFlags flags, params Type[] components)
         {
             var go = new UnityEngine.GameObject(name, components);
@@ -1440,10 +1442,62 @@ namespace UnityLeanMcp
 
     internal static class OperationExecutionEngine
     {
-        public static System.Threading.CancellationTokenSource RegisterActiveOperation(string operationId, bool isCancelable) =>
-            new System.Threading.CancellationTokenSource();
+        private static readonly object s_Lock = new object();
+        private static System.Threading.CancellationTokenSource? s_ActiveCts;
+        private static string? s_ActiveOperationId;
+        private static bool s_ActiveIsCancelable;
 
-        public static bool TryCancel(string operationId) => false;
+        public static System.Threading.CancellationTokenSource RegisterActiveOperation(string operationId, bool isCancelable)
+        {
+            var cts = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationTokenSource? oldCts;
+            lock (s_Lock)
+            {
+                oldCts = s_ActiveCts;
+                s_ActiveCts = cts;
+                s_ActiveOperationId = operationId;
+                s_ActiveIsCancelable = isCancelable;
+            }
+            oldCts?.Dispose();
+            return cts;
+        }
+
+        public static System.Threading.CancellationToken GetActiveOperationToken()
+        {
+            lock (s_Lock)
+            {
+                if (s_ActiveCts == null)
+                {
+                    return System.Threading.CancellationToken.None;
+                }
+                try
+                {
+                    return s_ActiveCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return System.Threading.CancellationToken.None;
+                }
+            }
+        }
+
+        public static bool TryCancel(string operationId)
+        {
+            System.Threading.CancellationTokenSource? cts = null;
+            lock (s_Lock)
+            {
+                if (s_ActiveCts != null && s_ActiveIsCancelable && s_ActiveOperationId == operationId)
+                {
+                    cts = s_ActiveCts;
+                }
+            }
+            if (cts != null)
+            {
+                cts.Cancel();
+                return true;
+            }
+            return false;
+        }
 
         public static void FinishOperation(
             string operationId,
@@ -1456,6 +1510,19 @@ namespace UnityLeanMcp
             List<ConsoleLogEntry>? logs = null,
             bool interrupted = false)
         {
+            System.Threading.CancellationTokenSource? toDispose = null;
+            lock (s_Lock)
+            {
+                if (s_ActiveOperationId == operationId)
+                {
+                    toDispose = s_ActiveCts;
+                    s_ActiveCts = null;
+                    s_ActiveOperationId = null;
+                    s_ActiveIsCancelable = false;
+                }
+            }
+            toDispose?.Dispose();
+
             if (!UnityCommandGate.IsOwnedBy(operationId, operationKind))
             {
                 return;

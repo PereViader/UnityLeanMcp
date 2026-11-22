@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -15,113 +16,170 @@ namespace UnityLeanMcp
 {
     public static partial class Inspect
     {
+        public const int DefaultAuditMaxPrefabs = 200;
+        public const int DefaultAuditMaxIssuesPerCategory = DefaultMaxItems;
+        private const int AuditUnloadUnusedAssetsBatchSize = 50;
+
         private static readonly Dictionary<Type, PropertyInfo> s_SharedMaterialPropCache = new Dictionary<Type, PropertyInfo>();
 
         #region Scene & Prefab Integrity Audit
 
         /// <summary>
         /// Performs a comprehensive, non-destructive integrity audit of loaded scenes and the active Prefab Stage,
-        /// or a specific loaded scene, prefab asset, or folder (recursively auditing all prefabs within that folder).
+        /// or a specific loaded scene, prefab asset, or folder (recursively auditing prefabs within that folder).
         /// Reports missing scripts, broken serialized ObjectReference fields, broken UnityEvent persistent listeners,
         /// error/missing shaders (via safe sharedMaterials/sharedMaterial inspection), and scene hygiene issues
         /// (duplicate AudioListener or EventSystem instances, missing MainCamera tag).
-        /// NOTE: This is a costly operation that traverses hierarchies and serialized properties across all objects in scope;
-        /// run it on the smallest appropriate subset (a specific GameObject root, prefab asset path, or narrow subfolder) rather than the entire project.
+        /// Bounded by <paramref name="maxPrefabs"/> (for folder scans), <paramref name="maxIssuesPerCategory"/>,
+        /// and cooperative cancellation (linked with the active eval operation token).
         /// </summary>
-        public static string Audit(string targetOrAssetPath = null)
+        public static string Audit(
+            string targetOrAssetPath = null,
+            int maxPrefabs = DefaultAuditMaxPrefabs,
+            int maxIssuesPerCategory = DefaultAuditMaxIssuesPerCategory,
+            CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(targetOrAssetPath))
-            {
-                return AuditActiveEnvironment();
-            }
+            maxPrefabs = Math.Max(1, maxPrefabs);
+            maxIssuesPerCategory = Math.Max(1, maxIssuesPerCategory);
 
-            string clean = NormalizeAuditTarget(targetOrAssetPath);
-
-            // 1. Check active Prefab Stage match
-            PrefabStage stage = GetCurrentPrefabStageSafe();
-            string cleanNameWithoutExt = Path.GetFileNameWithoutExtension(clean);
-            if (stage != null && MatchesPrefabStageQuery(stage, clean, cleanNameWithoutExt))
+            CancellationTokenSource linkedCts = null;
+            CancellationToken effectiveToken = CreateEffectiveAuditToken(cancellationToken, out linkedCts);
+            try
             {
-                var report = new AuditReport($"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\"");
-                GameObject stageRoot = null;
-                try { stageRoot = stage.prefabContentsRoot; } catch { }
-                if (stageRoot == null)
+                effectiveToken.ThrowIfCancellationRequested();
+
+                if (string.IsNullOrWhiteSpace(targetOrAssetPath))
                 {
-                    return $"Audit of Prefab Stage \"{GetPrefabStageAssetPath(stage)}\": (No root GameObject in Prefab Stage)";
+                    return AuditActiveEnvironment(maxIssuesPerCategory, effectiveToken);
                 }
 
-                AuditHierarchyRoots(new[] { stageRoot }, $"prefabStage: \"{GetPrefabStageAssetPath(stage)}\"", isSceneScope: false, report);
-                return FormatAuditReport(report);
-            }
+                string clean = NormalizeAuditTarget(targetOrAssetPath);
 
-            // 2. Check loaded scenes match
-            int sceneCount = GetSceneCountSafe();
-            for (int i = 0; i < sceneCount; i++)
-            {
-                Scene s;
-                try { s = SceneManager.GetSceneAt(i); }
-                catch { continue; }
-
-                if (string.Equals(s.name, clean, StringComparison.OrdinalIgnoreCase) ||
-                    (!clean.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) &&
-                     string.Equals(s.name, cleanNameWithoutExt, StringComparison.OrdinalIgnoreCase)) ||
-                    (!string.IsNullOrEmpty(s.path) && string.Equals(s.path.Replace('\\', '/'), clean, StringComparison.OrdinalIgnoreCase)))
+                // 1. Check active Prefab Stage match
+                PrefabStage stage = GetCurrentPrefabStageSafe();
+                string cleanNameWithoutExt = Path.GetFileNameWithoutExtension(clean);
+                if (stage != null && MatchesPrefabStageQuery(stage, clean, cleanNameWithoutExt))
                 {
-                    if (!s.isLoaded)
+                    var report = new AuditReport($"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\"", maxIssuesPerCategory);
+                    GameObject stageRoot = null;
+                    try { stageRoot = stage.prefabContentsRoot; } catch { }
+                    if (stageRoot == null)
                     {
-                        return $"(Scene \"{s.name}\" is not currently loaded)";
+                        return $"Audit of Prefab Stage \"{GetPrefabStageAssetPath(stage)}\": (No root GameObject in Prefab Stage)";
                     }
 
-                    var report = new AuditReport($"Scene \"{s.name}\"");
-                    GameObject[] roots = GetRootGameObjectsSafe(s);
-                    AuditHierarchyRoots(roots, $"scene: \"{s.name}\"", isSceneScope: true, report);
+                    AuditHierarchyRoots(new[] { stageRoot }, $"prefabStage: \"{GetPrefabStageAssetPath(stage)}\"", isSceneScope: false, report, effectiveToken);
                     return FormatAuditReport(report);
                 }
-            }
 
-            // 3. Check folder path
-            if (IsProjectFolder(clean))
-            {
-                return AuditFolderPrefabs(clean);
-            }
-
-            // 4. Check prefab asset path or search query
-            if (TryResolvePrefabAssetPath(clean, targetOrAssetPath, out string resolvedPrefabPath, out string resolveError))
-            {
-                var report = new AuditReport($"Prefab Asset \"{resolvedPrefabPath}\"");
-                if (!TryAuditPrefabAsset(resolvedPrefabPath, report, out string loadError))
+                // 2. Check loaded scenes match
+                int sceneCount = GetSceneCountSafe();
+                for (int i = 0; i < sceneCount; i++)
                 {
-                    return loadError;
-                }
-                return FormatAuditReport(report);
-            }
+                    effectiveToken.ThrowIfCancellationRequested();
 
-            return resolveError;
+                    Scene s;
+                    try { s = SceneManager.GetSceneAt(i); }
+                    catch { continue; }
+
+                    if (string.Equals(s.name, clean, StringComparison.OrdinalIgnoreCase) ||
+                        (!clean.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) &&
+                         string.Equals(s.name, cleanNameWithoutExt, StringComparison.OrdinalIgnoreCase)) ||
+                        (!string.IsNullOrEmpty(s.path) && string.Equals(s.path.Replace('\\', '/'), clean, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!s.isLoaded)
+                        {
+                            return $"(Scene \"{s.name}\" is not currently loaded)";
+                        }
+
+                        var report = new AuditReport($"Scene \"{s.name}\"", maxIssuesPerCategory);
+                        GameObject[] roots = GetRootGameObjectsSafe(s);
+                        AuditHierarchyRoots(roots, $"scene: \"{s.name}\"", isSceneScope: true, report, effectiveToken);
+                        return FormatAuditReport(report);
+                    }
+                }
+
+                // 3. Check folder path
+                if (IsProjectFolder(clean))
+                {
+                    return AuditFolderPrefabs(clean, maxPrefabs, maxIssuesPerCategory, effectiveToken);
+                }
+
+                // 4. Check prefab asset path or search query
+                if (TryResolvePrefabAssetPath(clean, targetOrAssetPath, out string resolvedPrefabPath, out string resolveError))
+                {
+                    var report = new AuditReport($"Prefab Asset \"{resolvedPrefabPath}\"", maxIssuesPerCategory);
+                    if (!TryAuditPrefabAsset(resolvedPrefabPath, report, effectiveToken, out _, out string loadError))
+                    {
+                        return loadError;
+                    }
+                    return FormatAuditReport(report);
+                }
+
+                return resolveError;
+            }
+            finally
+            {
+                linkedCts?.Dispose();
+            }
         }
 
         /// <summary>
         /// Performs a comprehensive, non-destructive integrity audit starting from a specific root GameObject and its hierarchy.
         /// Reports missing scripts, broken serialized ObjectReference fields, broken UnityEvent persistent listeners,
         /// error/missing shaders, and duplicate AudioListener or EventSystem instances within the subtree.
-        /// NOTE: This is a costly operation; run it on the smallest appropriate GameObject subtree.
+        /// Bounded by <paramref name="maxIssuesPerCategory"/> and cooperative cancellation.
         /// </summary>
-        public static string Audit(GameObject root)
+        public static string Audit(
+            GameObject root,
+            int maxIssuesPerCategory = DefaultAuditMaxIssuesPerCategory,
+            CancellationToken cancellationToken = default)
         {
             if (ReferenceEquals(root, null)) return "(GameObject is null)";
             if (root == null) return "(GameObject is destroyed)";
             if (root.transform == null) return "(GameObject has no Transform)";
 
-            string goName = "GameObject";
-            try { goName = root.name; } catch { }
+            maxIssuesPerCategory = Math.Max(1, maxIssuesPerCategory);
 
-            string containerLabel = ResolveGameObjectContainerLabel(root);
-            var report = new AuditReport($"GameObject \"{goName}\" ({containerLabel})");
-            AuditHierarchyRoots(new[] { root }, containerLabel, isSceneScope: false, report);
-            return FormatAuditReport(report);
+            CancellationTokenSource linkedCts = null;
+            CancellationToken effectiveToken = CreateEffectiveAuditToken(cancellationToken, out linkedCts);
+            try
+            {
+                effectiveToken.ThrowIfCancellationRequested();
+
+                string goName = "GameObject";
+                try { goName = root.name; } catch { }
+
+                string containerLabel = ResolveGameObjectContainerLabel(root);
+                var report = new AuditReport($"GameObject \"{goName}\" ({containerLabel})", maxIssuesPerCategory);
+                AuditHierarchyRoots(new[] { root }, containerLabel, isSceneScope: false, report, effectiveToken);
+                return FormatAuditReport(report);
+            }
+            finally
+            {
+                linkedCts?.Dispose();
+            }
         }
 
-        private static string AuditActiveEnvironment()
+        private static CancellationToken CreateEffectiveAuditToken(
+            CancellationToken callerToken,
+            out CancellationTokenSource linkedCts)
         {
+            CancellationToken activeToken = OperationExecutionEngine.GetActiveOperationToken();
+            if (callerToken.CanBeCanceled && activeToken.CanBeCanceled && callerToken != activeToken)
+            {
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken, activeToken);
+                return linkedCts.Token;
+            }
+
+            linkedCts = null;
+            return callerToken.CanBeCanceled ? callerToken : activeToken;
+        }
+
+        private static string AuditActiveEnvironment(int maxIssuesPerCategory, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
             PrefabStage stage = GetCurrentPrefabStageSafe();
             int sceneCount = GetSceneCountSafe();
             if (stage == null && sceneCount == 0)
@@ -133,7 +191,7 @@ namespace UnityLeanMcp
                 ? $"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\" and {sceneCount} loaded scene(s)"
                 : (stage != null ? $"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\"" : $"{sceneCount} loaded scene(s)");
 
-            var report = new AuditReport(scopeDescription);
+            var report = new AuditReport(scopeDescription, maxIssuesPerCategory);
             bool anyAudited = false;
 
             if (stage != null)
@@ -144,12 +202,15 @@ namespace UnityLeanMcp
                 {
                     anyAudited = true;
                     string stagePath = GetPrefabStageAssetPath(stage);
-                    AuditHierarchyRoots(new[] { stageRoot }, $"prefabStage: \"{stagePath}\"", isSceneScope: false, report);
+                    AuditHierarchyRoots(new[] { stageRoot }, $"prefabStage: \"{stagePath}\"", isSceneScope: false, report, cancellationToken);
                 }
             }
 
             for (int s = 0; s < sceneCount; s++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (report.IsReportFull) break;
+
                 Scene scene;
                 try { scene = SceneManager.GetSceneAt(s); }
                 catch { continue; }
@@ -158,7 +219,7 @@ namespace UnityLeanMcp
 
                 anyAudited = true;
                 GameObject[] roots = GetRootGameObjectsSafe(scene);
-                AuditHierarchyRoots(roots, $"scene: \"{scene.name}\"", isSceneScope: true, report);
+                AuditHierarchyRoots(roots, $"scene: \"{scene.name}\"", isSceneScope: true, report, cancellationToken);
             }
 
             if (!anyAudited)
@@ -171,8 +232,14 @@ namespace UnityLeanMcp
             return FormatAuditReport(report);
         }
 
-        private static string AuditFolderPrefabs(string folder)
+        private static string AuditFolderPrefabs(
+            string folder,
+            int maxPrefabs,
+            int maxIssuesPerCategory,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             string[] guids = null;
             try
             {
@@ -190,6 +257,11 @@ namespace UnityLeanMcp
             {
                 for (int i = 0; i < guids.Length; i++)
                 {
+                    if ((i & 63) == 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
                     string rawPath = null;
                     try { rawPath = AssetDatabase.GUIDToAssetPath(guids[i]); } catch { }
                     if (string.IsNullOrEmpty(rawPath)) continue;
@@ -211,23 +283,79 @@ namespace UnityLeanMcp
             }
 
             prefabPaths.Sort(StringComparer.Ordinal);
-            var report = new AuditReport($"Folder \"{folder}\" ({prefabPaths.Count} prefab(s))");
+            int totalPrefabsFound = prefabPaths.Count;
+            int scanLimit = Math.Min(totalPrefabsFound, maxPrefabs);
+            bool cappedByMaxPrefabs = totalPrefabsFound > maxPrefabs;
 
-            for (int i = 0; i < prefabPaths.Count; i++)
+            var report = new AuditReport(string.Empty, maxIssuesPerCategory);
+            int prefabsScanned = 0;
+            int loadedSinceCleanup = 0;
+            bool stoppedByFullReport = false;
+
+            for (int i = 0; i < scanLimit; i++)
             {
-                string prefabPath = prefabPaths[i];
-                if (!TryAuditPrefabAsset(prefabPath, report, out string loadError))
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (report.IsReportFull)
                 {
-                    report.BrokenReferences.Add($"  • (prefab: \"{prefabPath}\"): {loadError}");
+                    stoppedByFullReport = true;
+                    break;
                 }
+
+                string prefabPath = prefabPaths[i];
+                if (!TryAuditPrefabAsset(prefabPath, report, cancellationToken, out bool loadedViaPrefabContents, out string loadError))
+                {
+                    report.TryAddBrokenReference($"  • (prefab: \"{prefabPath}\"): {loadError}");
+                }
+
+                prefabsScanned++;
+
+                if (loadedViaPrefabContents)
+                {
+                    loadedSinceCleanup++;
+                    if (loadedSinceCleanup >= AuditUnloadUnusedAssetsBatchSize && i + 1 < scanLimit && !report.IsReportFull)
+                    {
+                        UnloadUnusedAssetsSafe();
+                        loadedSinceCleanup = 0;
+                    }
+                }
+            }
+
+            report.ScopeDescription = prefabsScanned == totalPrefabsFound
+                ? $"Folder \"{folder}\" ({totalPrefabsFound} prefab(s))"
+                : $"Folder \"{folder}\" ({prefabsScanned} of {totalPrefabsFound} prefab(s) scanned)";
+
+            if (stoppedByFullReport)
+            {
+                report.TruncationNote = $"... (truncated: output or per-category issue limit reached; {prefabsScanned} of {totalPrefabsFound} prefab(s) scanned)";
+            }
+            else if (cappedByMaxPrefabs)
+            {
+                report.TruncationNote = $"... (truncated: reached maxPrefabs limit of {maxPrefabs}; {prefabsScanned} of {totalPrefabsFound} prefab(s) scanned; pass a higher maxPrefabs value to scan more)";
             }
 
             return FormatAuditReport(report);
         }
 
-        private static bool TryAuditPrefabAsset(string prefabPath, AuditReport report, out string error)
+        private static void UnloadUnusedAssetsSafe()
         {
+            try
+            {
+                EditorUtility.UnloadUnusedAssetsImmediate();
+            }
+            catch { }
+        }
+
+        private static bool TryAuditPrefabAsset(
+            string prefabPath,
+            AuditReport report,
+            CancellationToken cancellationToken,
+            out bool loadedViaPrefabContents,
+            out string error)
+        {
+            loadedViaPrefabContents = false;
             error = null;
+            cancellationToken.ThrowIfCancellationRequested();
 
             PrefabStage stage = GetCurrentPrefabStageSafe();
             if (stage != null)
@@ -235,13 +363,12 @@ namespace UnityLeanMcp
                 string stagePath = GetPrefabStageAssetPath(stage);
                 if (string.Equals(stagePath, prefabPath, StringComparison.OrdinalIgnoreCase) && stage.prefabContentsRoot != null)
                 {
-                    AuditHierarchyRoots(new[] { stage.prefabContentsRoot }, $"prefab: \"{prefabPath}\"", isSceneScope: false, report);
+                    AuditHierarchyRoots(new[] { stage.prefabContentsRoot }, $"prefab: \"{prefabPath}\"", isSceneScope: false, report, cancellationToken);
                     return true;
                 }
             }
 
             GameObject contentsRoot = null;
-            bool loadedViaPrefabContents = false;
             try
             {
                 try
@@ -269,8 +396,12 @@ namespace UnityLeanMcp
                     return false;
                 }
 
-                AuditHierarchyRoots(new[] { contentsRoot }, $"prefab: \"{prefabPath}\"", isSceneScope: false, report);
+                AuditHierarchyRoots(new[] { contentsRoot }, $"prefab: \"{prefabPath}\"", isSceneScope: false, report, cancellationToken);
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -290,7 +421,8 @@ namespace UnityLeanMcp
             GameObject[] rootObjects,
             string containerLabel,
             bool isSceneScope,
-            AuditReport report)
+            AuditReport report,
+            CancellationToken cancellationToken)
         {
             var audioListenerPaths = new List<string>();
             var eventSystemPaths = new List<string>();
@@ -301,6 +433,12 @@ namespace UnityLeanMcp
             {
                 TraverseRootGameObjectsBfs(rootObjects, (current, go) =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (report.IsReportFull)
+                    {
+                        return SceneBfsDecision.Stop;
+                    }
+
                     report.GameObjectsScanned++;
                     string hierarchyPath = GetHierarchyPath(current);
                     string goName = "Unnamed";
@@ -355,23 +493,25 @@ namespace UnityLeanMcp
                     {
                         string indicesStr = string.Join(", ", missingIndices);
                         string scriptWord = missingIndices.Count == 1 ? "missing script" : "missing scripts";
-                        report.MissingScripts.Add(
+                        report.TryAddMissingScript(
                             $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]");
                     }
 
-                    return SceneBfsDecision.Continue;
+                    return report.IsReportFull ? SceneBfsDecision.Stop : SceneBfsDecision.Continue;
                 });
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (audioListenerPaths.Count > 1)
             {
-                report.SceneHygieneIssues.Add(
+                report.TryAddSceneHygieneIssue(
                     $"  • Duplicate active AudioListener components ({audioListenerPaths.Count}) in {containerLabel}: [{string.Join(", ", audioListenerPaths)}]");
             }
 
             if (eventSystemPaths.Count > 1)
             {
-                report.SceneHygieneIssues.Add(
+                report.TryAddSceneHygieneIssue(
                     $"  • Duplicate active EventSystem components ({eventSystemPaths.Count}) in {containerLabel}: [{string.Join(", ", eventSystemPaths)}]");
             }
 
@@ -380,7 +520,7 @@ namespace UnityLeanMcp
                 string camDetail = cameraCount > 0
                     ? $"{cameraCount} untagged Camera component(s) present"
                     : "no Camera components present";
-                report.SceneHygieneIssues.Add(
+                report.TryAddSceneHygieneIssue(
                     $"  • Missing \"MainCamera\" tag in {containerLabel} ({camDetail})");
             }
         }
@@ -438,7 +578,7 @@ namespace UnityLeanMcp
 
             if (ReferenceEquals(shader, null) || shader == null)
             {
-                report.MaterialAndShaderIssues.Add(
+                report.TryAddMaterialAndShaderIssue(
                     $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {accessorPath} (\"{matName}\") has missing/null Shader");
                 return;
             }
@@ -448,7 +588,7 @@ namespace UnityLeanMcp
 
             if (string.Equals(shaderName, "Hidden/InternalErrorShader", StringComparison.OrdinalIgnoreCase))
             {
-                report.MaterialAndShaderIssues.Add(
+                report.TryAddMaterialAndShaderIssue(
                     $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {accessorPath} (\"{matName}\") uses error shader \"Hidden/InternalErrorShader\"");
                 return;
             }
@@ -457,7 +597,7 @@ namespace UnityLeanMcp
             try { hasShaderError = ShaderUtil.ShaderHasError(shader); } catch { }
             if (hasShaderError)
             {
-                report.MaterialAndShaderIssues.Add(
+                report.TryAddMaterialAndShaderIssue(
                     $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {accessorPath} (\"{matName}\") shader \"{shaderName}\" has compilation errors");
             }
         }
@@ -520,7 +660,7 @@ namespace UnityLeanMcp
 
                             if (refVal == null && instanceId != 0)
                             {
-                                report.BrokenReferences.Add(
+                                report.TryAddBrokenReference(
                                     $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compType.Name}.{propPath} is Missing (instanceID: {instanceId})");
                             }
                             enterChildren = false;
@@ -585,14 +725,14 @@ namespace UnityLeanMcp
                         ? $"missing target object (instanceID: {targetInstanceId})"
                         : "null target object";
                     string methodDetail = !string.IsNullOrEmpty(methodName) ? $" (method: \"{methodName}\")" : "";
-                    report.BrokenUnityEvents.Add(
+                    report.TryAddBrokenUnityEvent(
                         $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] has {reason}{methodDetail}");
                     continue;
                 }
 
                 if (string.IsNullOrEmpty(methodName))
                 {
-                    report.BrokenUnityEvents.Add(
+                    report.TryAddBrokenUnityEvent(
                         $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] on target \"{targetObj.name}\" ({targetObj.GetType().Name}) has no method assigned");
                     continue;
                 }
@@ -600,7 +740,7 @@ namespace UnityLeanMcp
                 Type targetType = targetObj.GetType();
                 if (!HasMatchingPersistentListenerMethod(targetType, methodName, modeProp, argumentsProp))
                 {
-                    report.BrokenUnityEvents.Add(
+                    report.TryAddBrokenUnityEvent(
                         $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] method \"{targetType.Name}.{methodName}\" not found on target \"{targetObj.name}\"");
                 }
             }
@@ -939,41 +1079,78 @@ namespace UnityLeanMcp
             if (totalIssues == 0)
             {
                 sb.AppendLine($"Audit of {report.ScopeDescription}: 0 issues found ({report.GameObjectsScanned} GameObject(s) scanned).");
+                if (!string.IsNullOrEmpty(report.TruncationNote))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine(report.TruncationNote);
+                }
                 return LimitOutput(sb.ToString().TrimEnd());
             }
 
-            sb.AppendLine($"Audit of {report.ScopeDescription}: {totalIssues} issue(s) found ({report.GameObjectsScanned} GameObject(s) scanned):");
+            string issueSummary = report.TotalSuppressed > 0
+                ? $"{totalIssues} issue(s) reported ({report.TotalSuppressed} additional omitted)"
+                : $"{totalIssues} issue(s) found";
+            sb.AppendLine($"Audit of {report.ScopeDescription}: {issueSummary} ({report.GameObjectsScanned} GameObject(s) scanned):");
 
-            AppendAuditSection(sb, "Missing Scripts", report.MissingScripts);
-            AppendAuditSection(sb, "Broken Object References", report.BrokenReferences);
-            AppendAuditSection(sb, "Broken UnityEvent Listeners", report.BrokenUnityEvents);
-            AppendAuditSection(sb, "Material & Shader Errors", report.MaterialAndShaderIssues);
-            AppendAuditSection(sb, "Scene Hygiene Issues", report.SceneHygieneIssues);
+            AppendAuditSection(sb, "Missing Scripts", report.MissingScripts, report.MissingScriptsSuppressed, report.MaxIssuesPerCategory);
+            AppendAuditSection(sb, "Broken Object References", report.BrokenReferences, report.BrokenReferencesSuppressed, report.MaxIssuesPerCategory);
+            AppendAuditSection(sb, "Broken UnityEvent Listeners", report.BrokenUnityEvents, report.BrokenUnityEventsSuppressed, report.MaxIssuesPerCategory);
+            AppendAuditSection(sb, "Material & Shader Errors", report.MaterialAndShaderIssues, report.MaterialAndShaderIssuesSuppressed, report.MaxIssuesPerCategory);
+            AppendAuditSection(sb, "Scene Hygiene Issues", report.SceneHygieneIssues, report.SceneHygieneIssuesSuppressed, report.MaxIssuesPerCategory);
+
+            if (!string.IsNullOrEmpty(report.TruncationNote))
+            {
+                sb.AppendLine();
+                sb.AppendLine(report.TruncationNote);
+            }
 
             return LimitOutput(sb.ToString().TrimEnd());
         }
 
-        private static void AppendAuditSection(StringBuilder sb, string title, List<string> items)
+        private static void AppendAuditSection(
+            StringBuilder sb,
+            string title,
+            List<string> items,
+            int suppressedCount,
+            int maxIssuesPerCategory)
         {
             if (items == null || items.Count == 0) return;
 
             sb.AppendLine();
-            sb.AppendLine($"{title} ({items.Count}):");
+            string countText = suppressedCount > 0
+                ? $"{items.Count}+, {suppressedCount} omitted"
+                : items.Count.ToString();
+            sb.AppendLine($"{title} ({countText}):");
             for (int i = 0; i < items.Count; i++)
             {
                 sb.AppendLine(items[i]);
+            }
+
+            if (suppressedCount > 0)
+            {
+                sb.AppendLine($"  ... ({suppressedCount} more omitted; maxIssuesPerCategory={maxIssuesPerCategory})");
             }
         }
 
         private sealed class AuditReport
         {
-            public string ScopeDescription { get; }
+            public string ScopeDescription { get; set; }
+            public int MaxIssuesPerCategory { get; }
             public int GameObjectsScanned { get; set; }
+            public int EstimatedCharacterCount { get; private set; }
+            public string TruncationNote { get; set; }
+
             public List<string> MissingScripts { get; } = new List<string>();
             public List<string> BrokenReferences { get; } = new List<string>();
             public List<string> BrokenUnityEvents { get; } = new List<string>();
             public List<string> MaterialAndShaderIssues { get; } = new List<string>();
             public List<string> SceneHygieneIssues { get; } = new List<string>();
+
+            public int MissingScriptsSuppressed { get; private set; }
+            public int BrokenReferencesSuppressed { get; private set; }
+            public int BrokenUnityEventsSuppressed { get; private set; }
+            public int MaterialAndShaderIssuesSuppressed { get; private set; }
+            public int SceneHygieneIssuesSuppressed { get; private set; }
 
             public int TotalIssues =>
                 MissingScripts.Count +
@@ -982,9 +1159,81 @@ namespace UnityLeanMcp
                 MaterialAndShaderIssues.Count +
                 SceneHygieneIssues.Count;
 
-            public AuditReport(string scopeDescription)
+            public int TotalSuppressed =>
+                MissingScriptsSuppressed +
+                BrokenReferencesSuppressed +
+                BrokenUnityEventsSuppressed +
+                MaterialAndShaderIssuesSuppressed +
+                SceneHygieneIssuesSuppressed;
+
+            public bool IsOutputBudgetReached => EstimatedCharacterCount >= DefaultMaxOutputCharacters;
+
+            public bool AreAllCategoriesCapped =>
+                MissingScripts.Count >= MaxIssuesPerCategory &&
+                BrokenReferences.Count >= MaxIssuesPerCategory &&
+                BrokenUnityEvents.Count >= MaxIssuesPerCategory &&
+                MaterialAndShaderIssues.Count >= MaxIssuesPerCategory &&
+                SceneHygieneIssues.Count >= MaxIssuesPerCategory;
+
+            public bool IsReportFull => IsOutputBudgetReached || AreAllCategoriesCapped;
+
+            public AuditReport(string scopeDescription, int maxIssuesPerCategory)
             {
                 ScopeDescription = scopeDescription;
+                MaxIssuesPerCategory = Math.Max(1, maxIssuesPerCategory);
+            }
+
+            public bool TryAddMissingScript(string message)
+            {
+                int suppressed = MissingScriptsSuppressed;
+                bool added = TryAddToCategory(MissingScripts, ref suppressed, message);
+                MissingScriptsSuppressed = suppressed;
+                return added;
+            }
+
+            public bool TryAddBrokenReference(string message)
+            {
+                int suppressed = BrokenReferencesSuppressed;
+                bool added = TryAddToCategory(BrokenReferences, ref suppressed, message);
+                BrokenReferencesSuppressed = suppressed;
+                return added;
+            }
+
+            public bool TryAddBrokenUnityEvent(string message)
+            {
+                int suppressed = BrokenUnityEventsSuppressed;
+                bool added = TryAddToCategory(BrokenUnityEvents, ref suppressed, message);
+                BrokenUnityEventsSuppressed = suppressed;
+                return added;
+            }
+
+            public bool TryAddMaterialAndShaderIssue(string message)
+            {
+                int suppressed = MaterialAndShaderIssuesSuppressed;
+                bool added = TryAddToCategory(MaterialAndShaderIssues, ref suppressed, message);
+                MaterialAndShaderIssuesSuppressed = suppressed;
+                return added;
+            }
+
+            public bool TryAddSceneHygieneIssue(string message)
+            {
+                int suppressed = SceneHygieneIssuesSuppressed;
+                bool added = TryAddToCategory(SceneHygieneIssues, ref suppressed, message);
+                SceneHygieneIssuesSuppressed = suppressed;
+                return added;
+            }
+
+            private bool TryAddToCategory(List<string> list, ref int suppressedCount, string message)
+            {
+                if (IsOutputBudgetReached || list.Count >= MaxIssuesPerCategory)
+                {
+                    suppressedCount++;
+                    return false;
+                }
+
+                list.Add(message);
+                EstimatedCharacterCount += (message?.Length ?? 0) + 2;
+                return true;
             }
         }
 

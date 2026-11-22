@@ -47,6 +47,7 @@ internal sealed class UnityInspectTestScope : IDisposable
         EditorWindow.focusedWindow = null;
         EditorWindow.GetWindowFunc = null;
         EditorApplication.QueuePlayerLoopUpdateAction = null;
+        EditorUtility.UnloadUnusedAssetsImmediateAction = null;
         AssetDatabase.FindAssetsFunc = null;
         AssetDatabase.FindAssetsInFoldersFunc = null;
         AssetDatabase.GUIDToAssetPathFunc = null;

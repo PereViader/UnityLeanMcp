@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -1197,10 +1198,225 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
             root.transform.AddChild(child.transform);
         }
 
-        string result = Inspect.Audit(root);
+        string result = Inspect.Audit(root, maxIssuesPerCategory: 2000);
 
         Assert.True(result.Length <= Inspect.DefaultMaxOutputCharacters);
         Assert.EndsWith(Inspect.OutputTruncationMarker, result);
+    }
+
+    [Fact]
+    public void Audit_FolderTarget_RespectsMaxPrefabsCapAndReportsTruncation()
+    {
+        const int totalPrefabs = 10;
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        var guidsToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < totalPrefabs; i++)
+        {
+            string guid = $"guid_cap_{i:D2}";
+            string path = $"Assets/Prefabs/CapTest/Item_{i:D2}.prefab";
+            var go = new GameObject($"Item_{i:D2}");
+            prefabsByPath[path] = go;
+            guidsToPath[guid] = path;
+        }
+
+        int loadedCount = 0;
+        int unloadedCount = 0;
+        AssetDatabase.IsValidFolderFunc = path =>
+            string.Equals(path, "Assets/Prefabs/CapTest", StringComparison.OrdinalIgnoreCase);
+        AssetDatabase.FindAssetsInFoldersFunc = (_, _) => new List<string>(guidsToPath.Keys).ToArray();
+        AssetDatabase.GUIDToAssetPathFunc = guid =>
+            guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path =>
+        {
+            loadedCount++;
+            return prefabsByPath.TryGetValue(path, out var go) ? go : null;
+        };
+        PrefabUtility.UnloadPrefabContentsAction = _ => unloadedCount++;
+
+        string result = Inspect.Audit("Assets/Prefabs/CapTest", maxPrefabs: 4);
+
+        Assert.Equal(4, loadedCount);
+        Assert.Equal(4, unloadedCount);
+        Assert.Contains("Folder \"Assets/Prefabs/CapTest\" (4 of 10 prefab(s) scanned)", result);
+        Assert.Contains("reached maxPrefabs limit of 4; 4 of 10 prefab(s) scanned", result);
+    }
+
+    [Fact]
+    public void Audit_FolderTarget_TriggersPeriodicUnloadUnusedAssetsImmediate()
+    {
+        const int prefabCount = 120;
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        var guidsToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < prefabCount; i++)
+        {
+            string guid = $"guid_cleanup_{i:D3}";
+            string path = $"Assets/Prefabs/Cleanup/Item_{i:D3}.prefab";
+            prefabsByPath[path] = new GameObject($"Item_{i:D3}");
+            guidsToPath[guid] = path;
+        }
+
+        int unloadUnusedCount = 0;
+        EditorUtility.UnloadUnusedAssetsImmediateAction = () => unloadUnusedCount++;
+        AssetDatabase.IsValidFolderFunc = path =>
+            string.Equals(path, "Assets/Prefabs/Cleanup", StringComparison.OrdinalIgnoreCase);
+        AssetDatabase.FindAssetsInFoldersFunc = (_, _) => new List<string>(guidsToPath.Keys).ToArray();
+        AssetDatabase.GUIDToAssetPathFunc = guid =>
+            guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path =>
+            prefabsByPath.TryGetValue(path, out var go) ? go : null;
+
+        string result = Inspect.Audit("Assets/Prefabs/Cleanup", maxPrefabs: 120);
+
+        Assert.Equal(2, unloadUnusedCount);
+        Assert.Contains("Folder \"Assets/Prefabs/Cleanup\" (120 prefab(s)): 0 issues found", result);
+    }
+
+    [Fact]
+    public void Audit_PerCategoryIssueCap_TruncatesCategoryAndStopsEarlyWhenAllCategoriesFull()
+    {
+        var root = new GameObject("RootWithManyMissingScripts");
+        for (int i = 0; i < 10; i++)
+        {
+            var child = new GameObject($"Broken_{i}");
+            child.AddRawComponent(null);
+            root.transform.AddChild(child.transform);
+        }
+
+        string singleRootResult = Inspect.Audit(root, maxIssuesPerCategory: 3);
+        Assert.Contains("3 issue(s) reported (7 additional omitted)", singleRootResult);
+        Assert.Contains("Missing Scripts (3+, 7 omitted):", singleRootResult);
+        Assert.Contains("7 more omitted; maxIssuesPerCategory=3", singleRootResult);
+
+        // Folder early-exit test: 10 prefabs, each hits all 5 issue categories, cap = 2 per category
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        var guidsToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var brokenMat = new Material { name = "BrokenMat", shader = new Shader { name = "Hidden/InternalErrorShader" } };
+
+        for (int i = 0; i < 10; i++)
+        {
+            string guid = $"guid_full_{i:D2}";
+            string path = $"Assets/Prefabs/FullTest/Full_{i:D2}.prefab";
+            var prefabRoot = new GameObject($"Full_{i:D2}");
+            prefabRoot.AddRawComponent(null); // MissingScript
+            var comp = prefabRoot.AddComponent<Renderer>();
+            comp.sharedMaterials = new[] { brokenMat }; // MaterialAndShaderIssue
+
+            var refProp = new SerializedProperty
+            {
+                name = "m_MissingRef",
+                propertyPath = "m_MissingRef",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 999
+            };
+            var eventProp = CreateUnityEventProperty("m_OnClick", CreatePersistentCall(null, 0, "DoWork", 1));
+            SerializedObject.CustomProperties[comp] = new List<SerializedProperty> { refProp, eventProp };
+
+            var listenerA = new GameObject("AL1");
+            listenerA.AddComponent<AudioListener>();
+            var listenerB = new GameObject("AL2");
+            listenerB.AddComponent<AudioListener>();
+            prefabRoot.transform.AddChild(listenerA.transform);
+            prefabRoot.transform.AddChild(listenerB.transform); // SceneHygieneIssue (duplicate AudioListener)
+
+            prefabsByPath[path] = prefabRoot;
+            guidsToPath[guid] = path;
+        }
+
+        int loadedCount = 0;
+        AssetDatabase.IsValidFolderFunc = path =>
+            string.Equals(path, "Assets/Prefabs/FullTest", StringComparison.OrdinalIgnoreCase);
+        AssetDatabase.FindAssetsInFoldersFunc = (_, _) => new List<string>(guidsToPath.Keys).ToArray();
+        AssetDatabase.GUIDToAssetPathFunc = guid =>
+            guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path =>
+        {
+            loadedCount++;
+            return prefabsByPath.TryGetValue(path, out var go) ? go : null;
+        };
+
+        string folderResult = Inspect.Audit("Assets/Prefabs/FullTest", maxPrefabs: 10, maxIssuesPerCategory: 2);
+
+        Assert.Equal(2, loadedCount);
+        Assert.Contains("2 of 10 prefab(s) scanned", folderResult);
+        Assert.Contains("output or per-category issue limit reached", folderResult);
+    }
+
+    [Fact]
+    public void Audit_FolderTarget_HonorsCallerCancellationAndActiveOperationToken()
+    {
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        var guidsToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < 10; i++)
+        {
+            string guid = $"guid_cancel_{i:D2}";
+            string path = $"Assets/Prefabs/CancelTest/Item_{i:D2}.prefab";
+            prefabsByPath[path] = new GameObject($"Item_{i:D2}");
+            guidsToPath[guid] = path;
+        }
+
+        AssetDatabase.IsValidFolderFunc = path =>
+            string.Equals(path, "Assets/Prefabs/CancelTest", StringComparison.OrdinalIgnoreCase);
+        AssetDatabase.FindAssetsInFoldersFunc = (_, _) => new List<string>(guidsToPath.Keys).ToArray();
+        AssetDatabase.GUIDToAssetPathFunc = guid =>
+            guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+
+        // 1. Caller CancellationToken
+        using (var cts = new CancellationTokenSource())
+        {
+            int loadedCount = 0;
+            int unloadedCount = 0;
+            PrefabUtility.LoadPrefabContentsFunc = path =>
+            {
+                loadedCount++;
+                if (loadedCount == 3)
+                {
+                    cts.Cancel();
+                }
+                return prefabsByPath.TryGetValue(path, out var go) ? go : null;
+            };
+            PrefabUtility.UnloadPrefabContentsAction = _ => unloadedCount++;
+
+            Assert.Throws<OperationCanceledException>(() =>
+                Inspect.Audit("Assets/Prefabs/CancelTest", maxPrefabs: 10, cancellationToken: cts.Token));
+            Assert.Equal(3, loadedCount);
+            Assert.Equal(3, unloadedCount);
+        }
+
+        // 2. Active OperationExecutionEngine token (without explicit caller token)
+        const string opId = "audit_cancel_op";
+        OperationExecutionEngine.RegisterActiveOperation(opId, isCancelable: true);
+        try
+        {
+            Assert.True(OperationExecutionEngine.GetActiveOperationToken().CanBeCanceled);
+
+            int loadedCount = 0;
+            int unloadedCount = 0;
+            PrefabUtility.LoadPrefabContentsFunc = path =>
+            {
+                loadedCount++;
+                if (loadedCount == 2)
+                {
+                    OperationExecutionEngine.TryCancel(opId);
+                }
+                return prefabsByPath.TryGetValue(path, out var go) ? go : null;
+            };
+            PrefabUtility.UnloadPrefabContentsAction = _ => unloadedCount++;
+
+            Assert.Throws<OperationCanceledException>(() =>
+                Inspect.Audit("Assets/Prefabs/CancelTest", maxPrefabs: 10));
+            Assert.Equal(2, loadedCount);
+            Assert.Equal(2, unloadedCount);
+        }
+        finally
+        {
+            OperationExecutionEngine.FinishOperation(opId, OperationKinds.Eval, string.Empty, true, string.Empty, 0, null);
+        }
+
+        Assert.Equal(CancellationToken.None, OperationExecutionEngine.GetActiveOperationToken());
     }
 
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)

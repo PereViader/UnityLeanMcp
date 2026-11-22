@@ -43,6 +43,26 @@ namespace UnityLeanMcp
             return cts;
         }
 
+        public static CancellationToken GetActiveOperationToken()
+        {
+            lock (s_CtsLock)
+            {
+                if (s_ActiveCts == null)
+                {
+                    return CancellationToken.None;
+                }
+
+                try
+                {
+                    return s_ActiveCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
+
         public static bool TryCancel(string operationId)
         {
             if (string.IsNullOrWhiteSpace(operationId))
