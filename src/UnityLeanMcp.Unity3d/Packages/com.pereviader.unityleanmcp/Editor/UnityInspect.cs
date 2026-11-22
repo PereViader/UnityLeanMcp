@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using UnityEngine;
 
 namespace UnityLeanMcp
@@ -54,6 +55,21 @@ namespace UnityLeanMcp
             }
 
             return UnityResultFormatter.LimitOutput(value, maxCharacters);
+        }
+
+        private static CancellationToken CreateEffectiveOperationToken(
+            CancellationToken callerToken,
+            out CancellationTokenSource linkedCts)
+        {
+            CancellationToken activeToken = OperationExecutionEngine.GetActiveOperationToken();
+            if (callerToken.CanBeCanceled && activeToken.CanBeCanceled && callerToken != activeToken)
+            {
+                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken, activeToken);
+                return linkedCts.Token;
+            }
+
+            linkedCts = null;
+            return callerToken.CanBeCanceled ? callerToken : activeToken;
         }
 
         private static PropertyInfo GetCachedProperty(

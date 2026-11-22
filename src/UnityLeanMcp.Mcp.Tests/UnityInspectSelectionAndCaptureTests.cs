@@ -912,6 +912,100 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         Assert.Same(prevWin, EditorWindow.focusedWindow);
     }
 
+    [Fact]
+    public async Task CaptureGameView_WhenActiveOperationCanceled_CancelsWithoutCallerTokenAndCleansUp()
+    {
+        var prevWin = new EditorWindow();
+        EditorWindow.focusedWindow = prevWin;
+
+        GameView? openedView = null;
+        EditorWindow.GetWindowFunc = (type, utility, title, focus) =>
+        {
+            openedView = new GameView();
+            return openedView;
+        };
+
+        const string opId = "capture_gameview_active_cancel";
+        OperationExecutionEngine.RegisterActiveOperation(opId, isCancelable: true);
+        try
+        {
+            string? capturedTempPath = null;
+            ScreenCapture.CaptureScreenshotAction = (path, _) =>
+            {
+                capturedTempPath = path;
+                File.WriteAllBytes(path, new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+                OperationExecutionEngine.TryCancel(opId);
+            };
+
+            string outputPath = "Temp/test_gameview_active_canceled.png";
+            _scope.TrackFile(outputPath);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Inspect.CaptureGameView(outputPath));
+
+            Assert.NotNull(capturedTempPath);
+            Assert.False(File.Exists(capturedTempPath));
+            Assert.False(File.Exists(outputPath));
+            Assert.NotNull(openedView);
+            Assert.True(openedView!.IsClosed);
+            Assert.Same(prevWin, EditorWindow.focusedWindow);
+        }
+        finally
+        {
+            OperationExecutionEngine.FinishOperation(opId, OperationKinds.Eval, string.Empty, true, string.Empty, 0, null);
+        }
+
+        Assert.Equal(CancellationToken.None, OperationExecutionEngine.GetActiveOperationToken());
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenCallerTokenAndActiveOperationTokenBothProvided_CancelsOnActiveOperationCancel()
+    {
+        var prevWin = new EditorWindow();
+        EditorWindow.focusedWindow = prevWin;
+
+        GameView? openedView = null;
+        EditorWindow.GetWindowFunc = (type, utility, title, focus) =>
+        {
+            openedView = new GameView();
+            return openedView;
+        };
+
+        const string opId = "capture_gameview_linked_cancel";
+        OperationExecutionEngine.RegisterActiveOperation(opId, isCancelable: true);
+        using var callerCts = new CancellationTokenSource();
+        try
+        {
+            string? capturedTempPath = null;
+            ScreenCapture.CaptureScreenshotAction = (path, _) =>
+            {
+                capturedTempPath = path;
+                File.WriteAllBytes(path, new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
+                OperationExecutionEngine.TryCancel(opId);
+            };
+
+            string outputPath = "Temp/test_gameview_linked_canceled.png";
+            _scope.TrackFile(outputPath);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Inspect.CaptureGameView(outputPath, cancellationToken: callerCts.Token));
+
+            Assert.False(callerCts.IsCancellationRequested);
+            Assert.NotNull(capturedTempPath);
+            Assert.False(File.Exists(capturedTempPath));
+            Assert.False(File.Exists(outputPath));
+            Assert.NotNull(openedView);
+            Assert.True(openedView!.IsClosed);
+            Assert.Same(prevWin, EditorWindow.focusedWindow);
+        }
+        finally
+        {
+            OperationExecutionEngine.FinishOperation(opId, OperationKinds.Eval, string.Empty, true, string.Empty, 0, null);
+        }
+
+        Assert.Equal(CancellationToken.None, OperationExecutionEngine.GetActiveOperationToken());
+    }
+
     private static byte[] CreateValidTestPngBytes()
     {
         // Minimal PNG header + IEND trailer for structural validation

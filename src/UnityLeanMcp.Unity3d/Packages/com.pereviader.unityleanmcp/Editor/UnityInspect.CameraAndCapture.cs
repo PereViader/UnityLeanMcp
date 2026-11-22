@@ -313,129 +313,138 @@ namespace UnityLeanMcp
             int superSize = 1,
             CancellationToken cancellationToken = default)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (string.IsNullOrWhiteSpace(outputPath))
-            {
-                outputPath = "Temp/unity_gameview.png";
-            }
-
-            superSize = Mathf.Clamp(superSize, 1, 4);
-
-            if (Application.isBatchMode || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
-            {
-                return "(GameView capture requires an interactive graphical Unity Editor and is unavailable in batchmode or with GraphicsDeviceType.Null. Use Inspect.CaptureCamera(...) for offscreen camera rendering, or Inspect.Hierarchy(includeUiDetails: true) / Inspect.UIDocument() to inspect UI layout.)";
-            }
-
-            string normalizedPath = outputPath.Replace('\\', '/');
-            string fullPath = Path.GetFullPath(outputPath);
-            string dir = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            string tempPath = Path.Combine(
-                string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
-                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp.png");
-
-            Type gameViewType = typeof(Editor).Assembly.GetType("UnityEditor.GameView");
-            if (gameViewType == null)
-            {
-                return "(Failed to capture GameView: UnityEditor.GameView type could not be resolved)";
-            }
-
-            EditorWindow prevFocused = null;
-            try { prevFocused = EditorWindow.focusedWindow; } catch { }
-
-            EditorWindow gameView = null;
-            bool createdGameView = false;
-
+            CancellationTokenSource linkedCts = null;
+            CancellationToken effectiveToken = CreateEffectiveOperationToken(cancellationToken, out linkedCts);
             try
             {
-                UnityEngine.Object[] existingViews = null;
-                try { existingViews = Resources.FindObjectsOfTypeAll(gameViewType); } catch { }
-                if (existingViews != null)
+                effectiveToken.ThrowIfCancellationRequested();
+
+                if (string.IsNullOrWhiteSpace(outputPath))
                 {
-                    for (int i = 0; i < existingViews.Length; i++)
+                    outputPath = "Temp/unity_gameview.png";
+                }
+
+                superSize = Mathf.Clamp(superSize, 1, 4);
+
+                if (Application.isBatchMode || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                {
+                    return "(GameView capture requires an interactive graphical Unity Editor and is unavailable in batchmode or with GraphicsDeviceType.Null. Use Inspect.CaptureCamera(...) for offscreen camera rendering, or Inspect.Hierarchy(includeUiDetails: true) / Inspect.UIDocument() to inspect UI layout.)";
+                }
+
+                string normalizedPath = outputPath.Replace('\\', '/');
+                string fullPath = Path.GetFullPath(outputPath);
+                string dir = Path.GetDirectoryName(fullPath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                string tempPath = Path.Combine(
+                    string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
+                    $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp.png");
+
+                Type gameViewType = typeof(Editor).Assembly.GetType("UnityEditor.GameView");
+                if (gameViewType == null)
+                {
+                    return "(Failed to capture GameView: UnityEditor.GameView type could not be resolved)";
+                }
+
+                EditorWindow prevFocused = null;
+                try { prevFocused = EditorWindow.focusedWindow; } catch { }
+
+                EditorWindow gameView = null;
+                bool createdGameView = false;
+
+                try
+                {
+                    UnityEngine.Object[] existingViews = null;
+                    try { existingViews = Resources.FindObjectsOfTypeAll(gameViewType); } catch { }
+                    if (existingViews != null)
                     {
-                        if (existingViews[i] is EditorWindow ew && ew != null)
+                        for (int i = 0; i < existingViews.Length; i++)
                         {
-                            gameView = ew;
-                            break;
+                            if (existingViews[i] is EditorWindow ew && ew != null)
+                            {
+                                gameView = ew;
+                                break;
+                            }
                         }
                     }
-                }
 
-                if (gameView == null)
-                {
-                    gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
-                    createdGameView = gameView != null;
-                }
+                    if (gameView == null)
+                    {
+                        gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
+                        createdGameView = gameView != null;
+                    }
 
-                if (gameView == null)
-                {
-                    return "(Failed to capture GameView: could not locate or open a GameView window)";
-                }
+                    if (gameView == null)
+                    {
+                        return "(Failed to capture GameView: could not locate or open a GameView window)";
+                    }
 
-                Canvas.ForceUpdateCanvases();
-                gameView.Focus();
-                ScreenCapture.CaptureScreenshot(tempPath, superSize);
-                EditorApplication.QueuePlayerLoopUpdate();
-                gameView.Repaint();
-
-                while (!IsCompletePngFile(tempPath))
-                {
-                    await Task.Delay(50, cancellationToken);
+                    Canvas.ForceUpdateCanvases();
+                    gameView.Focus();
+                    ScreenCapture.CaptureScreenshot(tempPath, superSize);
                     EditorApplication.QueuePlayerLoopUpdate();
                     gameView.Repaint();
-                }
 
-                if (File.Exists(fullPath))
+                    while (!IsCompletePngFile(tempPath))
+                    {
+                        await Task.Delay(50, effectiveToken);
+                        EditorApplication.QueuePlayerLoopUpdate();
+                        gameView.Repaint();
+                    }
+
+                    if (File.Exists(fullPath))
+                    {
+                        File.Delete(fullPath);
+                    }
+                    File.Move(tempPath, fullPath);
+
+                    long fileSizeBytes = new FileInfo(fullPath).Length;
+                    return $"Captured GameView (superSize: {superSize}, {fileSizeBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes) to {normalizedPath}";
+                }
+                catch (OperationCanceledException)
                 {
-                    File.Delete(fullPath);
+                    throw;
                 }
-                File.Move(tempPath, fullPath);
+                catch (Exception ex)
+                {
+                    return $"(Failed to capture GameView: {ex.Message})";
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(tempPath))
+                        {
+                            File.Delete(tempPath);
+                        }
+                    }
+                    catch { }
 
-                long fileSizeBytes = new FileInfo(fullPath).Length;
-                return $"Captured GameView (superSize: {superSize}, {fileSizeBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes) to {normalizedPath}";
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return $"(Failed to capture GameView: {ex.Message})";
+                    try
+                    {
+                        if (createdGameView && gameView != null)
+                        {
+                            gameView.Close();
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        if (prevFocused != null)
+                        {
+                            prevFocused.Focus();
+                        }
+                    }
+                    catch { }
+                }
             }
             finally
             {
-                try
-                {
-                    if (File.Exists(tempPath))
-                    {
-                        File.Delete(tempPath);
-                    }
-                }
-                catch { }
-
-                try
-                {
-                    if (createdGameView && gameView != null)
-                    {
-                        gameView.Close();
-                    }
-                }
-                catch { }
-
-                try
-                {
-                    if (prevFocused != null)
-                    {
-                        prevFocused.Focus();
-                    }
-                }
-                catch { }
+                linkedCts?.Dispose();
             }
         }
 

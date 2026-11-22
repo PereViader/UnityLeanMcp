@@ -43,7 +43,7 @@ namespace UnityLeanMcp
             maxIssuesPerCategory = Math.Max(1, maxIssuesPerCategory);
 
             CancellationTokenSource linkedCts = null;
-            CancellationToken effectiveToken = CreateEffectiveAuditToken(cancellationToken, out linkedCts);
+            CancellationToken effectiveToken = CreateEffectiveOperationToken(cancellationToken, out linkedCts);
             try
             {
                 effectiveToken.ThrowIfCancellationRequested();
@@ -142,7 +142,7 @@ namespace UnityLeanMcp
             maxIssuesPerCategory = Math.Max(1, maxIssuesPerCategory);
 
             CancellationTokenSource linkedCts = null;
-            CancellationToken effectiveToken = CreateEffectiveAuditToken(cancellationToken, out linkedCts);
+            CancellationToken effectiveToken = CreateEffectiveOperationToken(cancellationToken, out linkedCts);
             try
             {
                 effectiveToken.ThrowIfCancellationRequested();
@@ -159,21 +159,6 @@ namespace UnityLeanMcp
             {
                 linkedCts?.Dispose();
             }
-        }
-
-        private static CancellationToken CreateEffectiveAuditToken(
-            CancellationToken callerToken,
-            out CancellationTokenSource linkedCts)
-        {
-            CancellationToken activeToken = OperationExecutionEngine.GetActiveOperationToken();
-            if (callerToken.CanBeCanceled && activeToken.CanBeCanceled && callerToken != activeToken)
-            {
-                linkedCts = CancellationTokenSource.CreateLinkedTokenSource(callerToken, activeToken);
-                return linkedCts.Token;
-            }
-
-            linkedCts = null;
-            return callerToken.CanBeCanceled ? callerToken : activeToken;
         }
 
         private static string AuditActiveEnvironment(int maxIssuesPerCategory, CancellationToken cancellationToken)
