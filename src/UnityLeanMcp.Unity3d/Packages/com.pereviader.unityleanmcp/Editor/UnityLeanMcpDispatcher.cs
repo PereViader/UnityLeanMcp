@@ -8,14 +8,19 @@ namespace UnityLeanMcp
     internal static class UnityLeanMcpDispatcher
     {
         private static readonly ConcurrentQueue<Action> s_Queue = new ConcurrentQueue<Action>();
-        private static bool s_Initialized;
+        private static volatile bool s_Initialized;
+        private static readonly object s_InitLock = new object();
 
         public static void EnsureInitialized()
         {
             if (s_Initialized) return;
-            s_Initialized = true;
-            EditorApplication.update -= Update;
-            EditorApplication.update += Update;
+            lock (s_InitLock)
+            {
+                if (s_Initialized) return;
+                EditorApplication.update -= Update;
+                EditorApplication.update += Update;
+                s_Initialized = true;
+            }
         }
 
         public static void Enqueue(Action action)

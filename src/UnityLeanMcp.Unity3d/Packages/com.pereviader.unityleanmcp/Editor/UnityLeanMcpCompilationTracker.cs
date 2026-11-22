@@ -148,7 +148,7 @@ namespace UnityLeanMcp
             set => AwaitingCompilationStart = value;
         }
 
-        private static bool s_Initialized;
+        private static volatile bool s_Initialized;
         private static readonly object s_InitLock = new object();
 
         public static void EnsureInitialized()
@@ -157,8 +157,8 @@ namespace UnityLeanMcp
             lock (s_InitLock)
             {
                 if (s_Initialized) return;
-                s_Initialized = true;
                 InitializeMainThread();
+                s_Initialized = true;
             }
         }
 

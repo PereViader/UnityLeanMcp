@@ -669,6 +669,59 @@ public sealed class CommandGatePublicationTests : IDisposable
     }
 
     [Fact]
+    public void UnityLeanMcpDispatcher_EnsureInitialized_RetriesAfterInitializationFailure()
+    {
+        FieldInfo initializedField = typeof(UnityLeanMcpDispatcher).GetField("s_Initialized", BindingFlags.NonPublic | BindingFlags.Static)!;
+        bool originalInitialized = (bool)initializedField.GetValue(null)!;
+        initializedField.SetValue(null, false);
+        try
+        {
+            EditorApplication.UpdateSubscribeAction = () => throw new InvalidOperationException("Simulated subscribe failure");
+            Assert.Throws<InvalidOperationException>(() => UnityLeanMcpDispatcher.EnsureInitialized());
+            Assert.False((bool)initializedField.GetValue(null)!);
+
+            EditorApplication.UpdateSubscribeAction = null;
+            UnityLeanMcpDispatcher.EnsureInitialized();
+            Assert.True((bool)initializedField.GetValue(null)!);
+
+            int executed = 0;
+            UnityLeanMcpDispatcher.Enqueue(() => executed++);
+            EditorApplication.Tick();
+            Assert.Equal(1, executed);
+        }
+        finally
+        {
+            EditorApplication.UpdateSubscribeAction = null;
+            EditorApplication.update -= UnityLeanMcpDispatcher.Update;
+            UnityLeanMcpDispatcher.Clear();
+            initializedField.SetValue(null, originalInitialized);
+        }
+    }
+
+    [Fact]
+    public void UnityLeanMcpCompilationTracker_EnsureInitialized_RetriesAfterInitializationFailure()
+    {
+        FieldInfo initializedField = typeof(UnityLeanMcpCompilationTracker).GetField("s_Initialized", BindingFlags.NonPublic | BindingFlags.Static)!;
+        bool originalInitialized = (bool)initializedField.GetValue(null)!;
+        initializedField.SetValue(null, false);
+        try
+        {
+            EditorApplication.UpdateSubscribeAction = () => throw new InvalidOperationException("Simulated subscribe failure");
+            Assert.Throws<InvalidOperationException>(() => UnityLeanMcpCompilationTracker.EnsureInitialized());
+            Assert.False((bool)initializedField.GetValue(null)!);
+
+            EditorApplication.UpdateSubscribeAction = null;
+            UnityLeanMcpCompilationTracker.EnsureInitialized();
+            Assert.True((bool)initializedField.GetValue(null)!);
+        }
+        finally
+        {
+            EditorApplication.UpdateSubscribeAction = null;
+            initializedField.SetValue(null, originalInitialized);
+        }
+    }
+
+    [Fact]
     public void EvalHandler_WhenRefreshRequiredIsTrue_RejectsInEditModeAndBypassesInPlayMode()
     {
         UnityLeanMcpCompilationTracker.IsCompiling = false;

@@ -942,10 +942,23 @@ namespace UnityEditor
     {
         public static bool isCompiling;
         public static bool isUpdating;
-        public static event Action? update;
+        private static Action? s_Update;
+        public static Action? UpdateSubscribeAction;
+        public static event Action? update
+        {
+            add
+            {
+                UpdateSubscribeAction?.Invoke();
+                s_Update += value;
+            }
+            remove
+            {
+                s_Update -= value;
+            }
+        }
         public static event Action? projectChanged { add { } remove { } }
         public static event Action? quitting { add { } remove { } }
-        public static void Tick() => update?.Invoke();
+        public static void Tick() => s_Update?.Invoke();
         public static Action? QueuePlayerLoopUpdateAction;
         public static void QueuePlayerLoopUpdate() => QueuePlayerLoopUpdateAction?.Invoke();
         public static string applicationContentsPath { get; set; } = string.Empty;
