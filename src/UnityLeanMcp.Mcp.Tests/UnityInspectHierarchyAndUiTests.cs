@@ -1202,6 +1202,154 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
 
         Assert.True(result.Length <= Inspect.DefaultMaxOutputCharacters);
         Assert.EndsWith(Inspect.OutputTruncationMarker, result);
+        Assert.Contains("Category counts:", result);
+    }
+
+    [Fact]
+    public void Audit_LargeOutputWithAllCategories_PreservesHeaderCountsAndAllSectionsWithin64KiBBudget()
+    {
+        var root = new GameObject("MassiveMultiCategoryRoot");
+
+        for (int i = 0; i < 5; i++)
+        {
+            var child = new GameObject($"BrokenEventChild_{i}");
+            var comp = child.AddComponent<EventTargetComponent>();
+            var eventProp = CreateUnityEventProperty("m_OnClick", CreatePersistentCall(null, 0, $"MissingMethod_{i}", 1));
+            SerializedObject.CustomProperties[comp] = new List<SerializedProperty> { eventProp };
+            root.transform.AddChild(child.transform);
+        }
+
+        var errorShader = new Shader { name = "Hidden/InternalErrorShader" };
+        var brokenMat = new Material { name = "BrokenPinkMat", shader = errorShader };
+        for (int i = 0; i < 4; i++)
+        {
+            var child = new GameObject($"BrokenMatChild_{i}");
+            var renderer = child.AddComponent<Renderer>();
+            renderer.sharedMaterials = new[] { brokenMat };
+            root.transform.AddChild(child.transform);
+        }
+
+        var al1 = new GameObject("AudioListenerA");
+        al1.AddComponent<AudioListener>();
+        var al2 = new GameObject("AudioListenerB");
+        al2.AddComponent<AudioListener>();
+        var es1 = new GameObject("EventSystemA");
+        es1.AddComponent<EventSystem>();
+        var es2 = new GameObject("EventSystemB");
+        es2.AddComponent<EventSystem>();
+        root.transform.AddChild(al1.transform);
+        root.transform.AddChild(al2.transform);
+        root.transform.AddChild(es1.transform);
+        root.transform.AddChild(es2.transform);
+
+        for (int i = 0; i < 250; i++)
+        {
+            var child = new GameObject($"MissingScriptChildWithVeryLongDescriptiveHierarchyName_{i:D4}");
+            child.AddRawComponent(null);
+            root.transform.AddChild(child.transform);
+        }
+
+        for (int i = 0; i < 200; i++)
+        {
+            var child = new GameObject($"BrokenRefChildWithVeryLongDescriptiveHierarchyName_{i:D4}");
+            var comp = child.AddComponent<EventTargetComponent>();
+            var refProp = new SerializedProperty
+            {
+                name = "m_MissingAsset",
+                propertyPath = "m_MissingAsset",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 1000 + i
+            };
+            SerializedObject.CustomProperties[comp] = new List<SerializedProperty> { refProp };
+            root.transform.AddChild(child.transform);
+        }
+
+        string result = Inspect.Audit(root, maxIssuesPerCategory: 2000);
+
+        Assert.True(result.Length <= Inspect.DefaultMaxOutputCharacters);
+        Assert.EndsWith(Inspect.OutputTruncationMarker, result);
+
+        // Header summary must show all 5 category counts at the top
+        Assert.Contains("Category counts:", result);
+        Assert.Contains("Missing Scripts:", result);
+        Assert.Contains("Broken Object References:", result);
+        Assert.Contains("Broken UnityEvent Listeners: 5", result);
+        Assert.Contains("Material & Shader Errors: 4", result);
+        Assert.Contains("Scene Hygiene Issues: 2", result);
+
+        // All 5 sections and representative/full items from later categories must remain visible
+        Assert.Contains("Missing Scripts (", result);
+        Assert.Contains("more omitted; output budget reached)", result);
+        Assert.Contains("Broken Object References (", result);
+        Assert.Contains("Broken UnityEvent Listeners (5):", result);
+        Assert.Contains("BrokenEventChild_4", result);
+        Assert.Contains("Material & Shader Errors (4):", result);
+        Assert.Contains("BrokenMatChild_3", result);
+        Assert.Contains("Scene Hygiene Issues (2):", result);
+        Assert.Contains("Duplicate active AudioListener components (2)", result);
+        Assert.Contains("Duplicate active EventSystem components (2)", result);
+    }
+
+    [Fact]
+    public void Audit_AllFiveCategoriesExceedBudget_EachCategoryGetsRepresentativeItemsAndTruncationMarker()
+    {
+        const int prefabCount = 150;
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.OrdinalIgnoreCase);
+        var guidsToPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var errorShader = new Shader { name = "Hidden/InternalErrorShader" };
+        var brokenMat = new Material { name = "BrokenMat", shader = errorShader };
+
+        for (int i = 0; i < prefabCount; i++)
+        {
+            string guid = $"guid_5cat_{i:D3}";
+            string path = $"Assets/Prefabs/FiveCat/MassiveFiveCategoryPrefabWithLongPathName_{i:D3}.prefab";
+            var prefabRoot = new GameObject($"MassiveFiveCategoryPrefabRootWithVeryLongName_{i:D3}");
+            prefabRoot.AddRawComponent(null);
+
+            var comp = prefabRoot.AddComponent<Renderer>();
+            comp.sharedMaterials = new[] { brokenMat };
+
+            var refProp = new SerializedProperty
+            {
+                name = "m_LongBrokenObjectReferencePropertyName",
+                propertyPath = "m_LongBrokenObjectReferencePropertyName",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = 5000 + i
+            };
+            var eventProp = CreateUnityEventProperty("m_OnLongEvent", CreatePersistentCall(null, 0, "LongMissingMethod", 1));
+            SerializedObject.CustomProperties[comp] = new List<SerializedProperty> { refProp, eventProp };
+
+            var al1 = new GameObject("Listener1");
+            al1.AddComponent<AudioListener>();
+            var al2 = new GameObject("Listener2");
+            al2.AddComponent<AudioListener>();
+            prefabRoot.transform.AddChild(al1.transform);
+            prefabRoot.transform.AddChild(al2.transform);
+
+            prefabsByPath[path] = prefabRoot;
+            guidsToPath[guid] = path;
+        }
+
+        AssetDatabase.IsValidFolderFunc = path =>
+            string.Equals(path, "Assets/Prefabs/FiveCat", StringComparison.OrdinalIgnoreCase);
+        AssetDatabase.FindAssetsInFoldersFunc = (_, _) => new List<string>(guidsToPath.Keys).ToArray();
+        AssetDatabase.GUIDToAssetPathFunc = guid =>
+            guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path =>
+            prefabsByPath.TryGetValue(path, out var go) ? go : null;
+
+        string result = Inspect.Audit("Assets/Prefabs/FiveCat", maxPrefabs: 200, maxIssuesPerCategory: 500);
+
+        Assert.True(result.Length <= Inspect.DefaultMaxOutputCharacters);
+        Assert.Contains("Category counts:", result);
+        Assert.Contains("Missing Scripts (", result);
+        Assert.Contains("Broken Object References (", result);
+        Assert.Contains("Broken UnityEvent Listeners (", result);
+        Assert.Contains("Material & Shader Errors (", result);
+        Assert.Contains("Scene Hygiene Issues (", result);
+        Assert.Contains("more omitted; output budget reached)", result);
     }
 
     [Fact]
