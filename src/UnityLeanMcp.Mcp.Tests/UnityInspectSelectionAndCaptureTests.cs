@@ -550,6 +550,45 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public void CaptureCamera_WhenCameraDestroyed_ReturnsDestroyedNotificationWithoutFallbackToMain()
+    {
+        var mainGo = new GameObject("MainCamObj");
+        var mainCam = mainGo.AddComponent<Camera>();
+        mainCam.name = "MainCamera";
+        Camera.main = mainCam;
+
+        var deadGo = new GameObject("DeadCamObj");
+        var deadCam = deadGo.AddComponent<Camera>();
+        deadCam.name = "DeadCamera";
+        UnityEngine.Object.DestroyImmediate(deadCam);
+
+        string outputPath = "Temp/test_inspect_cam_destroyed.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, camera: deadCam);
+
+        Assert.Equal("(Camera is destroyed)", result);
+        Assert.False(File.Exists(outputPath));
+    }
+
+    [Fact]
+    public void CaptureCamera_WhenCameraIsNull_FallsBackToMainCamera()
+    {
+        var mainGo = new GameObject("MainCamObj");
+        var mainCam = mainGo.AddComponent<Camera>();
+        mainCam.name = "MainCamera";
+        Camera.main = mainCam;
+
+        string outputPath = "Temp/test_inspect_cam_null_fallback.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureCamera(outputPath, width: 320, height: 240, camera: null);
+
+        Assert.Contains("Captured camera \"MainCamera\"", result);
+        Assert.True(File.Exists(outputPath));
+    }
+
+    [Fact]
     public void CaptureCamera_ClampsInvalidDimensions()
     {
         var go = new GameObject("ClampCamObj");

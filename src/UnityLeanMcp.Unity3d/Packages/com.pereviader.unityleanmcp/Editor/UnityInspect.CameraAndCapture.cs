@@ -276,6 +276,11 @@ namespace UnityLeanMcp
             int height = 768,
             Camera camera = null)
         {
+            if (!ReferenceEquals(camera, null) && camera == null)
+            {
+                return "(Camera is destroyed)";
+            }
+
             if (string.IsNullOrWhiteSpace(outputPath))
             {
                 outputPath = "Temp/unity_capture.png";
