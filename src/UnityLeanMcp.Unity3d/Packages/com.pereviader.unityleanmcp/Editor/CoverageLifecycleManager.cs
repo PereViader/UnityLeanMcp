@@ -261,13 +261,15 @@ namespace UnityLeanMcp
             {
                 Coverage.enabled = true;
                 UpdateAttemptIfMatching(runId, attempt, latest => latest.enableSettingApplied = true);
+                return true;
             }
             else if (!attempt.enableRequestIssued)
             {
                 CompilationPipeline.RequestScriptCompilation();
                 UpdateAttemptIfMatching(runId, attempt, latest => latest.enableRequestIssued = true);
+                return true;
             }
-            return true;
+            return false;
         }
 
         private static bool AdvanceRestorationSettlement(CoverageAttempt attempt)

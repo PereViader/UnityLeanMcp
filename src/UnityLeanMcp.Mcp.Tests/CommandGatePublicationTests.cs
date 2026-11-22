@@ -1728,6 +1728,44 @@ public sealed class CommandGatePublicationTests : IDisposable
         Assert.Equal("RUNNING", System.Text.Encoding.UTF8.GetString(stream.ToArray()).Trim());
     }
 
+    [Fact]
+    public void EnablingPhase_SettlesViaFallbackWhenUnitySkipsCompilation()
+    {
+        const string runId = "coverage-enable-noop";
+        int compilationRequests = 0;
+        UnityEngine.TestTools.Coverage.enabled = false;
+        UnityEditor.EditorApplication.isCompiling = false;
+        UnityEditor.EditorApplication.isUpdating = false;
+        UnityLeanMcpCompilationTracker.IsCompiling = false;
+        UnityLeanMcpCompilationTracker.IsUpdating = false;
+        UnityLeanMcpCompilationTracker.RefreshRequired = false;
+        UnityLeanMcpCompilationTracker.RefreshPending = false;
+        UnityLeanMcpCompilationTracker.AwaitingCompilationStart = false;
+        UnityLeanMcpCompilationTracker.CompilationInProgress = false;
+        UnityLeanMcpCompilationTracker.ScriptCompilationFailed = false;
+        UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilationAction = () => compilationRequests++;
+
+        GetCoverageHandler.BeginCoverageAttempt(runId);
+        Assert.Equal(1, compilationRequests);
+
+        GetCoverageHandler.ObserveCompilationStarted();
+        GetCoverageHandler.ObserveCompilationFinished();
+        for (int i = 0; i < 5; i++)
+            Assert.Equal(i == 4, GetCoverageHandler.AdvanceCoverageLifecycle(runId, restoration: false));
+        Assert.True(GetCoverageHandler.EstablishCoverageBaseline(runId));
+        Assert.Equal("enabling", GetCoverageHandler.GetCoverageAttemptPhase(runId));
+        Assert.True(UnityEngine.TestTools.Coverage.enabled);
+
+        // 1 tick to issue enable compilation request + 20 ticks no-op fallback + 5 ticks idle settlement.
+        for (int i = 0; i < 26; i++)
+            Assert.Equal(i == 25, GetCoverageHandler.AdvanceCoverageLifecycle(runId, restoration: false));
+
+        Assert.Equal(2, compilationRequests);
+        Assert.Equal("enabling", GetCoverageHandler.GetCoverageAttemptPhase(runId));
+        GetCoverageHandler.MarkCoverageInstrumentationSettled(runId);
+        Assert.Equal("preparing", GetCoverageHandler.GetCoverageAttemptPhase(runId));
+    }
+
     public void Dispose()
     {
         UnityCommandGate.ForceReset();
