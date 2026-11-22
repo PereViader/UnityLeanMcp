@@ -112,6 +112,12 @@ namespace UnityLeanMcp
             }
 
             string operationId = requestParts[0];
+            if (!UnityLeanMcpPaths.IsValidOperationId(operationId))
+            {
+                writer.WriteLine("ERROR: Missing or invalid operation id");
+                return;
+            }
+
             if (File.Exists(UnityLeanMcpPaths.GetTestResultsFile(operationId)))
             {
                 writer.WriteLine("RUNNING");

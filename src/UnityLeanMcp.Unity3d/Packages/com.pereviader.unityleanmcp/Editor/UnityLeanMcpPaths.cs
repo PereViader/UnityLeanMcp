@@ -64,8 +64,53 @@ namespace UnityLeanMcp
             }
         }
 
-        public static string GetRefreshResultFile(string operationId) =>
-            string.IsNullOrEmpty(operationId) ? RefreshResultFile : Path.Combine(TempDir, $"unity_refresh_{operationId}.json");
+        public const int MaxOperationIdLength = 128;
+
+        public static bool IsValidOperationId(string operationId)
+        {
+            if (string.IsNullOrEmpty(operationId) || operationId.Length > MaxOperationIdLength)
+            {
+                return false;
+            }
+
+            if (operationId.IndexOf("..", StringComparison.Ordinal) >= 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < operationId.Length; i++)
+            {
+                char c = operationId[i];
+                bool isAllowed =
+                    (c >= 'a' && c <= 'z') ||
+                    (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') ||
+                    c == '.' ||
+                    c == '_' ||
+                    c == '-';
+                if (!isAllowed)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public static string GetRefreshResultFile(string operationId)
+        {
+            if (string.IsNullOrEmpty(operationId))
+            {
+                return RefreshResultFile;
+            }
+
+            if (!IsValidOperationId(operationId))
+            {
+                throw new ArgumentException("Invalid operation id.", nameof(operationId));
+            }
+
+            return Path.Combine(TempDir, $"unity_refresh_{operationId}.json");
+        }
         public static string TestRunningFile
         {
             get
@@ -91,11 +136,35 @@ namespace UnityLeanMcp
             }
         }
 
-        public static string GetEvalResultFile(string operationId) =>
-            string.IsNullOrEmpty(operationId) ? EvalResultFile : Path.Combine(TempDir, $"unity_eval_{operationId}.json");
+        public static string GetEvalResultFile(string operationId)
+        {
+            if (string.IsNullOrEmpty(operationId))
+            {
+                return EvalResultFile;
+            }
 
-        public static string GetTestResultsFile(string operationId) =>
-            string.IsNullOrEmpty(operationId) ? TestResultsFile : Path.Combine(TempDir, $"unity_test_{operationId}.json");
+            if (!IsValidOperationId(operationId))
+            {
+                throw new ArgumentException("Invalid operation id.", nameof(operationId));
+            }
+
+            return Path.Combine(TempDir, $"unity_eval_{operationId}.json");
+        }
+
+        public static string GetTestResultsFile(string operationId)
+        {
+            if (string.IsNullOrEmpty(operationId))
+            {
+                return TestResultsFile;
+            }
+
+            if (!IsValidOperationId(operationId))
+            {
+                throw new ArgumentException("Invalid operation id.", nameof(operationId));
+            }
+
+            return Path.Combine(TempDir, $"unity_test_{operationId}.json");
+        }
 
         public static string GetResultFilePath(string kind, string operationId = null)
         {

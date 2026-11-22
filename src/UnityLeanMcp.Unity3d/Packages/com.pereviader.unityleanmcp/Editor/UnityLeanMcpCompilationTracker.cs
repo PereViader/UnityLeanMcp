@@ -573,7 +573,7 @@ namespace UnityLeanMcp
 
         internal static bool TryReadRefreshResultThreadSafe(string operationId, out WorkerRefreshResultSnapshot result)
         {
-            if (string.IsNullOrEmpty(operationId))
+            if (!UnityLeanMcpPaths.IsValidOperationId(operationId))
             {
                 result = null;
                 return false;

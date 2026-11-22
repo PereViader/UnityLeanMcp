@@ -12,6 +12,12 @@ namespace UnityLeanMcp
         public void Handle(string payload, StreamWriter writer)
         {
             string operationId = payload?.Trim();
+            if (!string.IsNullOrEmpty(operationId) && !UnityLeanMcpPaths.IsValidOperationId(operationId))
+            {
+                writer.WriteLine("ERROR: Missing or invalid operation id");
+                return;
+            }
+
             string resultFilePath = UnityLeanMcpPaths.GetTestResultsFile(operationId);
 
             if (!string.IsNullOrEmpty(resultFilePath) && File.Exists(resultFilePath))

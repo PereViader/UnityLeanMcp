@@ -70,7 +70,7 @@ namespace UnityLeanMcp
                     ActiveOperationSnapshot op = null;
                     try { op = JsonUtility.FromJson<ActiveOperationSnapshot>(json); } catch { }
 
-                    if (op == null || string.IsNullOrEmpty(op.Kind) || string.IsNullOrEmpty(op.OperationId))
+                    if (op == null || string.IsNullOrEmpty(op.Kind) || !UnityLeanMcpPaths.IsValidOperationId(op.OperationId))
                     {
                         SessionState.EraseString(SessionKey);
                         SessionState.EraseString(PendingResultKey);
@@ -87,7 +87,7 @@ namespace UnityLeanMcp
                         PendingResult pending = null;
                         try { pending = JsonUtility.FromJson<PendingResult>(pendingJson); } catch { }
                         if (pending != null &&
-                            !string.IsNullOrEmpty(pending.OperationId) &&
+                            UnityLeanMcpPaths.IsValidOperationId(pending.OperationId) &&
                             !string.IsNullOrEmpty(pending.Path) &&
                             !string.IsNullOrEmpty(pending.Kind) &&
                             pending.OperationId == op.OperationId)
@@ -200,7 +200,10 @@ namespace UnityLeanMcp
             {
                 operation = s_Snapshot;
                 if (!s_AcceptingCancellationRequests) return false;
-                s_CancellationRequests.Add(opId);
+                if (UnityLeanMcpPaths.IsValidOperationId(opId))
+                {
+                    s_CancellationRequests.Add(opId);
+                }
                 return true;
             }
         }
@@ -235,7 +238,7 @@ namespace UnityLeanMcp
         // Called on main thread to begin operation
         public static BeginGateResult TryBegin(string kind, string opId, string status, out string busyReason)
         {
-            if (string.IsNullOrWhiteSpace(opId) || string.IsNullOrWhiteSpace(kind))
+            if (!UnityLeanMcpPaths.IsValidOperationId(opId) || string.IsNullOrWhiteSpace(kind))
             {
                 busyReason = "invalid";
                 return BeginGateResult.Invalid;
@@ -385,6 +388,14 @@ namespace UnityLeanMcp
             var pending = s_PendingResult;
             if (pending == null) return;
 
+            if (!UnityLeanMcpPaths.IsValidOperationId(pending.OperationId))
+            {
+                WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile,
+                    "Discarding invalid pending result for " + pending.Kind + " " + pending.OperationId);
+                ClearPendingResultAndComplete(pending.OperationId);
+                return;
+            }
+
             if (pending.Kind == OperationKinds.Test)
             {
                 try
@@ -427,22 +438,27 @@ namespace UnityLeanMcp
                 {
                     TryWriteStaticHistory(UnityLeanMcpPaths.RefreshResultFile, pending.Json, pending.OperationId);
                 }
-                lock (s_Lock)
-                {
-                    if (s_PendingResult != null && s_PendingResult.OperationId == pending.OperationId)
-                    {
-                        SessionState.EraseString(PendingResultKey);
-                        s_PendingResult = null;
-                        s_LastRetryTicks = 0;
-                        EditorApplication.update -= RetryPendingResult;
-                    }
-                    Complete(pending.OperationId);
-                }
+                ClearPendingResultAndComplete(pending.OperationId);
             }
             catch (Exception ex)
             {
                 WorkerDiagnosticsLogger.Warning(UnityLeanMcpPaths.LogFile,
                     "Terminal result publication will retry for " + pending.Kind + " " + pending.OperationId + ": " + ex.Message);
+            }
+        }
+
+        private static void ClearPendingResultAndComplete(string operationId)
+        {
+            lock (s_Lock)
+            {
+                if (s_PendingResult != null && s_PendingResult.OperationId == operationId)
+                {
+                    SessionState.EraseString(PendingResultKey);
+                    s_PendingResult = null;
+                    s_LastRetryTicks = 0;
+                    EditorApplication.update -= RetryPendingResult;
+                }
+                Complete(operationId);
             }
         }
 

@@ -18,8 +18,7 @@ namespace UnityLeanMcp
         private string GetRefreshPollResponse(string payload)
         {
             string operationId = payload?.Trim();
-            if (!string.IsNullOrEmpty(operationId) &&
-                operationId.IndexOfAny(new[] { ' ', '\t', '\r', '\n' }) >= 0)
+            if (!string.IsNullOrEmpty(operationId) && !UnityLeanMcpPaths.IsValidOperationId(operationId))
             {
                 return "ERROR Invalid refresh operation id.";
             }

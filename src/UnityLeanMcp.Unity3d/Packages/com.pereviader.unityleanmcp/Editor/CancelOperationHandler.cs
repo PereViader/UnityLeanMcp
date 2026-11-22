@@ -33,6 +33,13 @@ namespace UnityLeanMcp
                 return;
             }
 
+            if (!UnityLeanMcpPaths.IsValidOperationId(operationId))
+            {
+                writer.WriteLine("ERROR: Missing or invalid operation id");
+                writer.Flush();
+                return;
+            }
+
             // Record intent atomically with admission, including requests still
             // queued on the main thread or arriving after this connection.
             if (!UnityCommandGate.TryRequestCancellation(operationId, out var operation))
@@ -115,6 +122,11 @@ namespace UnityLeanMcp
 
         internal static bool IsTerminalInterruptedResult(string operationId)
         {
+            if (!UnityLeanMcpPaths.IsValidOperationId(operationId))
+            {
+                return false;
+            }
+
             return IsTerminalInterruptedResult(UnityLeanMcpPaths.GetTestResultsFile(operationId), operationId)
                 || IsTerminalInterruptedResult(UnityLeanMcpPaths.GetEvalResultFile(operationId), operationId)
                 || IsTerminalInterruptedRefreshResult(UnityLeanMcpPaths.GetRefreshResultFile(operationId), operationId);
