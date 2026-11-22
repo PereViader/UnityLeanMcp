@@ -139,47 +139,53 @@ public class DiagnosticFormatter : IDiagnosticFormatter
     public string CompactTestStackTrace(string? stackTrace, int maxLines = 3)
     {
         string sanitized = SanitizeTestStackTrace(stackTrace);
-        if (string.IsNullOrWhiteSpace(sanitized))
+        if (string.IsNullOrWhiteSpace(sanitized) || maxLines <= 0)
             return string.Empty;
 
         var lines = sanitized.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
         if (lines.Length <= maxLines)
             return sanitized;
 
-        var projectLines = new List<string>();
-        foreach (var line in lines)
+        var isProject = new bool[lines.Length];
+        int projectCount = 0;
+        for (int i = 0; i < lines.Length; i++)
         {
-            if (IsProjectLine(line))
+            if (IsProjectLine(lines[i]))
             {
-                projectLines.Add(line);
+                isProject[i] = true;
+                projectCount++;
             }
         }
 
-        if (projectLines.Count > 0)
-        {
-            if (projectLines.Count >= maxLines)
-            {
-                return string.Join(Environment.NewLine, projectLines.Take(maxLines));
-            }
+        if (projectCount == 0)
+            return string.Join(Environment.NewLine, lines.Take(maxLines));
 
-            var result = new List<string>(maxLines);
-            foreach (var line in lines)
+        var result = new List<string>(maxLines);
+        if (projectCount >= maxLines)
+        {
+            for (int i = 0; i < lines.Length && result.Count < maxLines; i++)
             {
-                if (result.Count >= maxLines)
-                    break;
-                result.Add(line);
-            }
-            foreach (var projLine in projectLines)
-            {
-                if (!result.Contains(projLine) && result.Count < maxLines)
-                {
-                    result.Add(projLine);
-                }
+                if (isProject[i])
+                    result.Add(lines[i]);
             }
             return string.Join(Environment.NewLine, result);
         }
 
-        return string.Join(Environment.NewLine, lines.Take(maxLines));
+        int nonProjectBudget = maxLines - projectCount;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (isProject[i])
+            {
+                result.Add(lines[i]);
+            }
+            else if (nonProjectBudget > 0)
+            {
+                result.Add(lines[i]);
+                nonProjectBudget--;
+            }
+        }
+
+        return string.Join(Environment.NewLine, result);
     }
 
     public string FormatEvalException(string? message)

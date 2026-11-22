@@ -752,6 +752,63 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
     }
 
     [Fact]
+    public void DiagnosticFormatter_CompactTestStackTrace_PreservesProjectFramesPastMaxLines_InOriginalOrder()
+    {
+        var formatter = new DiagnosticFormatter();
+        string nonProject0 = "  at UnityEngine.Assertions.Assert.AreEqual[T] (T expected, T actual) [0x00000] in <...>:0";
+        string nonProject1 = "  at UnityEngine.Assertions.Assert.Fail (System.String message) [0x00000] in <...>:0";
+        string nonProject2 = "  at UnityEngine.Debug.LogError (System.Object message) [0x00000] in <...>:0";
+        string project3 = "  at MyProject.Engine.Compute () [0x00010] in Assets/Scripts/Engine.cs:25";
+        string project4 = "  at MyProject.Tests.PlayerTests.MoveTest () [0x00025] in Assets/Tests/PlayerTests.cs:42";
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            nonProject0,
+            nonProject1,
+            nonProject2,
+            project3,
+            project4,
+        });
+
+        string compacted = formatter.CompactTestStackTrace(rawTrace, maxLines: 3);
+
+        string expected = string.Join(Environment.NewLine, new[]
+        {
+            nonProject0,
+            project3,
+            project4,
+        });
+        Assert.Equal(expected, compacted);
+    }
+
+    [Fact]
+    public void DiagnosticFormatter_CompactTestStackTrace_PreservesDuplicateRecursiveFrames()
+    {
+        var formatter = new DiagnosticFormatter();
+        string nonProjectDup = "  at System.Collections.Generic.List`1[T].ForEach (System.Action`1[T] action) [0x00000] in <...>:0";
+        string nonProjectOther = "  at UnityEngine.Assertions.Assert.IsTrue (System.Boolean condition) [0x00000] in <...>:0";
+        string projectDup = "  at MyProject.TreeNode.Traverse (System.Int32 depth) [0x00015] in Assets/Scripts/TreeNode.cs:30";
+        string rawTrace = string.Join(Environment.NewLine, new[]
+        {
+            nonProjectDup,
+            nonProjectDup,
+            nonProjectOther,
+            projectDup,
+            projectDup,
+        });
+
+        string compacted = formatter.CompactTestStackTrace(rawTrace, maxLines: 4);
+
+        string expected = string.Join(Environment.NewLine, new[]
+        {
+            nonProjectDup,
+            nonProjectDup,
+            projectDup,
+            projectDup,
+        });
+        Assert.Equal(expected, compacted);
+    }
+
+    [Fact]
     public void FormatEvalException_StandardExceptionWithReflectionAndHarnessTail_StripsTailAndFormatsEvalLine()
     {
         string message = string.Join("\n", new[]
