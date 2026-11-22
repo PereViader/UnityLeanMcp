@@ -90,42 +90,6 @@ public sealed class ToolFormattingTests
     }
 
     [Fact]
-    public async Task UnityRefresh_WhenBusy_ReportsBusyWithoutClaimingCompilationFailed()
-    {
-        using var ctx = new ToolFormattingTestContext();
-        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
-        {
-            Success = false,
-            Message = "Unity is busy with another operation: BUSY test"
-        };
-
-        var result = await ctx.Tools.UnityRefreshAsync();
-
-        Assert.True(result.IsError);
-        string text = ToolFormattingTestContext.GetResultText(result);
-        Assert.Equal("Unity is busy with another operation: BUSY test", text);
-        Assert.DoesNotContain("Error: Unity compilation failed.", text);
-    }
-
-    [Fact]
-    public async Task UnityRefresh_WhenCleanAndBusy_ReportsBusyWithoutClaimingRecompilationFailed()
-    {
-        using var ctx = new ToolFormattingTestContext();
-        ctx.Client.RefreshResultToReturn = new UnityRefreshResult
-        {
-            Success = false,
-            Message = "Unity is busy with another operation: BUSY test"
-        };
-
-        var result = await ctx.Tools.UnityRefreshAsync(clean: true);
-
-        Assert.True(result.IsError);
-        string text = ToolFormattingTestContext.GetResultText(result);
-        Assert.Equal("Unity is busy with another operation: BUSY test", text);
-        Assert.DoesNotContain("Error: Unity recompilation failed.", text);
-    }
-
-    [Fact]
     public async Task UnityRefresh_WhenInterrupted_ReportsInterruptionCleanly()
     {
         using var ctx = new ToolFormattingTestContext();

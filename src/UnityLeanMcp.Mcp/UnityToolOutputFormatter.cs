@@ -38,11 +38,6 @@ internal sealed partial class UnityToolOutputFormatter
             return msg.TrimEnd();
         }
 
-        if (result.Message?.StartsWith("Unity is busy", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return result.Message.TrimEnd();
-        }
-
         return _diagnosticFormatter.FormatCompilerDiagnostics(
             result.Message,
             projectRoot,

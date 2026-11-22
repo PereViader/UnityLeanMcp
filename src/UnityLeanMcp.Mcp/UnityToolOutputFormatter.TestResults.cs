@@ -128,14 +128,6 @@ internal sealed partial class UnityToolOutputFormatter
                 headerOutput.AppendLine($"Tests Passed: {result.PassCount} passed{skipStr}.");
             }
         }
-        else if (result.Message?.StartsWith("Unity is busy", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            headerOutput.AppendTrimmedBounded(
-                result.Message,
-                McpOutputLimits.MaxFailureMessageCharacters,
-                McpOutputLimits.FailureMessageTruncationMarker);
-            headerOutput.AppendLine();
-        }
         else
         {
             string skipStr = result.SkipCount > 0 ? $", {result.SkipCount} skipped" : "";
