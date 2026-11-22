@@ -387,7 +387,12 @@ namespace UnityLeanMcp
 
             var type = result.GetType();
 
-            if (type.IsPrimitive || result is string || result is decimal || type.IsEnum)
+            if (type.IsPrimitive || result is decimal)
+            {
+                return LimitOutput(Convert.ToString(result, CultureInfo.InvariantCulture), context);
+            }
+
+            if (result is string || type.IsEnum)
             {
                 return LimitOutput(result.ToString(), context);
             }

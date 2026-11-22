@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using UnityEngine;
 using UnityLeanMcp;
@@ -136,6 +137,33 @@ public sealed class UnityResultFormatterUnitTests : IDisposable
         finally
         {
             UnityResultFormatter.MaxItems = originalMaxItems;
+        }
+    }
+
+    private enum SampleEnum
+    {
+        FirstValue = 1,
+        SecondValue = 2
+    }
+
+    [Fact]
+    public void FormatResult_PrimitivesAndDecimal_UseInvariantCultureUnderCommaDecimalLocale()
+    {
+        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+
+            Assert.Equal("1.5", UnityResultFormatter.FormatResult(1.5f));
+            Assert.Equal("2.25", UnityResultFormatter.FormatResult(2.25d));
+            Assert.Equal("3.75", UnityResultFormatter.FormatResult(3.75m));
+            Assert.Equal("42", UnityResultFormatter.FormatResult(42));
+            Assert.Equal("hello, world", UnityResultFormatter.FormatResult("hello, world"));
+            Assert.Equal("SecondValue", UnityResultFormatter.FormatResult(SampleEnum.SecondValue));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
         }
     }
 }
