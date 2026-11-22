@@ -500,6 +500,38 @@ public class InstallerTests
     }
 
     [Fact]
+    public void AppendCodexMcpConfig_WhenNextTableHeaderIsIndented_PreservesRemainderOfFile()
+    {
+        string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string configFile = Path.Combine(tempBase, ".codex", "config.toml");
+            Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
+            string existing =
+                "[mcp_servers.unity-lean-mcp]\n" +
+                "cwd = \"C:/Old/MCP~/\"\n\n" +
+                "  [mcp_servers.other]\n" +
+                "command = \"node\"\n\n" +
+                "\t[profiles.default]\n" +
+                "model = \"o3\"\n";
+            File.WriteAllText(configFile, existing);
+
+            AppendCodexMcpConfig(configFile, "C:/New/MCP~/");
+
+            string content = File.ReadAllText(configFile);
+            Assert.Contains("cwd = \"C:/New/MCP~/\"", content);
+            Assert.DoesNotContain("C:/Old/MCP~/", content);
+            Assert.Contains("  [mcp_servers.other]\ncommand = \"node\"\n", content);
+            Assert.Contains("\t[profiles.default]\nmodel = \"o3\"\n", content);
+            Assert.DoesNotContain("\r\n", content);
+        }
+        finally
+        {
+            if (Directory.Exists(tempBase)) Directory.Delete(tempBase, true);
+        }
+    }
+
+    [Fact]
     public void AppendCodexMcpConfig_WhenExistingFileLacksTrailingNewline_UsesLfOnly()
     {
         string tempBase = Path.Combine(Path.GetTempPath(), "test_codex_" + Guid.NewGuid().ToString("N"));

@@ -113,7 +113,7 @@ namespace UnityLeanMcp
                 int nextSectionIndex = -1;
                 var nextMatch = Regex.Match(
                     existing.Substring(afterHeaderIndex),
-                    @"(?m)^\[");
+                    @"(?m)^[ \t]*\[");
                 if (nextMatch.Success)
                 {
                     nextSectionIndex = afterHeaderIndex + nextMatch.Index;
