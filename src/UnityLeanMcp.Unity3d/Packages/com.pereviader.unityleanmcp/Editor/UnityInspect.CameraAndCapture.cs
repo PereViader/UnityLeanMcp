@@ -338,18 +338,6 @@ namespace UnityLeanMcp
                     return "(GameView capture requires an interactive graphical Unity Editor and is unavailable in batchmode or with GraphicsDeviceType.Null. Use Inspect.CaptureCamera(...) for offscreen camera rendering, or Inspect.Hierarchy(includeUiDetails: true) / Inspect.UIDocument() to inspect UI layout.)";
                 }
 
-                string normalizedPath = outputPath.Replace('\\', '/');
-                string fullPath = Path.GetFullPath(outputPath);
-                string dir = Path.GetDirectoryName(fullPath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-
-                string tempPath = Path.Combine(
-                    string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
-                    $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp.png");
-
                 Type gameViewType = typeof(Editor).Assembly.GetType("UnityEditor.GameView");
                 if (gameViewType == null)
                 {
@@ -357,13 +345,29 @@ namespace UnityLeanMcp
                 }
 
                 EditorWindow prevFocused = null;
-                try { prevFocused = EditorWindow.focusedWindow; } catch { }
-
                 EditorWindow gameView = null;
                 bool createdGameView = false;
+                string tempPath = null;
 
                 try
                 {
+                    if (!TryPrepareCaptureOutputPath(
+                        outputPath,
+                        "Failed to capture GameView",
+                        out string normalizedPath,
+                        out string fullPath,
+                        out string dir,
+                        out string pathError))
+                    {
+                        return pathError;
+                    }
+
+                    tempPath = Path.Combine(
+                        string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
+                        $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp.png");
+
+                    try { prevFocused = EditorWindow.focusedWindow; } catch { }
+
                     UnityEngine.Object[] existingViews = null;
                     try { existingViews = Resources.FindObjectsOfTypeAll(gameViewType); } catch { }
                     if (existingViews != null)
@@ -404,9 +408,20 @@ namespace UnityLeanMcp
 
                     if (File.Exists(fullPath))
                     {
-                        File.Delete(fullPath);
+                        try
+                        {
+                            File.Replace(tempPath, fullPath, null);
+                        }
+                        catch (PlatformNotSupportedException)
+                        {
+                            File.Delete(fullPath);
+                            File.Move(tempPath, fullPath);
+                        }
                     }
-                    File.Move(tempPath, fullPath);
+                    else
+                    {
+                        File.Move(tempPath, fullPath);
+                    }
 
                     long fileSizeBytes = new FileInfo(fullPath).Length;
                     return $"Captured GameView (superSize: {superSize}, {fileSizeBytes.ToString("N0", CultureInfo.InvariantCulture)} bytes) to {normalizedPath}";
@@ -423,7 +438,7 @@ namespace UnityLeanMcp
                 {
                     try
                     {
-                        if (File.Exists(tempPath))
+                        if (!string.IsNullOrEmpty(tempPath) && File.Exists(tempPath))
                         {
                             File.Delete(tempPath);
                         }
@@ -766,61 +781,78 @@ namespace UnityLeanMcp
 
         private static Bounds ComputeTargetBounds(GameObject target)
         {
-            bool hasBounds = false;
             Bounds bounds = default;
 
-            var renderers = target.GetComponentsInChildren<Renderer>(false);
-            if (renderers != null)
+            if (TryEncapsulateBounds<Renderer>(target, r => r.enabled, r => r.bounds, ref bounds) ||
+                TryEncapsulateBounds<Collider>(target, c => c.enabled, c => c.bounds, ref bounds) ||
+                TryEncapsulateBounds<Collider2D>(target, c => c.enabled, c => c.bounds, ref bounds))
             {
-                for (int i = 0; i < renderers.Length; i++)
+                return bounds;
+            }
+
+            Vector3 center = target.transform != null ? target.transform.position : Vector3.zero;
+            return new Bounds(center, Vector3.one);
+        }
+
+        private static bool TryEncapsulateBounds<T>(
+            GameObject target,
+            Func<T, bool> isEnabled,
+            Func<T, Bounds> getBounds,
+            ref Bounds bounds) where T : Component
+        {
+            var components = target.GetComponentsInChildren<T>(false);
+            if (components == null)
+            {
+                return false;
+            }
+
+            bool hasBounds = false;
+            for (int i = 0; i < components.Length; i++)
+            {
+                var component = components[i];
+                if (component != null && isEnabled(component))
                 {
-                    var r = renderers[i];
-                    if (r != null && r.enabled)
+                    Bounds componentBounds = getBounds(component);
+                    if (!hasBounds)
                     {
-                        if (!hasBounds)
-                        {
-                            bounds = r.bounds;
-                            hasBounds = true;
-                        }
-                        else
-                        {
-                            bounds.Encapsulate(r.bounds);
-                        }
+                        bounds = componentBounds;
+                        hasBounds = true;
+                    }
+                    else
+                    {
+                        bounds.Encapsulate(componentBounds);
                     }
                 }
             }
 
-            if (!hasBounds)
+            return hasBounds;
+        }
+
+        private static bool TryPrepareCaptureOutputPath(
+            string outputPath,
+            string failurePrefix,
+            out string normalizedPath,
+            out string fullPath,
+            out string dir,
+            out string errorMessage)
+        {
+            normalizedPath = outputPath.Replace('\\', '/');
+            fullPath = Path.GetFullPath(outputPath);
+            if (Directory.Exists(fullPath))
             {
-                var colliders = target.GetComponentsInChildren<Collider>(false);
-                if (colliders != null)
-                {
-                    for (int i = 0; i < colliders.Length; i++)
-                    {
-                        var c = colliders[i];
-                        if (c != null && c.enabled)
-                        {
-                            if (!hasBounds)
-                            {
-                                bounds = c.bounds;
-                                hasBounds = true;
-                            }
-                            else
-                            {
-                                bounds.Encapsulate(c.bounds);
-                            }
-                        }
-                    }
-                }
+                dir = null;
+                errorMessage = $"({failurePrefix}: output path \"{normalizedPath}\" is an existing directory)";
+                return false;
             }
 
-            if (!hasBounds)
+            dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             {
-                Vector3 center = target.transform != null ? target.transform.position : Vector3.zero;
-                bounds = new Bounds(center, Vector3.one);
+                Directory.CreateDirectory(dir);
             }
 
-            return bounds;
+            errorMessage = null;
+            return true;
         }
 
         private static string CaptureCameraToPng(
@@ -833,14 +865,6 @@ namespace UnityLeanMcp
             width = Mathf.Clamp(width, 16, 4096);
             height = Mathf.Clamp(height, 16, 4096);
 
-            string normalizedPath = outputPath.Replace('\\', '/');
-            string fullPath = Path.GetFullPath(outputPath);
-            string dir = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
             RenderTexture rt = null;
             Texture2D tex = null;
             RenderTexture prevTarget = camera.targetTexture;
@@ -848,6 +872,17 @@ namespace UnityLeanMcp
 
             try
             {
+                if (!TryPrepareCaptureOutputPath(
+                    outputPath,
+                    $"Failed to capture {targetName}",
+                    out string normalizedPath,
+                    out string fullPath,
+                    out _,
+                    out string pathError))
+                {
+                    return pathError;
+                }
+
                 rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.Default, RenderTextureReadWrite.Default);
                 camera.targetTexture = rt;
 

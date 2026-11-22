@@ -915,6 +915,111 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
     }
 
     [Fact]
+    public async Task CaptureGameView_WhenOutputFileExists_ReplacesExistingFileCleanly()
+    {
+        var gameView = new GameView();
+        Resources.FindObjectsOfTypeAllFunc = type =>
+            type == typeof(GameView) ? new UnityEngine.Object[] { gameView } : Array.Empty<UnityEngine.Object>();
+
+        string outputPath = "Temp/test_gameview_replace.png";
+        _scope.TrackFile(outputPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+        File.WriteAllBytes(outputPath, new byte[] { 1, 2, 3, 4 });
+
+        byte[] newPng = CreateValidTestPngBytes();
+        ScreenCapture.CaptureScreenshotAction = (path, _) =>
+        {
+            File.WriteAllBytes(path, newPng);
+        };
+
+        string result = await Inspect.CaptureGameView(outputPath);
+
+        Assert.Contains("Captured GameView", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.Equal(newPng, File.ReadAllBytes(outputPath));
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenOutputPathIsExistingDirectory_ReturnsErrorWithoutOpeningGameView()
+    {
+        bool openedGameView = false;
+        EditorWindow.GetWindowFunc = (_, _, _, _) =>
+        {
+            openedGameView = true;
+            return new GameView();
+        };
+
+        string dirPath = $"Temp/test_gameview_dir_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(dirPath);
+        try
+        {
+            string result = await Inspect.CaptureGameView(dirPath);
+
+            Assert.StartsWith("(Failed to capture GameView:", result);
+            Assert.Contains("existing directory", result);
+            Assert.False(openedGameView);
+        }
+        finally
+        {
+            if (Directory.Exists(dirPath))
+            {
+                Directory.Delete(dirPath, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task CaptureGameView_WhenParentPathIsExistingFile_ReturnsErrorCleanly()
+    {
+        string blockerFile = $"Temp/test_gameview_blocker_{Guid.NewGuid():N}";
+        _scope.TrackFile(blockerFile);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(blockerFile))!);
+        File.WriteAllText(blockerFile, "not a directory");
+
+        string result = await Inspect.CaptureGameView(Path.Combine(blockerFile, "out.png"));
+
+        Assert.StartsWith("(Failed to capture GameView:", result);
+    }
+
+    [Fact]
+    public void CaptureCamera_WhenOutputPathIsExistingDirectory_ReturnsErrorCleanly()
+    {
+        var camGo = new GameObject("CaptureDirCam");
+        var cam = camGo.AddComponent<Camera>();
+        string dirPath = $"Temp/test_camera_dir_{Guid.NewGuid():N}";
+        Directory.CreateDirectory(dirPath);
+        try
+        {
+            string result = Inspect.CaptureCamera(dirPath, camera: cam);
+
+            Assert.StartsWith("(Failed to capture camera \"Camera\":", result);
+            Assert.Contains("existing directory", result);
+        }
+        finally
+        {
+            if (Directory.Exists(dirPath))
+            {
+                Directory.Delete(dirPath, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CaptureCamera_WhenParentPathIsExistingFile_ReturnsErrorCleanly()
+    {
+        var camGo = new GameObject("CaptureInvalidPathCam");
+        var cam = camGo.AddComponent<Camera>();
+        string blockerFile = $"Temp/test_camera_blocker_{Guid.NewGuid():N}";
+        _scope.TrackFile(blockerFile);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(blockerFile))!);
+        File.WriteAllText(blockerFile, "not a directory");
+
+        string result = Inspect.CaptureCamera(Path.Combine(blockerFile, "out.png"), camera: cam);
+
+        Assert.StartsWith("(Failed to capture camera \"Camera\":", result);
+    }
+
+    [Fact]
     public async Task CaptureGameView_WhenCanceled_CleansUpTempFileAndRestoresFocus()
     {
         var prevWin = new EditorWindow();
@@ -1175,6 +1280,33 @@ public sealed class UnityInspectSelectionAndCaptureTests : IDisposable
         Assert.InRange(capturedPos.z, -3.01f, -2.99f);
         Assert.True(capturedUp.HasValue);
         Assert.InRange(capturedUp!.Value.z, 0.99f, 1.01f);
+    }
+
+    [Fact]
+    public void CaptureTarget_WithCollider2DFallback_FramesCollider2DBounds()
+    {
+        var target = new GameObject("Sprite2DTarget");
+        target.transform.position = Vector3.zero;
+        var collider2D = target.AddComponent<Collider2D>();
+        collider2D.bounds = new Bounds(new Vector3(12f, -4f, 2f), new Vector3(4f, 6f, 0.5f));
+
+        Vector3? capturedLookAt = null;
+        Camera.OnBeforeRenderAction = cam =>
+        {
+            capturedLookAt = cam.transform.LastLookAtPosition;
+        };
+
+        string outputPath = "Temp/test_capture_target_collider2d.png";
+        _scope.TrackFile(outputPath);
+
+        string result = Inspect.CaptureTarget(target, outputPath, width: 320, height: 240);
+
+        Assert.Contains("Captured target \"Sprite2DTarget\" (320x240,", result);
+        Assert.True(File.Exists(outputPath));
+        Assert.True(capturedLookAt.HasValue);
+        Assert.InRange(capturedLookAt!.Value.x, 11.99f, 12.01f);
+        Assert.InRange(capturedLookAt!.Value.y, -4.01f, -3.99f);
+        Assert.InRange(capturedLookAt!.Value.z, 1.99f, 2.01f);
     }
 
     [Fact]

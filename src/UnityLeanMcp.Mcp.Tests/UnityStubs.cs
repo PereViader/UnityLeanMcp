@@ -377,6 +377,7 @@ namespace UnityEngine
 
     public class MonoBehaviour : Behaviour { }
     public class Collider : Component { public bool enabled { get; set; } = true; public Bounds bounds { get; set; } }
+    public class Collider2D : Behaviour { public Bounds bounds { get; set; } }
     public class Renderer : Component
     {
         public bool enabled { get; set; } = true;
