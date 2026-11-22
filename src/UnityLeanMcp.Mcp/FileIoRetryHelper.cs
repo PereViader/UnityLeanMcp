@@ -180,14 +180,14 @@ internal static class FileIoRetryHelper
     internal static (string Text, long NextOffset) ReadFileDeltaFromOffset(string path, long fromOffset = 0)
     {
         using var fs = OpenReadStream(path, useAsync: false);
-        if (!TryPrepareDeltaRead(fs, fromOffset, out long effectiveOffset))
+        if (!TryPrepareDeltaRead(fs, fromOffset, out long effectiveOffset, out int initialCapacity))
         {
             return (string.Empty, effectiveOffset);
         }
 
-        using var reader = new StreamReader(fs, Encoding.UTF8);
-        string text = reader.ReadToEnd();
-        return (text, fs.Position);
+        using var buffer = new MemoryStream(initialCapacity);
+        fs.CopyTo(buffer);
+        return DecodeCompleteLines(buffer, effectiveOffset);
     }
 
     internal static async Task<(string Text, long NextOffset)> ReadFileDeltaFromOffsetAsync(
@@ -196,14 +196,14 @@ internal static class FileIoRetryHelper
         CancellationToken cancellationToken = default)
     {
         using var fs = OpenReadStream(path, useAsync: true);
-        if (!TryPrepareDeltaRead(fs, fromOffset, out long effectiveOffset))
+        if (!TryPrepareDeltaRead(fs, fromOffset, out long effectiveOffset, out int initialCapacity))
         {
             return (string.Empty, effectiveOffset);
         }
 
-        using var reader = new StreamReader(fs, Encoding.UTF8);
-        string text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-        return (text, fs.Position);
+        using var buffer = new MemoryStream(initialCapacity);
+        await fs.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+        return DecodeCompleteLines(buffer, effectiveOffset);
     }
 
     private static FileStream OpenReadStream(string path, bool useAsync)
@@ -225,14 +225,22 @@ internal static class FileIoRetryHelper
         }
     }
 
-    private static bool TryPrepareDeltaRead(FileStream fs, long fromOffset, out long effectiveOffset)
+    private static bool TryPrepareDeltaRead(
+        FileStream fs,
+        long fromOffset,
+        out long effectiveOffset,
+        out int initialCapacity)
     {
         long length = fs.Length;
         effectiveOffset = fromOffset > 0 && length >= fromOffset ? fromOffset : 0;
         if (effectiveOffset == length)
         {
+            initialCapacity = 0;
             return false;
         }
+
+        long remaining = length - effectiveOffset;
+        initialCapacity = remaining > 0 && remaining <= int.MaxValue ? (int)remaining : 0;
 
         if (effectiveOffset > 0)
         {
@@ -240,6 +248,27 @@ internal static class FileIoRetryHelper
         }
 
         return true;
+    }
+
+    private static (string Text, long NextOffset) DecodeCompleteLines(
+        MemoryStream buffer,
+        long effectiveOffset)
+    {
+        ReadOnlySpan<byte> span = buffer.GetBuffer().AsSpan(0, (int)buffer.Length);
+        int lastNewlineIndex = span.LastIndexOf((byte)'\n');
+        if (lastNewlineIndex < 0)
+        {
+            return (string.Empty, effectiveOffset);
+        }
+
+        int completeByteCount = lastNewlineIndex + 1;
+        ReadOnlySpan<byte> decodeSpan = span[..completeByteCount];
+        if (effectiveOffset == 0 && decodeSpan.StartsWith("\xEF\xBB\xBF"u8))
+        {
+            decodeSpan = decodeSpan[3..];
+        }
+
+        return (Encoding.UTF8.GetString(decodeSpan), effectiveOffset + completeByteCount);
     }
 
     internal static void WriteTextAtomically(string path, string content)

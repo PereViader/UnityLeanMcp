@@ -388,6 +388,69 @@ public class UnityProcessManagerTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadFileDeltaFromOffset_AdvancesOnlyThroughLastNewline_AndAvoidsMidUtf8Reads(bool useAsync)
+    {
+        string tempFile = Path.GetTempFileName();
+        var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        try
+        {
+            Task<(string Text, long NextOffset)> ReadDeltaAsync(long offset) => useAsync
+                ? FileIoRetryHelper.ReadFileDeltaFromOffsetAsync(tempFile, offset)
+                : Task.FromResult(FileIoRetryHelper.ReadFileDeltaFromOffset(tempFile, offset));
+
+            await File.WriteAllBytesAsync(tempFile, utf8NoBom.GetBytes("Line 1\nPartial"));
+            (string delta1, long offset1) = await ReadDeltaAsync(0);
+            Assert.Equal("Line 1\n", delta1);
+            Assert.Equal(utf8NoBom.GetByteCount("Line 1\n"), offset1);
+
+            // Without a newline, NextOffset must remain unchanged and return empty string.
+            (string deltaNoNewline, long offsetNoNewline) = await ReadDeltaAsync(offset1);
+            Assert.Equal(string.Empty, deltaNoNewline);
+            Assert.Equal(offset1, offsetNoNewline);
+
+            // Append first 2 bytes of 4-byte UTF-8 character '🚀' (F0 9F 9A 80) without a newline.
+            await using (var appendStream = new FileStream(tempFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            {
+                await appendStream.WriteAsync(new byte[] { 0xF0, 0x9F });
+            }
+
+            (string deltaSplitUtf8, long offsetSplitUtf8) = await ReadDeltaAsync(offset1);
+            Assert.Equal(string.Empty, deltaSplitUtf8);
+            Assert.DoesNotContain('\uFFFD', deltaSplitUtf8);
+            Assert.Equal(offset1, offsetSplitUtf8);
+
+            // Complete the UTF-8 character and add a newline plus another incomplete trailing fragment.
+            await using (var appendStream = new FileStream(tempFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            {
+                await appendStream.WriteAsync(new byte[] { 0x9A, 0x80 });
+                await appendStream.WriteAsync(utf8NoBom.GetBytes("\nTail"));
+            }
+
+            (string delta2, long offset2) = await ReadDeltaAsync(offset1);
+            Assert.Equal("Partial🚀\n", delta2);
+            Assert.DoesNotContain('\uFFFD', delta2);
+            Assert.Equal(offset1 + utf8NoBom.GetByteCount("Partial🚀\n"), offset2);
+
+            // Truncation to a shorter file without a newline resets NextOffset to 0.
+            await File.WriteAllBytesAsync(tempFile, utf8NoBom.GetBytes("Short"));
+            (string deltaTruncated, long offsetTruncated) = await ReadDeltaAsync(offset2);
+            Assert.Equal(string.Empty, deltaTruncated);
+            Assert.Equal(0, offsetTruncated);
+
+            await File.AppendAllTextAsync(tempFile, "\n", utf8NoBom);
+            (string deltaAfterTruncate, long offsetAfterTruncate) = await ReadDeltaAsync(offsetTruncated);
+            Assert.Equal("Short\n", deltaAfterTruncate);
+            Assert.Equal(utf8NoBom.GetByteCount("Short\n"), offsetAfterTruncate);
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
+    }
+
     [Fact]
     public async Task ReadFileDeltaWithRetryAsync_WhenTransientContention_RetriesAndSucceeds()
     {

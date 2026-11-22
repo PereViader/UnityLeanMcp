@@ -74,10 +74,9 @@ public class UnityLogScanner : IUnityLogScanner
         }
 
         string? latest = null;
-        var lines = logText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-        foreach (string rawLine in lines)
+        foreach (ReadOnlySpan<char> rawLine in logText.AsSpan().EnumerateLines())
         {
-            string line = rawLine.Trim();
+            ReadOnlySpan<char> line = rawLine.Trim();
             if (line.Length == 0)
             {
                 continue;
@@ -104,11 +103,11 @@ public class UnityLogScanner : IUnityLogScanner
         return latest;
     }
 
-    private static bool ContainsAny(string line, params string[] tokens)
+    private static bool ContainsAny(ReadOnlySpan<char> line, params ReadOnlySpan<string> tokens)
     {
         foreach (string token in tokens)
         {
-            if (line.Contains(token, StringComparison.OrdinalIgnoreCase))
+            if (line.Contains(token.AsSpan(), StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

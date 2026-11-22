@@ -107,6 +107,16 @@ public class DecomposedComponentsTests
     }
 
     [Fact]
+    public void UnityLogScanner_ExtractLatestStartupMilestone_HandlesMixedLineEndingsAndWhitespaceLines()
+    {
+        var scanner = new UnityLogScanner();
+
+        string mixed = "\r\n   \r[Package Manager] Resolving packages\r\n\t\n  Compilation started  \rStart importing Assets/Bar.cs\n";
+        Assert.Contains("Importing assets", scanner.ExtractLatestStartupMilestone(mixed));
+        Assert.Null(scanner.ExtractLatestStartupMilestone("   \r\n\t\n  "));
+    }
+
+    [Fact]
     public async Task UnitySocketTransport_SendCommandAsync_SendsAndReceivesLine()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
