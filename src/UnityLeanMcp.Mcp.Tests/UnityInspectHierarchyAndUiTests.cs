@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Threading;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -1901,6 +1903,126 @@ public sealed class UnityInspectHierarchyAndUiTests : IDisposable
         Assert.Equal("(Scene \"Assets/Prefabs/Gameplay\" is not currently loaded)", Inspect.Hierarchy("Assets/Prefabs/Gameplay"));
         Assert.Contains("GameplayRoot", Inspect.Hierarchy("Assets/Scenes/Gameplay.unity"));
         Assert.Contains("GameplayRoot", Inspect.Hierarchy("Gameplay"));
+    }
+
+    [Fact]
+    public void Audit_FolderPrefabs_PreservesCaseDistinctPrefabPathsAndUsesOrdinalFolderMatching()
+    {
+        var upperGo = new GameObject("EnemyUpper");
+        upperGo.AddRawComponent(null);
+        var lowerGo = new GameObject("EnemyLower");
+        lowerGo.AddRawComponent(null);
+        var ignoredGo = new GameObject("Ignored");
+        ignoredGo.AddRawComponent(null);
+
+        var prefabsByPath = new Dictionary<string, GameObject>(StringComparer.Ordinal)
+        {
+            ["Assets/Prefabs/CaseTest/Enemy.prefab"] = upperGo,
+            ["Assets/Prefabs/CaseTest/enemy.prefab"] = lowerGo,
+            ["assets/prefabs/casetest/Ignored.prefab"] = ignoredGo
+        };
+        var guidsToPath = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["guid-upper"] = "Assets/Prefabs/CaseTest/Enemy.prefab",
+            ["guid-lower"] = "Assets/Prefabs/CaseTest/enemy.prefab",
+            ["guid-ignored"] = "assets/prefabs/casetest/Ignored.prefab"
+        };
+
+        AssetDatabase.IsValidFolderFunc = path => string.Equals(path, "Assets/Prefabs/CaseTest", StringComparison.Ordinal);
+        AssetDatabase.FindAssetsInFoldersFunc = (filter, folders) =>
+            folders.Length == 1 && folders[0] == "Assets/Prefabs/CaseTest"
+                ? new[] { "guid-upper", "guid-lower", "guid-ignored" }
+                : Array.Empty<string>();
+        AssetDatabase.GUIDToAssetPathFunc = guid => guidsToPath.TryGetValue(guid, out var p) ? p : string.Empty;
+        PrefabUtility.LoadPrefabContentsFunc = path => prefabsByPath.TryGetValue(path, out var go) ? go : null;
+        PrefabUtility.UnloadPrefabContentsAction = _ => { };
+
+        string result = Inspect.Audit("Assets/Prefabs/CaseTest");
+
+        Assert.Contains("Audit of Folder \"Assets/Prefabs/CaseTest\" (2 prefab(s)): 2 issue(s) found (2 GameObject(s) scanned):", result);
+        Assert.Contains("prefab: \"Assets/Prefabs/CaseTest/Enemy.prefab\"", result);
+        Assert.Contains("prefab: \"Assets/Prefabs/CaseTest/enemy.prefab\"", result);
+        Assert.DoesNotContain("Ignored.prefab", result);
+    }
+
+    [Fact]
+    public void Audit_FolderValidation_RejectsDotDotTraversalAndNonProjectDirectories()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"unityleanmcp-audit-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            AssetDatabase.IsValidFolderFunc = _ => true;
+            AssetDatabase.FindAssetsInFoldersFunc = (_, _) =>
+                throw new InvalidOperationException("Folder search should not be invoked for invalid or traversal paths.");
+            AssetDatabase.FindAssetsFunc = _ => Array.Empty<string>();
+            AssetDatabase.LoadMainAssetAtPathFunc = _ => null;
+            AssetDatabase.AssetPathToGUIDFunc = _ => string.Empty;
+
+            string dotDotMiddle = Inspect.Audit("Assets/../Outside");
+            Assert.Equal("(Audit target not found: \"Assets/../Outside\")", dotDotMiddle);
+
+            string dotDotEnd = Inspect.Audit("Assets/Prefabs/..");
+            Assert.Equal("(Audit target not found: \"Assets/Prefabs/..\")", dotDotEnd);
+
+            string osDir = Inspect.Audit(tempDir);
+            Assert.Equal($"(Audit target \"{tempDir}\" was not found as a loaded scene, active Prefab Stage, folder, or prefab asset)", osDir);
+
+            string nonAssetDir = Inspect.Audit("ProjectSettings");
+            Assert.Equal("(Audit target \"ProjectSettings\" was not found as a loaded scene, active Prefab Stage, folder, or prefab asset)", nonAssetDir);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void Audit_NumericFormatting_UsesInvariantCultureUnderNonInvariantLocale()
+    {
+        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+        CultureInfo originalUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo svSe = CultureInfo.GetCultureInfo("sv-SE");
+            CultureInfo.CurrentCulture = svSe;
+            CultureInfo.CurrentUICulture = svSe;
+
+            var root = new GameObject("LocaleRoot");
+            root.AddRawComponent(null);
+
+            var brokenRefComp = root.AddComponent<EventTargetComponent>();
+            var brokenRefProp = new SerializedProperty
+            {
+                name = "m_MissingAsset",
+                propertyPath = "m_MissingAsset",
+                propertyType = SerializedPropertyType.ObjectReference,
+                objectReferenceValue = null,
+                objectReferenceInstanceIDValue = -42137
+            };
+            SerializedObject.CustomProperties[brokenRefComp] = new List<SerializedProperty> { brokenRefProp };
+
+            var eventComp = root.AddComponent<EventTargetComponent>();
+            var missingTargetCall = CreatePersistentCall(target: null, targetInstanceId: -9876, methodName: "OnTrigger", mode: 1);
+            var eventProp = CreateUnityEventProperty("m_OnClick", missingTargetCall);
+            SerializedObject.CustomProperties[eventComp] = new List<SerializedProperty> { eventProp };
+
+            string result = Inspect.Audit(root);
+
+            Assert.Contains("Audit of GameObject \"LocaleRoot\" (hierarchy): 3 issue(s) found (1 GameObject(s) scanned):", result);
+            Assert.Contains("(instanceID: -42137)", result);
+            Assert.Contains("(instanceID: -9876)", result);
+            Assert.DoesNotContain("\u221242137", result);
+            Assert.DoesNotContain("\u22129876", result);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUiCulture;
+        }
     }
 
     private static SerializedProperty CreateUnityEventProperty(string propertyPath, params SerializedProperty[] calls)

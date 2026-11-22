@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -170,8 +171,8 @@ namespace UnityLeanMcp
             }
 
             string scopeDescription = stage != null && sceneCount > 0
-                ? $"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\" and {sceneCount} loaded scene(s)"
-                : (stage != null ? $"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\"" : $"{sceneCount} loaded scene(s)");
+                ? FormattableString.Invariant($"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\" and {sceneCount} loaded scene(s)")
+                : (stage != null ? $"Prefab Stage \"{GetPrefabStageAssetPath(stage)}\"" : FormattableString.Invariant($"{sceneCount} loaded scene(s)"));
 
             var report = new AuditReport(scopeDescription, maxIssuesPerCategory);
             bool anyAudited = false;
@@ -233,7 +234,7 @@ namespace UnityLeanMcp
             }
 
             var prefabPaths = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
 
             if (guids != null)
             {
@@ -304,16 +305,16 @@ namespace UnityLeanMcp
             }
 
             report.ScopeDescription = prefabsScanned == totalPrefabsFound
-                ? $"Folder \"{folder}\" ({totalPrefabsFound} prefab(s))"
-                : $"Folder \"{folder}\" ({prefabsScanned} of {totalPrefabsFound} prefab(s) scanned)";
+                ? FormattableString.Invariant($"Folder \"{folder}\" ({totalPrefabsFound} prefab(s))")
+                : FormattableString.Invariant($"Folder \"{folder}\" ({prefabsScanned} of {totalPrefabsFound} prefab(s) scanned)");
 
             if (stoppedByFullReport)
             {
-                report.TruncationNote = $"... (truncated: output or per-category issue limit reached; {prefabsScanned} of {totalPrefabsFound} prefab(s) scanned)";
+                report.TruncationNote = FormattableString.Invariant($"... (truncated: output or per-category issue limit reached; {prefabsScanned} of {totalPrefabsFound} prefab(s) scanned)");
             }
             else if (cappedByMaxPrefabs)
             {
-                report.TruncationNote = $"... (truncated: reached maxPrefabs limit of {maxPrefabs}; {prefabsScanned} of {totalPrefabsFound} prefab(s) scanned; pass a higher maxPrefabs value to scan more)";
+                report.TruncationNote = FormattableString.Invariant($"... (truncated: reached maxPrefabs limit of {maxPrefabs}; {prefabsScanned} of {totalPrefabsFound} prefab(s) scanned; pass a higher maxPrefabs value to scan more)");
             }
 
             return FormatAuditReport(report);
@@ -473,10 +474,10 @@ namespace UnityLeanMcp
 
                     if (missingIndices.Count > 0)
                     {
-                        string indicesStr = string.Join(", ", missingIndices);
+                        string indicesStr = string.Join(", ", missingIndices.ConvertAll(idx => idx.ToString(CultureInfo.InvariantCulture)));
                         string scriptWord = missingIndices.Count == 1 ? "missing script" : "missing scripts";
                         report.TryAddMissingScript(
-                            $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]");
+                            FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {missingIndices.Count} {scriptWord} at component index [{indicesStr}]"));
                     }
 
                     return report.IsReportFull ? SceneBfsDecision.Stop : SceneBfsDecision.Continue;
@@ -488,19 +489,19 @@ namespace UnityLeanMcp
             if (audioListenerPaths.Count > 1)
             {
                 report.TryAddSceneHygieneIssue(
-                    $"  • Duplicate active AudioListener components ({audioListenerPaths.Count}) in {containerLabel}: [{string.Join(", ", audioListenerPaths)}]");
+                    FormattableString.Invariant($"  • Duplicate active AudioListener components ({audioListenerPaths.Count}) in {containerLabel}: [{string.Join(", ", audioListenerPaths)}]"));
             }
 
             if (eventSystemPaths.Count > 1)
             {
                 report.TryAddSceneHygieneIssue(
-                    $"  • Duplicate active EventSystem components ({eventSystemPaths.Count}) in {containerLabel}: [{string.Join(", ", eventSystemPaths)}]");
+                    FormattableString.Invariant($"  • Duplicate active EventSystem components ({eventSystemPaths.Count}) in {containerLabel}: [{string.Join(", ", eventSystemPaths)}]"));
             }
 
             if (isSceneScope && mainCameraTagCount == 0)
             {
                 string camDetail = cameraCount > 0
-                    ? $"{cameraCount} untagged Camera component(s) present"
+                    ? FormattableString.Invariant($"{cameraCount} untagged Camera component(s) present")
                     : "no Camera components present";
                 report.TryAddSceneHygieneIssue(
                     $"  • Missing \"MainCamera\" tag in {containerLabel} ({camDetail})");
@@ -525,7 +526,7 @@ namespace UnityLeanMcp
                     {
                         var mat = sharedMats[m];
                         if (ReferenceEquals(mat, null) || mat == null) continue;
-                        AuditMaterialShader(mat, $"{compType.Name}.sharedMaterials[{m}]", goName, hierarchyPath, containerLabel, report);
+                        AuditMaterialShader(mat, FormattableString.Invariant($"{compType.Name}.sharedMaterials[{m}]"), goName, hierarchyPath, containerLabel, report);
                     }
                 }
                 return;
@@ -674,7 +675,7 @@ namespace UnityLeanMcp
                             if (refVal == null && instanceId != 0)
                             {
                                 report.TryAddBrokenReference(
-                                    $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compType.Name}.{propPath} is Missing (instanceID: {instanceId})");
+                                    FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compType.Name}.{propPath} is Missing (instanceID: {instanceId})"));
                             }
                             enterChildren = false;
                             continue;
@@ -742,18 +743,18 @@ namespace UnityLeanMcp
                 if (targetObj == null)
                 {
                     string reason = targetInstanceId != 0
-                        ? $"missing target object (instanceID: {targetInstanceId})"
+                        ? FormattableString.Invariant($"missing target object (instanceID: {targetInstanceId})")
                         : "null target object";
                     string methodDetail = !string.IsNullOrEmpty(methodName) ? $" (method: \"{methodName}\")" : "";
                     report.TryAddBrokenUnityEvent(
-                        $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] has {reason}{methodDetail}");
+                        FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] has {reason}{methodDetail}"));
                     continue;
                 }
 
                 if (string.IsNullOrEmpty(methodName))
                 {
                     report.TryAddBrokenUnityEvent(
-                        $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] on target \"{targetObj.name}\" ({targetObj.GetType().Name}) has no method assigned");
+                        FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] on target \"{targetObj.name}\" ({targetObj.GetType().Name}) has no method assigned"));
                     continue;
                 }
 
@@ -761,7 +762,7 @@ namespace UnityLeanMcp
                 if (!HasMatchingPersistentListenerMethod(targetType, methodName, modeProp, argumentsProp))
                 {
                     report.TryAddBrokenUnityEvent(
-                        $"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] method \"{targetType.Name}.{methodName}\" not found on target \"{targetObj.name}\"");
+                        FormattableString.Invariant($"  • {goName} (path: \"{hierarchyPath}\", {containerLabel}): {compTypeName}.{eventPropertyPath}[{i}] method \"{targetType.Name}.{methodName}\" not found on target \"{targetObj.name}\""));
                 }
             }
         }
@@ -973,34 +974,45 @@ namespace UnityLeanMcp
         private static bool IsProjectFolder(string cleanPath)
         {
             if (string.IsNullOrEmpty(cleanPath)) return false;
-            if (string.Equals(cleanPath, "Assets", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(cleanPath, "Packages", StringComparison.OrdinalIgnoreCase))
+
+            string[] segments = cleanPath.Split('/');
+            for (int i = 0; i < segments.Length; i++)
+            {
+                if (string.Equals(segments[i], "..", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            if (string.Equals(cleanPath, "Assets", StringComparison.Ordinal) ||
+                string.Equals(cleanPath, "Packages", StringComparison.Ordinal))
             {
                 return true;
             }
 
-            try
+            if (!cleanPath.StartsWith("Assets/", StringComparison.Ordinal) &&
+                !cleanPath.StartsWith("Packages/", StringComparison.Ordinal))
             {
-                if (AssetDatabase.IsValidFolder(cleanPath)) return true;
+                return false;
             }
-            catch { }
 
             try
             {
-                if (Directory.Exists(cleanPath)) return true;
+                return AssetDatabase.IsValidFolder(cleanPath);
             }
-            catch { }
-
-            return false;
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool IsPathUnderFolder(string assetPath, string folderPath)
         {
             if (string.IsNullOrEmpty(assetPath) || string.IsNullOrEmpty(folderPath)) return false;
-            if (string.Equals(assetPath, folderPath, StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(assetPath, folderPath, StringComparison.Ordinal)) return true;
 
             string prefix = folderPath.EndsWith("/", StringComparison.Ordinal) ? folderPath : folderPath + "/";
-            return assetPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            return assetPath.StartsWith(prefix, StringComparison.Ordinal);
         }
 
         private static bool TryResolvePrefabAssetPath(
@@ -1107,7 +1119,7 @@ namespace UnityLeanMcp
             if (report.TotalIssues == 0 && report.TotalSuppressed == 0)
             {
                 var emptySb = new StringBuilder();
-                emptySb.AppendLine($"Audit of {report.ScopeDescription}: 0 issues found ({report.GameObjectsScanned} GameObject(s) scanned).");
+                emptySb.AppendLine(FormattableString.Invariant($"Audit of {report.ScopeDescription}: 0 issues found ({report.GameObjectsScanned} GameObject(s) scanned)."));
                 if (!string.IsNullOrEmpty(report.TruncationNote))
                 {
                     emptySb.AppendLine();
@@ -1139,8 +1151,8 @@ namespace UnityLeanMcp
 
                 activeCount++;
                 string fullCountText = suppressed > 0
-                    ? $"{itemCount}+, {suppressed} omitted"
-                    : itemCount.ToString();
+                    ? FormattableString.Invariant($"{itemCount}+, {suppressed} omitted")
+                    : itemCount.ToString(CultureInfo.InvariantCulture);
                 int len = nlLen + $"{sections[i].Title} ({fullCountText}):".Length + nlLen;
                 for (int j = 0; j < itemCount; j++)
                 {
@@ -1157,7 +1169,7 @@ namespace UnityLeanMcp
             }
 
             int headerReserve =
-                $"Audit of {report.ScopeDescription}: 999999 issue(s) reported (999999 additional omitted) ({report.GameObjectsScanned} GameObject(s) scanned):".Length + nlLen +
+                FormattableString.Invariant($"Audit of {report.ScopeDescription}: 999999 issue(s) reported (999999 additional omitted) ({report.GameObjectsScanned} GameObject(s) scanned):").Length + nlLen +
                 "Category counts: Missing Scripts: 999999+ (999999 omitted), Broken Object References: 999999+ (999999 omitted), Broken UnityEvent Listeners: 999999+ (999999 omitted), Material & Shader Errors: 999999+ (999999 omitted), Scene Hygiene Issues: 999999+ (999999 omitted)".Length + nlLen +
                 (string.IsNullOrEmpty(report.TruncationNote) ? 0 : nlLen + report.TruncationNote.Length + nlLen) +
                 nlLen + OutputTruncationMarker.Length;
@@ -1192,7 +1204,7 @@ namespace UnityLeanMcp
                     }
 
                     int maxPossibleOmitted = itemCount + sections[i].CollectionSuppressed;
-                    int worstHeaderLen = $"{sections[i].Title} ({itemCount}+, {maxPossibleOmitted} omitted):".Length + nlLen;
+                    int worstHeaderLen = FormattableString.Invariant($"{sections[i].Title} ({itemCount}+, {maxPossibleOmitted} omitted):").Length + nlLen;
                     int worstMarkerLen = GetSectionTruncationMarker(maxPossibleOmitted, report.MaxIssuesPerCategory, outputBudgetReached: true).Length + nlLen;
                     int used = nlLen + worstHeaderLen + worstMarkerLen;
 
@@ -1226,9 +1238,9 @@ namespace UnityLeanMcp
 
             var sb = new StringBuilder();
             string issueSummary = totalOmitted > 0
-                ? $"{totalShown} issue(s) reported ({totalOmitted} additional omitted)"
-                : $"{totalShown} issue(s) found";
-            sb.AppendLine($"Audit of {report.ScopeDescription}: {issueSummary} ({report.GameObjectsScanned} GameObject(s) scanned):");
+                ? FormattableString.Invariant($"{totalShown} issue(s) reported ({totalOmitted} additional omitted)")
+                : FormattableString.Invariant($"{totalShown} issue(s) found");
+            sb.AppendLine(FormattableString.Invariant($"Audit of {report.ScopeDescription}: {issueSummary} ({report.GameObjectsScanned} GameObject(s) scanned):"));
             sb.AppendLine($"Category counts: {FormatCategorySummary(sections)}");
 
             for (int i = 0; i < sections.Length; i++)
@@ -1301,11 +1313,11 @@ namespace UnityLeanMcp
                 sb.Append(": ");
                 if (sections[i].TotalOmitted > 0)
                 {
-                    sb.Append($"{sections[i].ShownCount}+ ({sections[i].TotalOmitted} omitted)");
+                    sb.Append(FormattableString.Invariant($"{sections[i].ShownCount}+ ({sections[i].TotalOmitted} omitted)"));
                 }
                 else
                 {
-                    sb.Append(sections[i].ShownCount);
+                    sb.Append(sections[i].ShownCount.ToString(CultureInfo.InvariantCulture));
                 }
             }
             return sb.ToString();
@@ -1314,8 +1326,8 @@ namespace UnityLeanMcp
         private static string GetSectionTruncationMarker(int omittedCount, int maxIssuesPerCategory, bool outputBudgetReached)
         {
             return outputBudgetReached
-                ? $"  ... ({omittedCount} more omitted; output budget reached)"
-                : $"  ... ({omittedCount} more omitted; maxIssuesPerCategory={maxIssuesPerCategory})";
+                ? FormattableString.Invariant($"  ... ({omittedCount} more omitted; output budget reached)")
+                : FormattableString.Invariant($"  ... ({omittedCount} more omitted; maxIssuesPerCategory={maxIssuesPerCategory})");
         }
 
         private static void AppendAuditSection(
@@ -1331,8 +1343,8 @@ namespace UnityLeanMcp
 
             sb.AppendLine();
             string countText = omittedCount > 0
-                ? $"{shownCount}+, {omittedCount} omitted"
-                : shownCount.ToString();
+                ? FormattableString.Invariant($"{shownCount}+, {omittedCount} omitted")
+                : shownCount.ToString(CultureInfo.InvariantCulture);
             sb.AppendLine($"{title} ({countText}):");
             for (int i = 0; i < shownCount; i++)
             {
