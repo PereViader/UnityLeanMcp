@@ -2800,6 +2800,207 @@ public class UnityProcessManagerTests
         }
     }
 
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_ReadsStartupLogIncrementallyOncePerPoll_AndRescansFromInitialOffsetOnError()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_single_read_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var proc = StartDummyProcess();
+
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_background_log.txt"), "Historical\n", cts.Token);
+
+            const long initialOffset = 100;
+            const string poll1Delta = "Assets/Scripts/Warn.cs(5,1): warning CS0168: unused\n[Package ";
+            const string poll2Delta = "Manager] Done resolving packages.\n";
+            const string poll3Delta = "Assets/Scripts/Broken.cs(10,5): error CS0103: missing\n";
+
+            long expectedPoll2Offset = initialOffset + Encoding.UTF8.GetByteCount(poll1Delta);
+            long expectedPoll3Offset = expectedPoll2Offset + Encoding.UTF8.GetByteCount(poll2Delta);
+
+            var observedOffsets = new List<long>();
+            int pollIndex = 0;
+
+            var resolvingReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message == "Starting Unity Editor: Resolving packages...")
+                {
+                    resolvingReported.TrySetResult(true);
+                }
+            });
+
+            var transport = new ConfigurableSocketTransport(() => false);
+            var resolver = new UnityPathResolver(tempDir);
+            var procManager = new UnityProcessManager(resolver, NullLogger<UnityProcessManager>.Instance, socketTransport: transport)
+            {
+                StartupLogReader = (_, offset) =>
+                {
+                    lock (observedOffsets)
+                    {
+                        observedOffsets.Add(offset);
+                    }
+
+                    int call = Interlocked.Increment(ref pollIndex);
+                    return call switch
+                    {
+                        1 => poll1Delta,
+                        2 => poll2Delta,
+                        3 => poll3Delta,
+                        _ => poll1Delta + poll2Delta + poll3Delta
+                    };
+                }
+            };
+
+            var ex = await Assert.ThrowsAsync<UnityCompilationException>(async () =>
+            {
+                await procManager.WaitForSocketReadinessAsync(proc, cts.Token, initialOffset, progress);
+            });
+
+            await resolvingReported.Task.WaitAsync(cts.Token);
+
+            Assert.Equal(new[] { initialOffset, expectedPoll2Offset, expectedPoll3Offset, initialOffset }, observedOffsets);
+            Assert.Contains(ex.ErrorLines, line => line.Contains("Warn.cs(5,1): warning CS0168"));
+            Assert.Contains(ex.ErrorLines, line => line.Contains("Broken.cs(10,5): error CS0103"));
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenCompilationErrorLineIsSplitAcrossPolls_DetectsErrorAndIncludesFullDiagnostics()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_split_err_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var proc = StartDummyProcess();
+
+        try
+        {
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
+            await File.WriteAllTextAsync(
+                logFile,
+                "Assets/Scripts/Historical.cs(1,1): error CS0001: old error\n",
+                cts.Token);
+            long initialOffset = new FileInfo(logFile).Length;
+
+            await File.AppendAllTextAsync(
+                logFile,
+                "Assets/Scripts/Warn.cs(2,3): warning CS0219: unused\nAssets/Scripts/Split.cs(12,3): error ",
+                cts.Token);
+
+            var firstPollObserved = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(_ => firstPollObserved.TrySetResult(true));
+
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            Task waitTask = procManager.WaitForSocketReadinessAsync(proc, cts.Token, initialOffset, progress);
+
+            await firstPollObserved.Task.WaitAsync(cts.Token);
+            await File.AppendAllTextAsync(logFile, "CS0246: missing type\n", cts.Token);
+
+            var ex = await Assert.ThrowsAsync<UnityCompilationException>(async () => await waitTask);
+
+            Assert.Contains(ex.ErrorLines, line => line.Contains("Warn.cs(2,3): warning CS0219"));
+            Assert.Contains(ex.ErrorLines, line => line.Contains("Split.cs(12,3): error CS0246"));
+            Assert.DoesNotContain(ex.ErrorLines, line => line.Contains("Historical.cs"));
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task WaitForSocketReadinessAsync_WhenLogTruncatedMidSplitLine_ClearsPendingFragmentAndResetsMilestone()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "unity_pm_trunc_split_" + Guid.NewGuid().ToString("N"));
+        string unityTemp = Path.Combine(tempDir, "Temp");
+        Directory.CreateDirectory(unityTemp);
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var serverTask = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                TcpClient tcp;
+                try { tcp = await listener.AcceptTcpClientAsync(cts.Token); }
+                catch { break; }
+
+                _ = Task.Run(async () =>
+                {
+                    using (tcp)
+                    using (var stream = tcp.GetStream())
+                    using (var reader = new StreamReader(stream, Encoding.UTF8))
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true })
+                    {
+                        string? line = await reader.ReadLineAsync(cts.Token);
+                        UnityLeanMcp.ProjectCommandEnvelope.TryDecode(line!, tempDir, out line);
+                        if (line == "PING") await writer.WriteLineAsync("PONG".AsMemory(), cts.Token);
+                        else if (line != null && line.StartsWith("POLL_REFRESH")) await writer.WriteLineAsync("READY".AsMemory(), cts.Token);
+                    }
+                }, cts.Token);
+            }
+        });
+
+        using var proc = StartDummyProcess();
+        try
+        {
+            string logFile = Path.Combine(unityTemp, "unity_background_log.txt");
+            await File.WriteAllTextAsync(
+                logFile,
+                "Compilation started\nPadding to ensure initial file is longer than truncated replacement.\nAssets/Old.cs(1,1): error ",
+                cts.Token);
+
+            var compilingReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resolvingReported = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var progress = new RecordingProgress(p =>
+            {
+                if (p.Message == "Starting Unity Editor: Compiling scripts...")
+                {
+                    compilingReported.TrySetResult(true);
+                }
+                else if (p.Message == "Starting Unity Editor: Resolving packages...")
+                {
+                    resolvingReported.TrySetResult(true);
+                }
+            });
+
+            var procManager = new UnityProcessManager(tempDir, NullLogger<UnityProcessManager>.Instance);
+            Task waitTask = procManager.WaitForSocketReadinessAsync(proc, cts.Token, 0, progress);
+
+            await compilingReported.Task.WaitAsync(cts.Token);
+            await File.WriteAllTextAsync(logFile, "CS0103: only after truncation\n[Package Manager] Done resolving packages.\n", cts.Token);
+            await resolvingReported.Task.WaitAsync(cts.Token);
+
+            await File.WriteAllTextAsync(Path.Combine(unityTemp, "unity_lean_mcp_port.txt"), port.ToString(), cts.Token);
+            await waitTask;
+
+            Assert.Contains(progress.Values, p => p.Message == "Starting Unity Editor: Resolving packages...");
+        }
+        finally
+        {
+            try { if (!proc.HasExited) proc.Kill(true); } catch { }
+            cts.Cancel();
+            listener.Stop();
+            try { await serverTask; } catch { }
+            try { Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
     private sealed class RecordingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
     {
         public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();

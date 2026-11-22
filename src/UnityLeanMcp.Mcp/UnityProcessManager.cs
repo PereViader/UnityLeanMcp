@@ -787,7 +787,8 @@ public class UnityProcessManager : IUnityProcessManager
         long initialLogOffset = 0,
         IProgress<ProgressNotificationValue>? progress = null)
     {
-        long milestoneLogOffset = initialLogOffset;
+        long startupLogOffset = initialLogOffset;
+        string pendingLogFragment = string.Empty;
         string? lastMilestone = null;
         int progressValue = 3;
 
@@ -822,10 +823,30 @@ public class UnityProcessManager : IUnityProcessManager
                 }
             }
 
-            // 2. Monitor unity_background_log.txt for compilation errors during startup
+            // 2. Read new unity_background_log.txt content once per poll for compilation errors and milestones
+            string? startupScanText = null;
             if (startedProcess != null)
             {
-                ThrowIfNewStartupCompilationErrors(initialLogOffset);
+                long previousOffset = startupLogOffset;
+                (startupLogOffset, string delta, bool readSucceeded) = TryReadStartupLogDelta(startupLogOffset);
+                if (startupLogOffset < previousOffset)
+                {
+                    lastMilestone = null;
+                    pendingLogFragment = string.Empty;
+                }
+
+                if (readSucceeded && !string.IsNullOrEmpty(delta))
+                {
+                    startupScanText = string.IsNullOrEmpty(pendingLogFragment)
+                        ? delta
+                        : pendingLogFragment + delta;
+                    pendingLogFragment = ExtractTrailingIncompleteLine(startupScanText);
+
+                    if (_logScanner.HasCompilationErrors(startupScanText))
+                    {
+                        ThrowStartupCompilationErrorsFromOffset(initialLogOffset, startupScanText);
+                    }
+                }
             }
 
             // 3. Check socket connection
@@ -845,15 +866,9 @@ public class UnityProcessManager : IUnityProcessManager
                 }
             }
 
-            if (startedProcess != null)
+            if (startedProcess != null && !string.IsNullOrEmpty(startupScanText))
             {
-                long previousOffset = milestoneLogOffset;
-                (milestoneLogOffset, string? detectedMilestone) = TryReadNextStartupMilestone(milestoneLogOffset);
-                if (milestoneLogOffset < previousOffset)
-                {
-                    lastMilestone = null;
-                }
-
+                string? detectedMilestone = _logScanner.ExtractLatestStartupMilestone(startupScanText);
                 if (!string.IsNullOrEmpty(detectedMilestone))
                 {
                     lastMilestone = detectedMilestone;
@@ -877,27 +892,78 @@ public class UnityProcessManager : IUnityProcessManager
         }
     }
 
-    private (long NextOffset, string? Milestone) TryReadNextStartupMilestone(long currentOffset)
+    private (long NextOffset, string Delta, bool ReadSucceeded) TryReadStartupLogDelta(long currentOffset)
     {
         if (!File.Exists(_pathResolver.LogFile))
         {
-            return (0, null);
+            return (0, string.Empty, true);
         }
 
         try
         {
-            (string delta, long nextOffset) = FileIoRetryHelper.ReadFileDeltaWithRetry(_pathResolver.LogFile, currentOffset);
-            if (string.IsNullOrEmpty(delta))
+            if (StartupLogReader != null)
             {
-                return (nextOffset, null);
+                string text = StartupLogReader(_pathResolver.LogFile, currentOffset);
+                long nextOffset = currentOffset + System.Text.Encoding.UTF8.GetByteCount(text);
+                return (nextOffset, text, true);
             }
 
-            return (nextOffset, _logScanner.ExtractLatestStartupMilestone(delta));
+            (string delta, long nextOffsetFromFile) = FileIoRetryHelper.ReadFileDeltaWithRetry(_pathResolver.LogFile, currentOffset);
+            return (nextOffsetFromFile, delta, true);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return (currentOffset, null);
+            _logger.LogWarning(
+                ex,
+                "Could not read Unity background log '{LogFile}' from offset {Offset}; skipping startup log scan on this poll.",
+                _pathResolver.LogFile,
+                currentOffset);
+            return (currentOffset, string.Empty, false);
         }
+    }
+
+    private static string ExtractTrailingIncompleteLine(string text)
+    {
+        int lastNewline = text.LastIndexOf('\n');
+        if (lastNewline < 0)
+        {
+            return text;
+        }
+
+        return lastNewline == text.Length - 1
+            ? string.Empty
+            : text[(lastNewline + 1)..];
+    }
+
+    private string ReadStartupLogFromOffset(long offset) =>
+        StartupLogReader != null
+            ? StartupLogReader(_pathResolver.LogFile, offset)
+            : FileIoRetryHelper.ReadFileWithRetry(_pathResolver.LogFile, fromOffset: offset);
+
+    private void ThrowStartupCompilationErrorsFromOffset(long initialLogOffset, string fallbackLogText)
+    {
+        string logText;
+        try
+        {
+            logText = ReadStartupLogFromOffset(initialLogOffset);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not re-read Unity background log '{LogFile}' from offset {Offset}; using incremental log delta for compilation diagnostics.",
+                _pathResolver.LogFile,
+                initialLogOffset);
+            logText = fallbackLogText;
+        }
+
+        var errorLines = _logScanner.ExtractUniqueCompilationLines(logText);
+        if (errorLines.Count == 0)
+        {
+            errorLines = _logScanner.ExtractUniqueCompilationLines(fallbackLogText);
+        }
+
+        PublishAndThrowStartupCompilationErrors(errorLines);
     }
 
     private void ThrowIfNewStartupCompilationErrors(long initialLogOffset)
@@ -910,9 +976,7 @@ public class UnityProcessManager : IUnityProcessManager
         string logText;
         try
         {
-            logText = StartupLogReader != null
-                ? StartupLogReader(_pathResolver.LogFile, initialLogOffset)
-                : FileIoRetryHelper.ReadFileWithRetry(_pathResolver.LogFile, fromOffset: initialLogOffset);
+            logText = ReadStartupLogFromOffset(initialLogOffset);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -929,8 +993,13 @@ public class UnityProcessManager : IUnityProcessManager
             return;
         }
 
-        _logger.LogError("Compilation errors detected in Unity background log during startup.");
         var errorLines = _logScanner.ExtractUniqueCompilationLines(logText);
+        PublishAndThrowStartupCompilationErrors(errorLines);
+    }
+
+    private void PublishAndThrowStartupCompilationErrors(List<string> errorLines)
+    {
+        _logger.LogError("Compilation errors detected in Unity background log during startup.");
         try
         {
             Directory.CreateDirectory(_pathResolver.TempDir);
