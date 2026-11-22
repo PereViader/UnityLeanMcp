@@ -77,6 +77,7 @@ internal sealed class UnityInspectTestScope : IDisposable
         SerializedObject.DisposeCount = 0;
         SerializedProperty.FindPropertyRelativeCalls.Clear();
         SerializedProperty.NextVisibleCalls.Clear();
+        SerializedProperty.DisposeCount = 0;
         UnityEngine.UIElements.UIDocument.AllUIDocuments.Clear();
         LogEntries.Reset();
     }

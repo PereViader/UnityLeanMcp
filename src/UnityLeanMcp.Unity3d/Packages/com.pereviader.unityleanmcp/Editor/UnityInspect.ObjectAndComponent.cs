@@ -650,6 +650,7 @@ namespace UnityLeanMcp
         }
 
         private const int MaxSerializedArrayPreviewItems = 8;
+        private const int MaxSerializedArrayPreviewCharacters = DefaultMaxOutputCharacters / 32;
 
         private static string FormatSerializedPropertyWithAsset(
             SerializedProperty prop,
@@ -684,12 +685,15 @@ namespace UnityLeanMcp
             int total = prop.arraySize;
             if (total <= 0 || arrayDepth > 0)
             {
-                return $"[{(total < 0 ? 0 : total)} items]";
+                int safeTotal = total < 0 ? 0 : total;
+                return $"[{safeTotal.ToString(CultureInfo.InvariantCulture)} items]";
             }
 
             int previewLimit = Math.Min(total, Math.Min(MaxSerializedArrayPreviewItems, Math.Max(1, maxItems)));
             var previewItems = new List<string>(previewLimit);
-            int approxLength = 0;
+            string header = $"[{total.ToString(CultureInfo.InvariantCulture)} items: ";
+            const int maxSuffixReserve = 32; // ", ... and <int> more]"
+            int approxLength = header.Length + maxSuffixReserve;
 
             for (int i = 0; i < previewLimit; i++)
             {
@@ -702,7 +706,7 @@ namespace UnityLeanMcp
                 {
                     if (i == 0)
                     {
-                        return $"[{total} items]";
+                        return $"[{total.ToString(CultureInfo.InvariantCulture)} items]";
                     }
 
                     break;
@@ -712,30 +716,38 @@ namespace UnityLeanMcp
                 {
                     if (i == 0)
                     {
-                        return $"[{total} items]";
+                        return $"[{total.ToString(CultureInfo.InvariantCulture)} items]";
                     }
 
                     break;
                 }
 
-                string elementStr = FormatSerializedPropertyWithAsset(element, maxItems, arrayDepth + 1);
-                if (previewItems.Count > 0 && approxLength + elementStr.Length > DefaultMaxOutputCharacters)
+                string elementStr;
+                using (element)
+                {
+                    elementStr = FormatSerializedPropertyWithAsset(element, maxItems, arrayDepth + 1);
+                }
+
+                int itemCost = elementStr.Length + (previewItems.Count > 0 ? 2 : 0);
+                if (approxLength + itemCost > MaxSerializedArrayPreviewCharacters)
                 {
                     break;
                 }
 
                 previewItems.Add(elementStr);
-                approxLength += elementStr.Length + 2;
+                approxLength += itemCost;
             }
 
             if (previewItems.Count == 0)
             {
-                return $"[{total} items]";
+                return $"[{total.ToString(CultureInfo.InvariantCulture)} items]";
             }
 
             int remaining = total - previewItems.Count;
-            string suffix = remaining > 0 ? $", ... and {remaining} more" : string.Empty;
-            return $"[{total} items: {string.Join(", ", previewItems)}{suffix}]";
+            string suffix = remaining > 0
+                ? $", ... and {remaining.ToString(CultureInfo.InvariantCulture)} more"
+                : string.Empty;
+            return $"{header}{string.Join(", ", previewItems)}{suffix}]";
         }
 
         private static string FormatUnityObjectReference(UnityEngine.Object obj)

@@ -1023,10 +1023,12 @@ namespace UnityEditor
         Generic, Integer, Boolean, Float, String, Color, ObjectReference, LayerMask, Enum, Vector2, Vector3, Vector4, Rect, ArraySize, Character, AnimationCurve, Bounds, Gradient, Quaternion, ExposedReference, FixedBufferSize, Vector2Int, Vector3Int, RectInt, BoundsInt, ManagedReference, Hash128
     }
 
-    public class SerializedProperty
+    public class SerializedProperty : IDisposable
     {
         public static readonly List<(string PropertyPath, string RelativePath)> FindPropertyRelativeCalls = new();
         public static readonly List<(string PropertyPath, bool EnterChildren)> NextVisibleCalls = new();
+        public static int DisposeCount { get; set; }
+        public bool IsDisposed { get; private set; }
 
         public string name { get; set; } = string.Empty;
         public string displayName { get; set; } = string.Empty;
@@ -1130,6 +1132,12 @@ namespace UnityEditor
             }
             _currentProperty = null;
             return false;
+        }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            DisposeCount++;
         }
     }
 

@@ -428,6 +428,138 @@ public sealed class UnityInspectObjectAndAssetTests : IDisposable
     }
 
     [Fact]
+    public void Inspect_SerializedArray_DisposesElementProperties()
+    {
+        var go = new GameObject("GoWithDisposableArray");
+        var comp = go.AddComponent<Collider>();
+
+        var elements = new List<SerializedProperty>();
+        var arrayProp = new SerializedProperty
+        {
+            name = "m_Items",
+            displayName = "Items",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        for (int i = 0; i < 10; i++)
+        {
+            var elem = new SerializedProperty { propertyType = SerializedPropertyType.Integer, intValue = i };
+            elements.Add(elem);
+            arrayProp.AddArrayElement(elem);
+        }
+
+        SerializedObject.CustomProperties[comp] = new List<SerializedProperty> { arrayProp };
+        SerializedProperty.DisposeCount = 0;
+
+        string result = Inspect.Component(comp);
+
+        Assert.Contains("Items (m_Items): [10 items: 0, 1, 2, 3, 4, 5, 6, 7, ... and 2 more]", result);
+        Assert.Equal(8, SerializedProperty.DisposeCount);
+        for (int i = 0; i < 8; i++)
+        {
+            Assert.True(elements[i].IsDisposed);
+        }
+        for (int i = 8; i < 10; i++)
+        {
+            Assert.False(elements[i].IsDisposed);
+        }
+    }
+
+    [Fact]
+    public void Inspect_SerializedArray_CapsLongStringPreviewAndPreservesRemainingFields()
+    {
+        var go = new GameObject("GoWithLongStringArray");
+        var comp1 = go.AddComponent<Collider>();
+        var comp2 = go.AddComponent<Renderer>();
+
+        var longStrings = new SerializedProperty
+        {
+            name = "m_LongStrings",
+            displayName = "Long Strings",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        for (int i = 0; i < 6; i++)
+        {
+            longStrings.AddArrayElement(new SerializedProperty
+            {
+                propertyType = SerializedPropertyType.String,
+                stringValue = new string((char)('a' + i), 1000)
+            });
+        }
+
+        var trailingInt = new SerializedProperty
+        {
+            name = "m_TrailingInt",
+            displayName = "Trailing Int",
+            propertyType = SerializedPropertyType.Integer,
+            intValue = 42
+        };
+
+        var secondCompProp = new SerializedProperty
+        {
+            name = "m_SecondProp",
+            displayName = "Second Prop",
+            propertyType = SerializedPropertyType.String,
+            stringValue = "StillVisible"
+        };
+
+        SerializedObject.CustomProperties[comp1] = new List<SerializedProperty> { longStrings, trailingInt };
+        SerializedObject.CustomProperties[comp2] = new List<SerializedProperty> { secondCompProp };
+
+        string result = Inspect.GameObject(go);
+
+        Assert.True(result.Length < 4096);
+        Assert.Contains("Long Strings (m_LongStrings): [6 items:", result);
+        Assert.Contains("... and 4 more]", result);
+        Assert.Contains("Trailing Int (m_TrailingInt): 42", result);
+        Assert.Contains("Second Prop (m_SecondProp): \"StillVisible\"", result);
+        Assert.DoesNotContain(Inspect.OutputTruncationMarker, result);
+    }
+
+    [Fact]
+    public void Inspect_SerializedArray_OversizedFirstElement_DoesNotExceedBudget()
+    {
+        var go = new GameObject("GoWithOversizedFirstElement");
+        var comp = go.AddComponent<Collider>();
+
+        var hugeArray = new SerializedProperty
+        {
+            name = "m_HugeStrings",
+            displayName = "Huge Strings",
+            propertyType = SerializedPropertyType.Generic,
+            isArray = true
+        };
+        hugeArray.AddArrayElement(new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.String,
+            stringValue = new string('x', Inspect.DefaultMaxOutputCharacters + 1000)
+        });
+        hugeArray.AddArrayElement(new SerializedProperty
+        {
+            propertyType = SerializedPropertyType.String,
+            stringValue = "small"
+        });
+
+        var trailing = new SerializedProperty
+        {
+            name = "m_AfterHuge",
+            displayName = "After Huge",
+            propertyType = SerializedPropertyType.Integer,
+            intValue = 77
+        };
+
+        SerializedObject.CustomProperties[comp] = new List<SerializedProperty> { hugeArray, trailing };
+
+        string result = Inspect.Component(comp);
+
+        Assert.True(result.Length < 1024);
+        Assert.Contains("Huge Strings (m_HugeStrings): [2 items]", result);
+        Assert.Contains("After Huge (m_AfterHuge): 77", result);
+        Assert.DoesNotContain(Inspect.OutputTruncationMarker, result);
+    }
+
+    [Fact]
     public void Inspect_Object_DirectLeafTypes_FormatsDirectlyWithoutReflection()
     {
         var vec = new Vector3(1.5f, 2.5f, 3.5f);
