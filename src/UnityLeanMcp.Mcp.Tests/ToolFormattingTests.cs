@@ -924,4 +924,50 @@ public sealed class ToolFormattingTests
         string text = ToolFormattingTestContext.GetResultText(result);
         Assert.Equal(message, text);
     }
+
+    [Fact]
+    public async Task UnityEval_RuntimeExceptionExceedingMaxLengthWithStackFrames_PreservesTruncationMarker()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        string header = string.Join("\n", new[]
+        {
+            "System.InvalidOperationException: Bad state",
+            "  at GameService.Process () [0x00010] in Assets/Scripts/GameService.cs:42",
+            "  at __UnityLeanMcpEvalRunner.Run () [0x00005] in eval:line 3",
+            string.Empty
+        });
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = false,
+            Message = header + new string('x', McpOutputLimits.MaxFormattedOutputCharacters + 500)
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("GameService.Process();");
+
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(text) <= McpOutputLimits.MaxFormattedOutputBytes);
+        Assert.EndsWith(McpOutputLimits.AggregateOutputTruncationMarker, text, StringComparison.Ordinal);
+        Assert.Contains("in snippet line 3", text);
+    }
+
+    [Fact]
+    public async Task UnityEval_NonExceptionErrorExceedingMaxLengthWithoutStackFrames_PreservesTruncationMarker()
+    {
+        using var ctx = new ToolFormattingTestContext();
+        ctx.Client.EvalResultToReturn = new UnityEvalResult
+        {
+            Success = false,
+            Message = new string('x', McpOutputLimits.MaxFormattedOutputCharacters + 500)
+        };
+
+        var result = await ctx.Tools.UnityEvalAsync("return 1;");
+
+        Assert.True(result.IsError);
+        string text = ToolFormattingTestContext.GetResultText(result);
+        Assert.True(text.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(text) <= McpOutputLimits.MaxFormattedOutputBytes);
+        Assert.EndsWith(McpOutputLimits.AggregateOutputTruncationMarker, text, StringComparison.Ordinal);
+    }
 }

@@ -193,6 +193,7 @@ public class DiagnosticFormatter : IDiagnosticFormatter
         if (string.IsNullOrEmpty(message))
             return message ?? string.Empty;
 
+        bool wasTruncated = message.Length > McpOutputLimits.MaxFormattedOutputCharacters;
         string bounded = BoundInputPrefix(message, McpOutputLimits.MaxFormattedOutputCharacters);
         var lines = bounded.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
         if (!HasStackFrameLine(lines))
@@ -230,7 +231,17 @@ public class DiagnosticFormatter : IDiagnosticFormatter
             result.RemoveAt(result.Count - 1);
         }
 
-        return string.Join(Environment.NewLine, result);
+        string formatted = string.Join(Environment.NewLine, result);
+        var builder = new BoundedTextBuilder(
+            McpOutputLimits.MaxFormattedOutputCharacters,
+            McpOutputLimits.AggregateOutputTruncationMarker);
+        builder.Append(formatted);
+        if (wasTruncated && !formatted.EndsWith(McpOutputLimits.AggregateOutputTruncationMarker, StringComparison.Ordinal))
+        {
+            builder.Append(McpOutputLimits.AggregateOutputTruncationMarker);
+        }
+
+        return builder.ToString();
     }
 
     private static string BoundInputPrefix(string value, int maxCharacters) =>

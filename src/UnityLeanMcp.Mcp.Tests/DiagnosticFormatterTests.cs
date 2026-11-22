@@ -932,6 +932,67 @@ Assets/Scripts/Enemy.cs(42,5): warning CS0219: The variable 'bar' is assigned bu
         Assert.DoesNotContain("UnityLeanMcp.EvalHandler", formatted);
     }
 
+    [Fact]
+    public void FormatEvalException_ExceedsMaxLengthWithStackFrames_PreservesTruncationMarkerWithinBounds()
+    {
+        string header = string.Join("\n", new[]
+        {
+            "System.InvalidOperationException: Boom",
+            "  at GameService.Process () in Assets/Scripts/GameService.cs:42",
+            "  at __UnityLeanMcpEvalRunner.Run () in eval:line 3",
+            string.Empty
+        });
+        string message = header + new string('x', McpOutputLimits.MaxFormattedOutputCharacters + 500);
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.True(Encoding.UTF8.GetByteCount(formatted) <= McpOutputLimits.MaxFormattedOutputBytes);
+        Assert.EndsWith(McpOutputLimits.AggregateOutputTruncationMarker, formatted, StringComparison.Ordinal);
+        Assert.Contains("at GameService.Process () in Assets/Scripts/GameService.cs:42", formatted);
+        Assert.Contains("in snippet line 3", formatted);
+    }
+
+    [Fact]
+    public void FormatEvalException_ExceedsMaxLengthWithSurrogatePairsAndStackFrames_DoesNotSplitSurrogatePair()
+    {
+        string header = string.Join("\n", new[]
+        {
+            "System.InvalidOperationException: Boom",
+            "  at GameService.Process () in Assets/Scripts/GameService.cs:42",
+            string.Empty
+        });
+        string message = header + string.Concat(Enumerable.Repeat("😀", McpOutputLimits.MaxFormattedOutputCharacters));
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.True(formatted.Length <= McpOutputLimits.MaxFormattedOutputCharacters);
+        Assert.True(Encoding.UTF8.GetByteCount(formatted) <= McpOutputLimits.MaxFormattedOutputBytes);
+        Assert.EndsWith(McpOutputLimits.AggregateOutputTruncationMarker, formatted, StringComparison.Ordinal);
+        for (int i = 0; i < formatted.Length; i++)
+        {
+            if (char.IsHighSurrogate(formatted[i]))
+            {
+                Assert.True(i + 1 < formatted.Length && char.IsLowSurrogate(formatted[i + 1]));
+                i++;
+            }
+            else
+            {
+                Assert.False(char.IsLowSurrogate(formatted[i]));
+            }
+        }
+    }
+
+    [Fact]
+    public void FormatEvalException_ExceedsMaxLengthWithoutStackFrames_ReturnsOriginalUnchanged()
+    {
+        string message = new string('x', McpOutputLimits.MaxFormattedOutputCharacters + 500);
+
+        string formatted = DiagnosticFormatter.Default.FormatEvalException(message);
+
+        Assert.Equal(message, formatted);
+    }
+
     private sealed class TestCustomDiagnosticFormatter : IDiagnosticFormatter
     {
         public bool ExtractSourceLocationCalled { get; private set; }
