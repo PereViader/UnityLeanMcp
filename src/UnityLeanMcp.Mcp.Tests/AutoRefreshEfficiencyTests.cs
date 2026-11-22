@@ -93,6 +93,40 @@ public sealed class AutoRefreshEfficiencyTests
         Assert.Contains(context.Transport.Commands, c => c.StartsWith("EVAL ", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task EvalAsync_WhenPlayModeExitsAndCompilationStartsDuringDispatch_ClearsRefreshSkippedDueToPlayMode()
+    {
+        using var context = TestContext.Create();
+        context.Transport.IsPlayMode = true;
+        context.Transport.PendingEvalCompilingResponses = 1;
+
+        var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.RefreshSkippedDueToPlayMode);
+        int firstEvalIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("EVAL ", StringComparison.Ordinal));
+        int refreshIndex = context.Transport.Commands.FindIndex(c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
+        int secondEvalIndex = context.Transport.Commands.FindLastIndex(c => c.StartsWith("EVAL ", StringComparison.Ordinal));
+        Assert.True(firstEvalIndex >= 0);
+        Assert.True(refreshIndex > firstEvalIndex);
+        Assert.True(secondEvalIndex > refreshIndex);
+    }
+
+    [Fact]
+    public async Task EvalAsync_WhenPlayModeExitsAndDispatchRefreshFails_ClearsRefreshSkippedDueToPlayMode()
+    {
+        using var context = TestContext.Create();
+        context.Transport.IsPlayMode = true;
+        context.Transport.PendingEvalCompilingResponses = 1;
+        context.Transport.RefreshShouldFail = true;
+
+        var result = await context.Client.EvalAsync("return 42;", CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.False(result.RefreshSkippedDueToPlayMode);
+        Assert.Contains(context.Transport.Commands, c => c.StartsWith("REFRESH ", StringComparison.Ordinal));
+    }
+
     private sealed class TestContext : IDisposable
     {
         private readonly string _projectRoot;
@@ -154,6 +188,8 @@ public sealed class AutoRefreshEfficiencyTests
 
         public bool IsPlayMode { get; set; }
         public string? AvailabilityResponse { get; set; }
+        public int PendingEvalCompilingResponses { get; set; }
+        public bool RefreshShouldFail { get; set; }
 
         public Task<string?> SendCommandAsync(
             int port,
@@ -199,8 +235,8 @@ public sealed class AutoRefreshEfficiencyTests
                     var refreshResult = new UnityRefreshResult
                     {
                         OperationId = operationId,
-                        Success = true,
-                        Message = ""
+                        Success = !RefreshShouldFail,
+                        Message = RefreshShouldFail ? "Compile error" : ""
                     };
                     File.WriteAllText(
                         _resolver.GetResultFilePath(UnityOperationKind.Refresh, operationId),
@@ -211,6 +247,12 @@ public sealed class AutoRefreshEfficiencyTests
 
             if (command.StartsWith("EVAL ", StringComparison.Ordinal))
             {
+                if (PendingEvalCompilingResponses > 0)
+                {
+                    PendingEvalCompilingResponses--;
+                    return Task.FromResult<string?>("COMPILING");
+                }
+
                 string operationId = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1];
                 var evalResult = new UnityEvalResult
                 {

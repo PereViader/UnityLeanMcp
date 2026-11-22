@@ -387,6 +387,7 @@ public class UnityClient : IUnityClient
         });
 
         string escapedCode = ProtocolCodec.EscapeLine(code);
+        bool refreshBarrierRan = false;
 
         UnityEvalResult result = await DispatchMutatingCommandAsync<UnityEvalResult>(
             operationKind: "eval",
@@ -428,9 +429,10 @@ public class UnityClient : IUnityClient
             progress: progress,
             initialProgressMessage: "Executing evaluation...",
             onImmediateResult: null,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken,
+            onRefreshBarrierRan: () => refreshBarrierRan = true);
 
-        result.RefreshSkippedDueToPlayMode = isPlayMode;
+        result.RefreshSkippedDueToPlayMode = isPlayMode && !refreshBarrierRan;
         return result;
     }
 
@@ -636,7 +638,8 @@ public class UnityClient : IUnityClient
         IProgress<ProgressNotificationValue>? progress,
         string? initialProgressMessage,
         Action<TResult>? onImmediateResult,
-        CancellationToken cancellationToken) where TResult : class, IOperationResult, new()
+        CancellationToken cancellationToken,
+        Action? onRefreshBarrierRan = null) where TResult : class, IOperationResult, new()
     {
         IProgress<ProgressNotificationValue>? refreshProgress = progress == null
             ? null
@@ -714,6 +717,7 @@ public class UnityClient : IUnityClient
                             Message = "Unity is compiling script assemblies. Waiting for compilation to complete..."
                         });
 
+                        onRefreshBarrierRan?.Invoke();
                         var compResult = await RefreshBeforeUsingCompiledAssembliesAsync(refreshProgress, cancellationToken);
                         if (!compResult.Success)
                         {
